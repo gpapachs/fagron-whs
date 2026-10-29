@@ -29,8 +29,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install --no-audit --no-fund
-      - run: npx next build
+      - name: npm install
+        run: |
+          set -o pipefail
+          npm install --no-audit --no-fund 2>&1 | tee install.log || {
+            echo "::error title=npm install::$(tail -40 install.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"; exit 1; }
+      - name: next build
+        run: |
+          set -o pipefail
+          npx next build 2>&1 | tee build.log || {
+            echo "::error title=next build::$(tail -60 build.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"; exit 1; }
       - name: Δημοσίευση στο branch gh-pages
         uses: peaceiris/actions-gh-pages@v4
         with:
