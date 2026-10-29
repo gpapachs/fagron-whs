@@ -9,7 +9,7 @@ import path from "node:path";
 import { jsPDF } from "jspdf";
 import { autoTable } from "jspdf-autotable";
 import * as XLSX from "xlsx";
-import { buildPlan, indexStock } from "../lib/repack.ts";
+import { buildPlan, filterStockForRecipes, indexStock } from "../lib/repack.ts";
 import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkbook } from "../lib/exports.ts";
 import * as jobsLib from "../lib/jobs.ts";
 
@@ -87,6 +87,12 @@ const backA = XLSX.read(fs.readFileSync(path.join(outDir, "sample-available.xlsx
 const firstRow = XLSX.utils.sheet_to_json(backA.Sheets["Διαθέσιμες"])[0];
 if (!String(firstRow?.["Περιγραφή"] ?? "").includes("άέήίόύώ")) fail("τα ελληνικά δεν διατηρήθηκαν στο Excel");
 if (a.count !== plan.analyses.filter((x) => x.max > 0).length) fail("λάθος πλήθος διαθέσιμων");
+
+// ---- φιλτράρισμα ολόκληρου αποθέματος
+const noise = Array.from({ length: 5000 }, (_, i) => ({ position: `Z${i}`, area: "Χ", item: `00-99-${i % 900}`, description: "άσχετο", qty: 3, unit: "ΤΕΜ" }));
+const flt = filterStockForRecipes([...stock, ...noise, { position: "300.01", area: "Κ", item: "71-90-001", description: "τελικό", qty: 9, unit: "ΤΕΜ" }], recipes);
+console.log(`φιλτράρισμα: ${flt.totalRows} γραμμές -> ${flt.kept.length} (${flt.componentItems} συστατικά, ${flt.finalItems} τελικοί)`);
+if (flt.kept.length !== stock.length + 1 || flt.finalItems !== 1) fail("λάθος φιλτράρισμα αποθέματος");
 
 // ---- Excel χρόνων + μέσοι όροι
 const t0 = Date.parse("2026-10-01T08:00:00Z");

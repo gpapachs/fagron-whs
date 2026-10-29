@@ -353,3 +353,24 @@ export function areasOf(stock: StockRow[]): { area: string; rows: number }[] {
 
 export const fmtQty = (n: number) =>
   n.toLocaleString("el-GR", { maximumFractionDigits: 3 });
+
+/**
+ * Από ένα ολόκληρο αρχείο αποθέματος κράτα μόνο ό,τι αφορά την ανασυσκευασία:
+ * τα συστατικά των προδιαγραφών και τους ίδιους τους τελικούς κωδικούς
+ * (για να φαίνεται το υπάρχον απόθεμα τελικού).
+ */
+export function filterStockForRecipes(stock: StockRow[], recipes: Recipe[]) {
+  const components = new Set(recipes.flatMap((r) => r.components.map((c) => c.code)));
+  const finals = new Set(recipes.map((r) => r.product_code));
+  const kept = stock.filter((s) => components.has(s.item) || finals.has(s.item));
+  const items = new Set(kept.map((s) => s.item));
+  return {
+    kept,
+    totalRows: stock.length,
+    totalItems: new Set(stock.map((s) => s.item)).size,
+    componentItems: [...items].filter((i) => components.has(i)).length,
+    finalItems: [...items].filter((i) => finals.has(i) && !components.has(i)).length,
+    missingComponents: [...components].filter((c) => !items.has(c)).length,
+    componentCount: components.size,
+  };
+}

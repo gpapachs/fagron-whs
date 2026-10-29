@@ -9,6 +9,7 @@ import { FinishDialog, LiveClock, PlayIcon, RunningJobs, TimesView, type FinishF
 import {
   areasOf,
   buildPlan,
+  filterStockForRecipes,
   fmtQty,
   indexStock,
   parseRecipeRows,
@@ -244,7 +245,7 @@ export default function RepackBoard({
       setPlanned((prev) => Object.fromEntries(Object.entries(prev).filter(([id]) => ids.has(id))));
       setNotice({
         tone: warnings.length ? "warn" : "ok",
-        text: `Φορτώθηκαν ${parsed.length} προδιαγραφές με ${parsed.reduce((s, r) => s + r.components.length, 0)} γραμμές συστατικών.`,
+        text: `Φορτώθηκαν ${parsed.length} προδιαγραφές με ${parsed.reduce((s, r) => s + r.components.length, 0)} γραμμές συστατικών.${stock.length ? " Αν προστέθηκαν νέα συστατικά, ανεβάστε ξανά το απόθεμα ώστε να συμπεριληφθούν." : ""}`,
         details: warnings,
       });
     } catch {
@@ -255,28 +256,42 @@ export default function RepackBoard({
   }
 
   async function handleStock(file: File) {
+    if (!recipes.length) {
+      setNotice({ tone: "error", text: "Ανεβάστε πρώτα τις προδιαγραφές — το απόθεμα φιλτράρεται με βάση τα συστατικά τους." });
+      return;
+    }
     setBusy("stock");
     setNotice(null);
     try {
-      const { stock: parsed, error: parseError } = parseStockRows(await readSheet(file));
-      if (parseError || !parsed.length) {
+      const { stock: all, error: parseError } = parseStockRows(await readSheet(file));
+      if (parseError || !all.length) {
         setNotice({ tone: "error", text: parseError ?? "Δεν βρέθηκαν γραμμές αποθέματος με ποσότητα." });
         return;
       }
+      // ολόκληρο απόθεμα -> μόνο συστατικά προδιαγραφών + τελικοί κωδικοί
+      const f = filterStockForRecipes(all, recipes);
+      if (!f.kept.length) {
+        setNotice({
+          tone: "error",
+          text: `Το αρχείο έχει ${f.totalItems.toLocaleString("el-GR")} κωδικούς, αλλά κανένας δεν είναι συστατικό ή τελικός κωδικός των προδιαγραφών. Είναι το σωστό αρχείο;`,
+        });
+        return;
+      }
       const supabase = createClient();
-      const { error } = await supabase.rpc("repack_replace_stock", { stock: parsed, file_name: file.name });
+      const { error } = await supabase.rpc("repack_replace_stock", { stock: f.kept, file_name: file.name });
       if (error) {
         setNotice({ tone: "error", text: `Η αποθήκευση απέτυχε: ${error.message}` });
         return;
       }
-      setStock(parsed);
-      setUploads((u) => ({ ...u, stock: { file_name: file.name, row_count: parsed.length, uploaded_at: new Date().toISOString(), uploaded_by_email: userEmail } }));
-      const known = new Set(recipes.flatMap((r) => r.components.map((c) => c.code)));
-      const items = new Set(parsed.map((s) => s.item));
-      const used = [...items].filter((i) => known.has(i)).length;
+      setStock(f.kept);
+      setUploads((u) => ({ ...u, stock: { file_name: file.name, row_count: f.kept.length, uploaded_at: new Date().toISOString(), uploaded_by_email: userEmail } }));
+      const n = (x: number) => x.toLocaleString("el-GR");
       setNotice({
         tone: "ok",
-        text: `Φορτώθηκε απόθεμα: ${parsed.length} γραμμές θέσης, ${items.size} κωδικοί (${used} χρησιμοποιούνται σε προδιαγραφές).`,
+        text: `Απόθεμα φορτώθηκε: από ${n(f.totalRows)} γραμμές (${n(f.totalItems)} κωδικοί) κρατήθηκαν ${n(f.kept.length)} — ${n(f.componentItems)} συστατικά${f.finalItems ? ` και ${n(f.finalItems)} τελικοί κωδικοί` : ""}.`,
+        details: f.missingComponents
+          ? [`${n(f.missingComponents)} από τα ${n(f.componentCount)} συστατικά των προδιαγραφών δεν έχουν καθόλου απόθεμα σε αυτό το αρχείο.`]
+          : undefined,
       });
     } catch {
       setNotice({ tone: "error", text: "Το αρχείο δεν ήταν δυνατό να διαβαστεί." });
@@ -424,16 +439,16 @@ export default function RepackBoard({
         </div>
         <div className="rp-source">
           <div>
-            <div className="rp-source-title">Απόθεμα συστατικών</div>
+            <div className="rp-source-title">Απόθεμα</div>
             <div className="meta">
               {uploads.stock
                 ? `${uploads.stock.file_name || "Excel"} · ${fmtDate(uploads.stock.uploaded_at)}${uploads.stock.uploaded_by_email ? ` · ${uploads.stock.uploaded_by_email}` : ""}`
-                : "Δεν έχει ανέβει ακόμα"}
+                : "Ολόκληρη εξαγωγή αποθήκης — κρατιούνται μόνο τα συστατικά των προδιαγραφών"}
             </div>
           </div>
           <button className="import-btn primary" type="button" disabled={busy !== null} onClick={() => stockInput.current?.click()}>
             <UploadIcon />
-            {busy === "stock" ? "Φόρτωση…" : "Νέο απόθεμα"}
+            {busy === "stock" ? "Φιλτράρισμα…" : "Ανέβασμα αποθέματος"}
           </button>
         </div>
         <input ref={recipeInput} type="file" accept=".xlsx,.xls" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) handleRecipes(f); }} />
@@ -464,7 +479,7 @@ export default function RepackBoard({
             ? isAdmin
               ? "Ξεκινήστε ανεβάζοντας το Excel με τις προδιαγραφές ανασυσκευασίας."
               : "Δεν έχουν ανέβει ακόμα προδιαγραφές — ζητήστε από διαχειριστή να τις φορτώσει."
-            : "Ανεβάστε το απόθεμα συστατικών (εξαγωγή με στήλες Θέση, Είδος, Ποσ1) για να βγει το πλάνο."}
+            : "Ανεβάστε την εξαγωγή αποθέματος (ολόκληρη ή μόνο συστατικά, με στήλες Θέση, Είδος, Ποσ1). Κρατιούνται μόνο τα συστατικά των προδιαγραφών."}
         </div>
       ) : (
         <>
@@ -769,6 +784,11 @@ function RecipeCard({
         <div className="rp-card-title">
           <span className="mono code">{recipe.id}</span>
           {recipe.product_code !== recipe.id && <span className="rp-alt">εναλλακτική του {recipe.product_code}</span>}
+          {avail(recipe.product_code) > 0 && (
+            <span className="rp-alt" title="Υπάρχον απόθεμα του τελικού κωδικού">
+              απόθεμα τελικού {fmtQty(avail(recipe.product_code))}
+            </span>
+          )}
           <h3>{recipe.description}</h3>
         </div>
         <ul className="rp-comps">
@@ -857,77 +877,120 @@ function SpecsView({
   stockIdx: ReturnType<typeof indexStock>;
   analyses: RecipeAnalysis[];
 }) {
-  const maxById = new Map(analyses.map((a) => [a.recipe.id, a.max]));
-  const [open, setOpen] = useState<string | null>(null);
+  const byId = new Map(analyses.map((a) => [a.recipe.id, a]));
+  const [filter, setFilter] = useState<"all" | "can" | "missing">("all");
+  const shown = recipes.filter((r) => {
+    const max = byId.get(r.id)?.max ?? 0;
+    if (filter === "can") return max > 0;
+    if (filter === "missing") return r.components.some((c) => (stockIdx.get(c.code)?.total ?? 0) < c.qty);
+    return true;
+  });
+  const LIMIT = 120;
+  const [showAll, setShowAll] = useState(false);
+  const list = showAll ? shown : shown.slice(0, LIMIT);
+
   return (
-    <section className="rp-specs">
-      <p className="rp-hint">{recipes.length} προδιαγραφές. Πατήστε μία για να δείτε σε ποιες θέσεις βρίσκεται κάθε συστατικό.</p>
-      <table className="rp-spec-table">
-        <thead>
-          <tr>
-            <th>Κωδικός</th>
-            <th>Περιγραφή</th>
-            <th className="num">Συστ.</th>
-            <th className="num">Μέγ.</th>
-          </tr>
-        </thead>
-        <tbody>
-          {recipes.map((r) => {
-            const isOpen = open === r.id;
-            return (
-              <Fragment key={r.id}>
-                <tr className="rp-spec-row" onClick={() => setOpen(isOpen ? null : r.id)} aria-expanded={isOpen}>
-                  <td className="mono">{r.id}</td>
-                  <td>{r.description}</td>
-                  <td className="num">{r.components.length}</td>
-                  <td className={`num ${(maxById.get(r.id) ?? 0) > 0 ? "ok" : "dim"}`}>{fmtQty(maxById.get(r.id) ?? 0)}</td>
+    <section className="specs">
+      <div className="times-bar">
+        <div className="seg rp-tabs" role="tablist" aria-label="Φίλτρο προδιαγραφών">
+          {(
+            [
+              ["all", `Όλες (${recipes.length})`],
+              ["can", "Βγαίνουν"],
+              ["missing", "Λείπει συστατικό"],
+            ] as const
+          ).map(([id, label]) => (
+            <button key={id} type="button" role="tab" aria-selected={filter === id} className={filter === id ? "on" : ""} onClick={() => setFilter(id)}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <span className="rp-hint">{shown.length} προδιαγραφές · απόθεμα και θέσεις από το τελευταίο αρχείο αποθέματος</span>
+      </div>
+
+      {list.map((r) => {
+        const a = byId.get(r.id);
+        const max = a?.max ?? 0;
+        const finalStock = stockIdx.get(r.product_code);
+        return (
+          <article key={r.id} className={`spec ${max > 0 ? "can" : "cannot"}`}>
+            <header className="spec-head">
+              <div className="spec-title">
+                <span className="mono code">{r.id}</span>
+                {r.product_code !== r.id && <span className="rp-alt">εναλλακτική του {r.product_code}</span>}
+                <h3>{r.description}</h3>
+              </div>
+              <div className="spec-figs">
+                <div title="Πόσα τεμάχια βγαίνουν με το τρέχον απόθεμα συστατικών">
+                  <span className="n">{fmtQty(max)}</span>
+                  <span className="l">βγαίνουν</span>
+                </div>
+                <div title="Απόθεμα του τελικού κωδικού στο αρχείο αποθέματος">
+                  <span className="n dim">{finalStock ? fmtQty(finalStock.total) : "—"}</span>
+                  <span className="l">απόθεμα τελικού</span>
+                </div>
+              </div>
+            </header>
+            <table className="spec-comps">
+              <thead>
+                <tr>
+                  <th>Συστατικό</th>
+                  <th className="num">Ανά τεμ.</th>
+                  <th className="num">Απόθεμα</th>
+                  <th>Θέσεις</th>
                 </tr>
-                {isOpen && (
-                  <tr className="rp-spec-detail">
-                    <td colSpan={4}>
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>Συστατικό</th>
-                            <th className="num">Ανά τεμ.</th>
-                            <th>Θέσεις (ποσότητα)</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {r.components.map((c) => {
-                            const e = stockIdx.get(c.code);
-                            return (
-                              <tr key={c.code}>
-                                <td>
-                                  <span className="mono">{c.code}</span> <span className="dim">{c.description}</span>
-                                </td>
-                                <td className="num">
-                                  {fmtQty(c.qty)} {c.unit}
-                                </td>
-                                <td>
-                                  {e?.rows.length ? (
-                                    e.rows.map((s) => (
-                                      <span key={s.position} className="rp-pos" title={s.area}>
-                                        <span className="rack">{s.position}</span> {fmtQty(s.qty)}
-                                      </span>
-                                    ))
-                                  ) : (
-                                    <span className="rp-short">Δεν υπάρχει απόθεμα</span>
-                                  )}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            );
-          })}
-        </tbody>
-      </table>
+              </thead>
+              <tbody>
+                {r.components.map((c) => {
+                  const e = stockIdx.get(c.code);
+                  const have = e?.total ?? 0;
+                  const isLimit = max > 0 ? a?.limiting === c.code : have < c.qty;
+                  const rows = [...(e?.rows ?? [])].sort((x, y) => y.qty - x.qty);
+                  return (
+                    <tr key={c.code} className={isLimit ? "limit" : ""}>
+                      <td>
+                        <span className="mono">{c.code}</span>
+                        <span className="desc">{e?.description || c.description}</span>
+                      </td>
+                      <td className="num">
+                        ×{fmtQty(c.qty)} <span className="unit">{c.unit}</span>
+                      </td>
+                      <td className={`num strong ${have < c.qty ? "zero" : ""}`}>{fmtQty(have)}</td>
+                      <td className="spec-pos">
+                        {rows.length ? (
+                          rows.map((s) => (
+                            <span key={s.position} className="rp-pos" title={s.area}>
+                              <span className="rack">{s.position}</span> {fmtQty(s.qty)}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="rp-short">Χωρίς απόθεμα</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {finalStock && finalStock.rows.length > 0 && (
+              <div className="spec-final">
+                <span className="l">Τελικός σε θέσεις:</span>
+                {finalStock.rows.map((s) => (
+                  <span key={s.position} className="rp-pos" title={s.area}>
+                    <span className="rack">{s.position}</span> {fmtQty(s.qty)}
+                  </span>
+                ))}
+              </div>
+            )}
+          </article>
+        );
+      })}
+      {shown.length > list.length && (
+        <button type="button" className="btn ghost" onClick={() => setShowAll(true)}>
+          Εμφάνιση όλων ({shown.length - list.length} ακόμα)
+        </button>
+      )}
+      {!shown.length && <div className="rp-empty small">Καμία προδιαγραφή δεν ταιριάζει.</div>}
     </section>
   );
 }
