@@ -375,8 +375,11 @@ export function picklistPdf(
   // ---- ανά τελικό: συστατικά και από ποια θέση
   y = sectionTitle(doc, "Ανά τελικό κωδικό", y);
   for (const r of extra.byRecipe) {
+    // ο τελικός με τα συστατικά του μένει μαζί στην ίδια σελίδα όταν χωράει
     const pageH = doc.internal.pageSize.getHeight();
-    if (y > pageH - 45) {
+    const rowsCount = r.components.reduce((n, c) => n + Math.max(1, c.from.length) + (c.short > 0 && c.from.length ? 1 : 0), 0);
+    const blockH = 10.5 + 7 + rowsCount * 9.5 + 6;
+    if (y + Math.min(blockH, pageH - 40) > pageH - 16) {
       doc.addPage();
       y = 18;
     }
