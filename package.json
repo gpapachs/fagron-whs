@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "gen:seed": "node scripts/gen-seed.mjs"
+    "gen:seed": "node scripts/gen-seed.mjs",
+    "check:exports": "node --experimental-strip-types scripts/check-exports.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
@@ -16,7 +17,9 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "three": "^0.169.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "jspdf": "^3.0.1",
+    "jspdf-autotable": "^5.0.2"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
