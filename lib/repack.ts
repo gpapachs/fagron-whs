@@ -32,6 +32,8 @@ export type StockRow = {
   description: string;
   qty: number;
   unit: string;
+  lot?: string; // παρτίδα ("" αν δεν υπάρχει)
+  expiry?: string | null; // ημ. λήξης παρτίδας, ISO "2030-12-30"
 };
 
 type Cell = unknown;
@@ -127,6 +129,9 @@ export function parseStockRows(rows: Cell[][]): { stock: StockRow[]; error?: str
         desc: find("περειδους", "περιγραφηειδους", "περιγραφη"),
         qty: find("ποσ1", "ποσοτητα"),
         unit: find("μμ1", "μμ"),
+        lot: find("παρτιδα", "lot"),
+        // η ΠΡΩΤΗ «Ημ.Λήξης» είναι της παρτίδας (υπάρχει και δεύτερη, της φάσης)
+        expiry: find("ημληξης", "ημερομηνιαληξης", "ληξη"),
       };
       break;
     }
@@ -138,14 +143,15 @@ export function parseStockRows(rows: Cell[][]): { stock: StockRow[]; error?: str
     return { stock: [], error: "Δεν βρέθηκε η στήλη ποσότητας «Ποσ1» στο αρχείο αποθέματος." };
   }
 
-  // Ίδιο είδος στην ίδια θέση (π.χ. δύο παρτίδες) -> μία γραμμή
+  // Ίδιο είδος + θέση + παρτίδα -> μία γραμμή (διαφορετικές παρτίδες μένουν χωριστά)
   const merged = new Map<string, StockRow>();
   for (const row of rows.slice(headerIdx + 1)) {
     const item = str(row[cols.item]);
     const position = str(row[cols.pos]);
     const qty = num(row[cols.qty]);
     if (!item || !position || qty === null || qty <= 0) continue;
-    const key = `${item}\u0000${position}`;
+    const lot = cols.lot >= 0 ? str(row[cols.lot]) : "";
+    const key = `${item}\u0000${position}\u0000${lot}`;
     const prev = merged.get(key);
     if (prev) prev.qty = round(prev.qty + qty);
     else
@@ -156,10 +162,36 @@ export function parseStockRows(rows: Cell[][]): { stock: StockRow[]; error?: str
         description: cols.desc >= 0 ? str(row[cols.desc]) : "",
         qty,
         unit: cols.unit >= 0 ? str(row[cols.unit]) : "",
+        lot,
+        expiry: cols.expiry >= 0 ? parseDate(row[cols.expiry]) : null,
       });
   }
   return { stock: [...merged.values()] };
 }
+
+/** «30/12/2030», Excel serial ή Date -> "2030-12-30" (αλλιώς null) */
+export function parseDate(v: Cell): string | null {
+  if (v instanceof Date && !isNaN(v.getTime())) return v.toISOString().slice(0, 10);
+  if (typeof v === "number" && v > 20000 && v < 80000) {
+    const d = new Date(Math.round((v - 25569) * 86400000)); // Excel -> Unix
+    return d.toISOString().slice(0, 10);
+  }
+  const m = str(v).match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})/);
+  if (m) {
+    const y = m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
+    const d = `${y}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+    return y > 1900 && y < 2200 && !isNaN(Date.parse(d)) && y !== 2000 ? d : null; // 1/1/2000 = κενό στο WMS
+  }
+  const iso = str(v).match(/^\d{4}-\d{2}-\d{2}/);
+  return iso ? iso[0] : null;
+}
+
+/** "2030-12-30" -> "30/12/30" */
+export const fmtExpiry = (iso?: string | null) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(2, 4)}` : "");
+
+/** Κείμενο παρτίδας για εμφάνιση: «823600 · λ. 22/05/36» */
+export const lotLabel = (r: { lot?: string; expiry?: string | null }) =>
+  [r.lot ? r.lot : "", r.expiry ? `λ. ${fmtExpiry(r.expiry)}` : ""].filter(Boolean).join(" · ");
 
 // ------------------------------------------------------------ calculation
 
@@ -223,6 +255,8 @@ export type PickLine = {
   take: number;
   inPosition: number;
   unit: string;
+  lot: string;
+  expiry: string | null;
 };
 
 export type PlanResult = {
@@ -334,6 +368,8 @@ export function buildPicks(needs: ComponentNeed[], idx: StockIndex): PickLine[] 
         take,
         inPosition: r.qty,
         unit: r.unit || need.unit,
+        lot: r.lot ?? "",
+        expiry: r.expiry ?? null,
       });
       left = round(left - take);
     }
@@ -384,7 +420,7 @@ export type RecipePick = {
     unit: string;
     need: number;
     short: number;
-    from: { position: string; area: string; take: number }[];
+    from: { position: string; area: string; lot: string; expiry: string | null; take: number }[];
   }[];
 };
 
@@ -395,10 +431,10 @@ export type RecipePick = {
  */
 export function picksByRecipe(planned: RecipeAnalysis[], picks: PickLine[]): RecipePick[] {
   // ουρά διαθέσιμων λήψεων ανά συστατικό (ίδια σειρά με τη λίστα συλλογής)
-  const queue = new Map<string, { position: string; area: string; left: number }[]>();
+  const queue = new Map<string, { position: string; area: string; lot: string; expiry: string | null; left: number }[]>();
   for (const p of picks) {
     const q = queue.get(p.item) ?? [];
-    q.push({ position: p.position, area: p.area, left: p.take });
+    q.push({ position: p.position, area: p.area, lot: p.lot, expiry: p.expiry, left: p.take });
     queue.set(p.item, q);
   }
   return planned
@@ -409,14 +445,14 @@ export function picksByRecipe(planned: RecipeAnalysis[], picks: PickLine[]): Rec
       components: a.recipe.components.map((c) => {
         const need = round(a.planned * c.qty);
         let left = need;
-        const from: { position: string; area: string; take: number }[] = [];
+        const from: { position: string; area: string; lot: string; expiry: string | null; take: number }[] = [];
         for (const slot of queue.get(c.code) ?? []) {
           if (left <= EPS) break;
           if (slot.left <= EPS) continue;
           const take = round(Math.min(slot.left, left));
           slot.left = round(slot.left - take);
           left = round(left - take);
-          from.push({ position: slot.position, area: slot.area, take });
+          from.push({ position: slot.position, area: slot.area, lot: slot.lot, expiry: slot.expiry, take });
         }
         const pick = picks.find((p) => p.item === c.code);
         return {

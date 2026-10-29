@@ -17,7 +17,10 @@ async function load(): Promise<Data> {
   const [recipeRows, componentRows, stockRows, uploadsRes, jobs, settings] = await Promise.all([
     fetchAll<{ id: string; product_code: string; description: string }>(supabase, "repack_recipes", "id, product_code, description", ["sort", "id"]),
     fetchAll<ComponentRow>(supabase, "repack_components", "recipe_id, code, description, qty, unit", ["recipe_id", "sort"]),
-    fetchAll<StockRow & { qty: number | string }>(supabase, "repack_stock", "position, area, item, description, qty, unit", ["item", "position"]),
+    // παρτίδες (0006) -- αν δεν έχει τρέξει ακόμα, φέρνει το απόθεμα χωρίς παρτίδες
+    fetchAll<StockRow & { qty: number | string }>(supabase, "repack_stock", "position, area, item, description, qty, unit, lot, expiry", ["item", "position", "lot"]).catch(() =>
+      fetchAll<StockRow & { qty: number | string }>(supabase, "repack_stock", "position, area, item, description, qty, unit", ["item", "position"])
+    ),
     supabase.from("repack_uploads").select("*"),
     // εργασίες: αν ο πίνακας δεν έχει στηθεί ακόμα (0004), η σελίδα δουλεύει χωρίς χρόνους
     fetchAll<Job>(supabase, "repack_jobs", "*", ["started_at"]).catch(() => [] as Job[]),

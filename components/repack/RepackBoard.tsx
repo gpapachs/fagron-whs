@@ -12,6 +12,7 @@ import {
   filterStockForRecipes,
   picksByRecipe,
   planForReserved,
+  lotLabel,
   reservedShortfall,
   type ProductSettings,
   fmtQty,
@@ -765,14 +766,17 @@ export default function RepackBoard({
                       {plan.picks.map((p, i) => {
                         const firstOfPos = i === 0 || plan.picks[i - 1].position !== p.position;
                         return (
-                          <Fragment key={`${p.position}-${p.item}`}>
+                          <Fragment key={`${p.position}-${p.item}-${p.lot}`}>
                             <tr className={firstOfPos ? "first" : ""}>
                               <td className="pos">
                                 {firstOfPos && <span className="rack">{p.position}</span>}
                                 {firstOfPos && p.area && <span className="area">{p.area}</span>}
                               </td>
                               <td className="mono">{p.item}</td>
-                              <td>{p.description}</td>
+                              <td>
+                                {p.description}
+                                {lotLabel(p) && <span className="lot-line">{lotLabel(p)}</span>}
+                              </td>
                               <td className="num strong">
                                 {fmtQty(p.take)} <span className="unit">{p.unit}</span>
                               </td>
@@ -1128,8 +1132,9 @@ function PosChips({ rows }: { rows: StockRow[] }) {
   return (
     <span className="rp-poslist">
       {shown.map((r) => (
-        <span key={r.position} className="rp-pos" title={r.area}>
+        <span key={`${r.position}|${r.lot ?? ""}`} className="rp-pos" title={[r.area, r.lot ? `Παρτίδα ${r.lot}` : "", r.expiry ? `Λήξη ${r.expiry}` : ""].filter(Boolean).join(" · ")}>
           <span className="rack">{r.position}</span> {fmtQty(r.qty)}
+          {lotLabel(r) && <span className="lot">{lotLabel(r)}</span>}
         </span>
       ))}
       {sorted.length > MAX && (
@@ -1248,8 +1253,9 @@ function SpecsView({
                       <td className="spec-pos">
                         {rows.length ? (
                           rows.map((s) => (
-                            <span key={s.position} className="rp-pos" title={s.area}>
+                            <span key={`${s.position}|${s.lot ?? ""}`} className="rp-pos" title={s.area}>
                               <span className="rack">{s.position}</span> {fmtQty(s.qty)}
+                              {lotLabel(s) && <span className="lot">{lotLabel(s)}</span>}
                             </span>
                           ))
                         ) : (
@@ -1265,8 +1271,9 @@ function SpecsView({
               <div className="spec-final">
                 <span className="l">Τελικός σε θέσεις:</span>
                 {finalStock.rows.map((s) => (
-                  <span key={s.position} className="rp-pos" title={s.area}>
+                  <span key={`${s.position}|${s.lot ?? ""}`} className="rp-pos" title={s.area}>
                     <span className="rack">{s.position}</span> {fmtQty(s.qty)}
+                    {lotLabel(s) && <span className="lot">{lotLabel(s)}</span>}
                   </span>
                 ))}
               </div>

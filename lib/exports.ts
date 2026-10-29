@@ -9,6 +9,10 @@ import type { ComponentNeed, PickLine, ProductSettings, RecipeAnalysis, RecipePi
 import type { Job, JobStats } from "./jobs";
 
 const q = (n: number) => n.toLocaleString("el-GR", { maximumFractionDigits: 3 });
+const exp = (iso?: string | null) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(2, 4)}` : "");
+/** «Π. 823600 · λ. 22/05/36» */
+const lotTxt = (lot?: string, expiry?: string | null) =>
+  [lot ? `Π. ${lot}` : "", expiry ? `λ. ${exp(expiry)}` : ""].filter(Boolean).join(" · ");
 const stamp = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const when = (d: Date) =>
@@ -44,7 +48,7 @@ export type AvailableComponentRow = {
   unit: string;
   totalStock: number;
   isLimiting: boolean;
-  positions: { position: string; area: string; qty: number }[];
+  positions: { position: string; area: string; qty: number; lot: string; expiry: string | null }[];
 };
 
 export function availableData(analyses: RecipeAnalysis[], stockIdx: StockIndex) {
@@ -76,7 +80,7 @@ export function availableData(analyses: RecipeAnalysis[], stockIdx: StockIndex) 
         totalStock: e?.total ?? 0,
         isLimiting: c.code === a.limiting,
         positions: (e?.rows ?? [])
-          .map((r) => ({ position: r.position, area: r.area, qty: r.qty }))
+          .map((r) => ({ position: r.position, area: r.area, qty: r.qty, lot: r.lot ?? "", expiry: r.expiry ?? null }))
           .sort((x, y) => y.qty - x.qty),
       };
     })
@@ -135,7 +139,7 @@ export function availableWorkbook(
     sheet(
       XLSX,
       components.flatMap((c) =>
-        (c.positions.length ? c.positions : [{ position: "", area: "", qty: 0 }]).map((p, i) => ({
+        (c.positions.length ? c.positions : [{ position: "", area: "", qty: 0, lot: "", expiry: null }]).map((p, i) => ({
           "Κωδικός": c.recipeId,
           "Περιγραφή": c.description,
           "Μέγιστο": c.max,
@@ -147,10 +151,12 @@ export function availableWorkbook(
           "Περιορίζει": c.isLimiting && i === 0 ? "ΝΑΙ" : "",
           "Θέση": p.position,
           "Περιοχή": p.area,
+          "Παρτίδα": p.lot,
+          "Λήξη": p.expiry ? new Date(p.expiry) : "",
           "Ποσότητα θέσης": p.position ? p.qty : "",
         }))
       ),
-      [16, 44, 9, 14, 44, 9, 6, 12, 10, 16, 26, 12]
+      [16, 44, 9, 14, 44, 9, 6, 12, 10, 16, 26, 14, 11, 12]
     ),
     "Συστατικά & θέσεις"
   );
@@ -219,12 +225,14 @@ export function planWorkbook(
         "Περιοχή": p.area,
         "Κωδικός": p.item,
         "Περιγραφή": p.description,
+        "Παρτίδα": p.lot,
+        "Λήξη": p.expiry ? new Date(p.expiry) : "",
         "Πάρε": p.take,
         "Στη θέση": p.inPosition,
         "ΜΜ": p.unit,
         "Αδειάζει": p.take >= p.inPosition ? "ΝΑΙ" : "",
       })),
-      [16, 26, 14, 50, 9, 9, 6, 9]
+      [16, 26, 14, 50, 14, 11, 9, 9, 6, 9]
     ),
     "Συλλογή"
   );
@@ -417,7 +425,7 @@ export function picklistPdf(
         body.push([
           i === 0 ? { content: `${c.code}\n${c.description}`, rowSpan: rows.length } : null,
           i === 0 ? { content: `${q(c.need)} ${c.unit}`, rowSpan: rows.length, styles: { halign: "right", fontStyle: "bold" } } : null,
-          f.position ? `${f.position}\n${f.area}` : c.short > 0 ? "ΔΕΝ ΥΠΑΡΧΕΙ" : "—",
+          f.position ? `${f.position}\n${lotTxt(f.lot, f.expiry) || f.area}` : c.short > 0 ? "ΔΕΝ ΥΠΑΡΧΕΙ" : "—",
           f.position ? q(f.take) : "",
           "",
         ].filter((x) => x !== null));
@@ -435,7 +443,7 @@ export function picklistPdf(
       rowPageBreak: "avoid",
       columnStyles: {
         1: { cellWidth: 24 },
-        2: { cellWidth: 40, fontStyle: "bold" },
+        2: { cellWidth: 46, fontStyle: "bold" },
         3: { cellWidth: 18, halign: "right", fontStyle: "bold" },
         4: { cellWidth: 9 },
       },
@@ -481,7 +489,7 @@ export function picklistPdf(
     body: picks.map((p, i) => [
       i === 0 || picks[i - 1].position !== p.position ? `${p.position}\n${p.area}` : "",
       p.item,
-      p.description,
+      lotTxt(p.lot, p.expiry) ? `${p.description}\n${lotTxt(p.lot, p.expiry)}` : p.description,
       `${q(p.take)} ${p.unit}`,
       p.take >= p.inPosition ? `${q(p.inPosition)}\nαδειάζει` : q(p.inPosition),
       "",
@@ -551,7 +559,7 @@ export function availablePdf(
     row.push({ content: c.componentDescription, styles: c.isLimiting ? { fontStyle: "bold" } : {} });
     row.push({ content: `×${q(c.perUnit)}`, styles: { halign: "right" } });
     row.push({ content: q(c.totalStock), styles: { halign: "right" } });
-    row.push(c.positions.map((p) => `${p.position} (${q(p.qty)})`).join("   ") || "—");
+    row.push(c.positions.map((p) => `${p.position} (${q(p.qty)}${p.lot ? ` · Π. ${p.lot}` : ""})`).join("\n") || "—");
     body.push(row);
     zebra.push(recipeIdx % 2 === 1);
   }

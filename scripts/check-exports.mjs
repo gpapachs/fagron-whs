@@ -36,7 +36,7 @@ for (let i = 1; i <= 40; i++) {
       { code: lid, description: `ΚΑΠΑΚΙ ΔΟΚΙΜΗΣ Νο ${(i % 7) + 1}`, qty: i % 5 === 0 ? 2 : 1, unit: "ΤΕΜ" },
     ],
   });
-  stock.push({ position: `10${i % 9}.0${i % 4}.0${i % 3}.01`, area: "ΑΠΟΘΗΚΗ ΔΟΚΙΜΗΣ", item: jar, description: `ΒΑΖΑΚΙ ΓΥΑΛΙΝΟ ΔΟΚΙΜΗΣ ${i * 10} ML`, qty: 50 * i, unit: "ΤΕΜ" });
+  stock.push({ position: `10${i % 9}.0${i % 4}.0${i % 3}.01`, area: "ΑΠΟΘΗΚΗ ΔΟΚΙΜΗΣ", item: jar, description: `ΒΑΖΑΚΙ ΓΥΑΛΙΝΟ ΔΟΚΙΜΗΣ ${i * 10} ML`, qty: 50 * i, unit: "ΤΕΜ", lot: `L${1000 + i}`, expiry: `2031-0${(i % 9) + 1}-15` });
   if (i % 3 === 0) stock.push({ position: `99.${i}`, area: "ΕΙΣΕΡΧΟΜΕΝΑ ΥΛΙΚΑ", item: jar, description: `ΒΑΖΑΚΙ ΓΥΑΛΙΝΟ ΔΟΚΙΜΗΣ ${i * 10} ML`, qty: 17, unit: "ΤΕΜ" });
 }
 for (let k = 1; k <= 7; k++) {
@@ -100,6 +100,21 @@ const backA = XLSX.read(fs.readFileSync(path.join(outDir, "sample-available.xlsx
 const firstRow = XLSX.utils.sheet_to_json(backA.Sheets["Διαθέσιμες"])[0];
 if (!String(firstRow?.["Περιγραφή"] ?? "").includes("άέήίόύώ")) fail("τα ελληνικά δεν διατηρήθηκαν στο Excel");
 if (a.count !== plan.analyses.filter((x) => x.max > 0).length) fail("λάθος πλήθος διαθέσιμων");
+
+// ---- παρτίδες: ανάγνωση από «Excel» με στήλες Παρτίδα / Ημ.Λήξης (δύο παρτίδες στην ίδια θέση μένουν χωριστά)
+{
+  const { parseStockRows } = await import("../lib/repack.ts");
+  const rows = [
+    ["", "Θέση", "Περ.Θέσης", "Είδος", "Περ.Είδους", "Παρτίδα", "Ημ.Λήξης", "Ποσ1", "ΜΜ1", "Ημ.Λήξης"],
+    ["", "99.15", "Α", "40-00-122", "ΒΑΖΑΚΙ", "P10018", "4/4/2029", 278, "ΤΕΜ", "1/1/2000"],
+    ["", "99.15", "Α", "40-00-122", "ΒΑΖΑΚΙ", "M01-17", "22/4/2035", 40, "ΤΕΜ", "1/1/2000"],
+    ["", "99.15", "Α", "40-00-122", "ΒΑΖΑΚΙ", "M01-17", "22/4/2035", 2, "ΤΕΜ", "1/1/2000"],
+  ];
+  const { stock: lots } = parseStockRows(rows);
+  const m = lots.find((x) => x.lot === "M01-17");
+  console.log(`παρτίδες: ${lots.length} γραμμές · ${lots.map((x) => `${x.lot}=${x.qty} λ.${x.expiry}`).join(", ")}`);
+  if (lots.length !== 2 || m?.qty !== 42 || m?.expiry !== "2035-04-22") fail("λάθος ανάγνωση παρτίδων");
+}
 
 // ---- φιλτράρισμα ολόκληρου αποθέματος
 const noise = Array.from({ length: 5000 }, (_, i) => ({ position: `Z${i}`, area: "Χ", item: `00-99-${i % 900}`, description: "άσχετο", qty: 3, unit: "ΤΕΜ" }));
