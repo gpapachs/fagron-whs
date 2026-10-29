@@ -231,7 +231,8 @@ export type PdfFonts = { regular: string; bold: string }; // base64 TTF
 const FONT = "DejaVu";
 const INK: [number, number, number] = [17, 24, 39];
 const DIM: [number, number, number] = [100, 116, 139];
-const ACCENT: [number, number, number] = [234, 88, 12];
+const ACCENT: [number, number, number] = [20, 33, 61];
+const RACK: [number, number, number] = [255, 204, 0];
 const LINE: [number, number, number] = [226, 232, 240];
 const ZEBRA: [number, number, number] = [248, 250, 252];
 const RED: [number, number, number] = [185, 28, 28];
@@ -387,7 +388,10 @@ export function picklistPdf(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     didParseCell: (d: any) => {
       if (d.section === "body" && shade[d.row.index]) d.cell.styles.fillColor = ZEBRA;
-      if (d.section === "body" && d.column.index === 0) d.cell.styles.fontSize = 8;
+      if (d.section === "body" && d.column.index === 0) {
+        d.cell.styles.fontSize = 8;
+        if (d.cell.raw) d.cell.styles.fillColor = RACK; // ετικέτα ραφιού, όπως στην αποθήκη
+      }
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     didDrawCell: (d: any) => {

@@ -2,8 +2,8 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import LogoutButton from "@/components/auth/LogoutButton";
-import NavTabs from "@/components/NavTabs";
+import AppBar from "@/components/AppBar";
+import type { ExportMeta, PdfFonts } from "@/lib/exports";
 import {
   areasOf,
   buildPlan,
@@ -201,83 +201,111 @@ export default function RepackBoard({
 
   // ---------------------------------------------------------------- export
 
-  async function exportExcel() {
-    const XLSX = await import("xlsx");
-    const wb = XLSX.utils.book_new();
-    const planSheet = XLSX.utils.json_to_sheet(
-      plannedLines.map((a) => ({
-        "Προδιαγραφή": a.recipe.id,
-        "Κωδικός τελικού": a.recipe.product_code,
-        "Περιγραφή": a.recipe.description,
-        "Ποσότητα": a.planned,
-      }))
-    );
-    const needSheet = XLSX.utils.json_to_sheet(
-      plan.needs.map((n) => ({
-        "Συστατικό": n.code,
-        "Περιγραφή": n.description,
-        "Απαιτείται": n.required,
-        "Διαθέσιμο": n.available,
-        "Λείπει": n.shortage,
-        "ΜΜ": n.unit,
-      }))
-    );
-    const pickSheet = XLSX.utils.json_to_sheet(
-      plan.picks.map((p) => ({
-        "Θέση": p.position,
-        "Περιοχή": p.area,
-        "Κωδικός": p.item,
-        "Περιγραφή": p.description,
-        "Πάρε": p.take,
-        "Υπάρχουν στη θέση": p.inPosition,
-        "ΜΜ": p.unit,
-      }))
-    );
-    XLSX.utils.book_append_sheet(wb, planSheet, "Πλάνο");
-    XLSX.utils.book_append_sheet(wb, needSheet, "Συστατικά");
-    XLSX.utils.book_append_sheet(wb, pickSheet, "Συλλογή");
-    const d = new Date();
-    XLSX.writeFile(wb, `anasyskevasia-${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}.xlsx`);
+  const [exporting, setExporting] = useState<string | null>(null);
+
+  function exportMeta(): ExportMeta {
+    return {
+      generatedAt: new Date(),
+      userEmail,
+      stockFile: uploads.stock?.file_name ?? null,
+      stockUploadedAt: uploads.stock?.uploaded_at ?? null,
+      excludedAreas: excluded,
+    };
   }
+
+  async function run(label: string, fn: () => Promise<void>) {
+    setExporting(label);
+    try {
+      await fn();
+    } catch (e) {
+      setNotice({ tone: "error", text: `Η εξαγωγή απέτυχε: ${(e as Error).message}` });
+    } finally {
+      setExporting(null);
+    }
+  }
+
+  const exportAvailableExcel = () =>
+    run("avail-xlsx", async () => {
+      const [XLSX, ex] = await Promise.all([import("xlsx"), import("@/lib/exports")]);
+      const { wb, fileName } = ex.availableWorkbook(XLSX, plan.analyses, stockIdx, exportMeta());
+      XLSX.writeFile(wb, fileName);
+    });
+
+  const exportPlanExcel = () =>
+    run("plan-xlsx", async () => {
+      const [XLSX, ex] = await Promise.all([import("xlsx"), import("@/lib/exports")]);
+      const { wb, fileName } = ex.planWorkbook(XLSX, plannedLines, plan.needs, plan.picks, exportMeta());
+      XLSX.writeFile(wb, fileName);
+    });
+
+  const exportAvailablePdf = () =>
+    run("avail-pdf", async () => {
+      const [{ jsPDF }, { autoTable }, ex, fonts] = await Promise.all([
+        import("jspdf"),
+        import("jspdf-autotable"),
+        import("@/lib/exports"),
+        loadPdfFonts(),
+      ]);
+      const { doc, fileName } = ex.availablePdf(jsPDF, autoTable, fonts, plan.analyses, stockIdx, exportMeta());
+      doc.save(fileName);
+    });
+
+  const exportPicklistPdf = () =>
+    run("pick-pdf", async () => {
+      const [{ jsPDF }, { autoTable }, ex, fonts] = await Promise.all([
+        import("jspdf"),
+        import("jspdf-autotable"),
+        import("@/lib/exports"),
+        loadPdfFonts(),
+      ]);
+      const { doc, fileName } = ex.picklistPdf(jsPDF, autoTable, fonts, plannedLines, plan.needs, plan.picks, exportMeta());
+      doc.save(fileName);
+    });
 
   // ---------------------------------------------------------------- render
 
   const hasData = recipes.length > 0 && stock.length > 0;
 
   return (
+    <>
+    <AppBar email={userEmail} role={role} />
     <div className="wrap repack">
-      <NavTabs />
       <div className="header">
         <div className="titleblock">
-          <p className="eyebrow">Fagron Hellas &middot; Ανασυσκευασία</p>
-          <h1>Πλάνο ανασυσκευασίας</h1>
-          <p>
-            Ανεβάστε το απόθεμα συστατικών για να δείτε τι μπορεί να γίνει, πόσα τεμάχια βγαίνουν και από ποιες θέσεις
-            μαζεύονται τα συστατικά.
-          </p>
-          <div className="userbar">
-            {userEmail && <span>{userEmail}</span>}
-            <span className="role">{isAdmin ? "Διαχειριστής" : "Προσωπικό"}</span>
-            <LogoutButton />
-          </div>
+          <h1>Ανασυσκευασία</h1>
+          <p>Τι μπορεί να ανασυσκευαστεί με το τρέχον απόθεμα, πόσα τεμάχια βγαίνουν και από ποιες θέσεις μαζεύονται τα συστατικά.</p>
         </div>
-        <div className="stats rp-stats">
-          <div className="stat total">
-            <span className="n">{feasibleCount}</span>
-            <span className="l">Κωδικοί που βγαίνουν</span>
+        {hasData && (
+          <div className="header-actions">
+            <span className="header-actions-label">Διαθέσιμες ανασυσκευασίες</span>
+            <button type="button" className="btn ghost sm" onClick={exportAvailableExcel} disabled={exporting !== null || feasibleCount === 0}>
+              <FileIcon kind="xlsx" />
+              {exporting === "avail-xlsx" ? "Εξαγωγή…" : "Excel"}
+            </button>
+            <button type="button" className="btn ghost sm" onClick={exportAvailablePdf} disabled={exporting !== null || feasibleCount === 0}>
+              <FileIcon kind="pdf" />
+              {exporting === "avail-pdf" ? "Εξαγωγή…" : "PDF με θέσεις"}
+            </button>
           </div>
-          <div className="stat">
-            <span className="n">{recipes.length}</span>
-            <span className="l">Προδιαγραφές</span>
-          </div>
-          <div className="stat free">
-            <span className="n">{fmtQty(plannedUnits)}</span>
-            <span className="l">Τεμ. στο πλάνο</span>
-          </div>
-          <div className={`stat ${shortages.length ? "occupied" : ""}`}>
-            <span className="n">{shortages.length}</span>
-            <span className="l">Ελλείψεις</span>
-          </div>
+        )}
+      </div>
+
+      <div className="kpis" role="group" aria-label="Σύνοψη">
+        <div className="kpi accent">
+          <span className="n">{feasibleCount}</span>
+          <span className="l">κωδικοί βγαίνουν</span>
+        </div>
+        <div className="kpi">
+          <span className="n">{recipes.length}</span>
+          <span className="l">προδιαγραφές</span>
+        </div>
+        <div className="kpi">
+          <span className="n">{fmtQty(plannedUnits)}</span>
+          <span className="l">τεμάχια στο πλάνο</span>
+        </div>
+        <div className={`kpi ${shortages.length ? "bad" : ""}`}>
+          <span className="n">{shortages.length}</span>
+          <span className="l">{shortages.length === 1 ? "συστατικό λείπει" : "συστατικά λείπουν"}</span>
         </div>
       </div>
 
@@ -457,11 +485,16 @@ export default function RepackBoard({
                       </tbody>
                     </table>
                     <div className="rp-actions">
-                      <button type="button" className="btn primary" onClick={() => window.print()} disabled={!plan.picks.length}>
-                        Εκτύπωση λίστας
+                      <button type="button" className="btn primary" onClick={exportPicklistPdf} disabled={!plan.picks.length || exporting !== null}>
+                        <FileIcon kind="pdf" />
+                        {exporting === "pick-pdf" ? "Δημιουργία…" : "PDF λίστας συλλογής"}
                       </button>
-                      <button type="button" className="btn ghost" onClick={exportExcel}>
+                      <button type="button" className="btn ghost" onClick={exportPlanExcel} disabled={exporting !== null} title="Excel πλάνου">
+                        <FileIcon kind="xlsx" />
                         Excel
+                      </button>
+                      <button type="button" className="btn ghost icon" onClick={() => window.print()} disabled={!plan.picks.length} title="Εκτύπωση" aria-label="Εκτύπωση">
+                        <PrintIcon />
                       </button>
                     </div>
                   </>
@@ -506,8 +539,8 @@ export default function RepackBoard({
                         return (
                           <Fragment key={`${p.position}-${p.item}`}>
                             <tr className={firstOfPos ? "first" : ""}>
-                              <td className="mono pos">
-                                {firstOfPos ? p.position : ""}
+                              <td className="pos">
+                                {firstOfPos && <span className="rack">{p.position}</span>}
                                 {firstOfPos && p.area && <span className="area">{p.area}</span>}
                               </td>
                               <td className="mono">{p.item}</td>
@@ -537,10 +570,51 @@ export default function RepackBoard({
       )}
 
     </div>
+    </>
   );
 }
 
 // ------------------------------------------------------------------ pieces
+
+let fontCache: Promise<PdfFonts> | null = null;
+function loadPdfFonts(): Promise<PdfFonts> {
+  const base = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+  const b64 = async (file: string) => {
+    const res = await fetch(`${base}/fonts/${file}`);
+    if (!res.ok) throw new Error(`γραμματοσειρά ${file} (${res.status})`);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  };
+  fontCache ??= Promise.all([b64("DejaVuSansCondensed.ttf"), b64("DejaVuSansCondensed-Bold.ttf")])
+    .then(([regular, bold]) => ({ regular, bold }))
+    .catch((e) => {
+      fontCache = null;
+      throw e;
+    });
+  return fontCache;
+}
+
+function FileIcon({ kind }: { kind: "pdf" | "xlsx" }) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v5h5" />
+      {kind === "pdf" ? <path d="M9 13h6M9 17h4" /> : <path d="M9 12l6 6M15 12l-6 6" />}
+    </svg>
+  );
+}
+
+function PrintIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+      <path d="M7 8V3h10v5" />
+      <rect x="3" y="8" width="18" height="9" rx="2" />
+      <path d="M7 14h10v7H7z" />
+    </svg>
+  );
+}
 
 function UploadIcon() {
   return (
@@ -699,7 +773,7 @@ function SpecsView({
                                   {e?.rows.length ? (
                                     e.rows.map((s) => (
                                       <span key={s.position} className="rp-pos" title={s.area}>
-                                        <span className="mono">{s.position}</span> {fmtQty(s.qty)}
+                                        <span className="rack">{s.position}</span> {fmtQty(s.qty)}
                                       </span>
                                     ))
                                   ) : (

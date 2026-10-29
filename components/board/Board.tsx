@@ -16,8 +16,7 @@ import Grid2D from "./Grid2D";
 import PositionPanel from "./PositionPanel";
 import QuickLookup from "./QuickLookup";
 import ExcelImport from "./ExcelImport";
-import LogoutButton from "@/components/auth/LogoutButton";
-import NavTabs from "@/components/NavTabs";
+import AppBar from "@/components/AppBar";
 import type { Board3DHandle } from "./Board3D";
 
 const Board3D = dynamic(() => import("./Board3D"), { ssr: false });
@@ -223,22 +222,16 @@ export default function Board({
   const currentPosition = current ? positionsByCode[current.code] : undefined;
 
   return (
+    <>
+    <AppBar email={userEmail} role={role} />
     <div className="wrap">
-      <NavTabs />
       <div className="header">
         <div className="titleblock">
-          <p className="eyebrow">Fagron Hellas &middot; Διαχείριση χώρου &middot; Live</p>
           <h1>Πλάνο Αποθήκης</h1>
           <p>
-            12 διάδρομοι με την πραγματική αρίθμηση θέσεών σας (E{"{διάδρομος}"}-{"{στήλη}"}-{"{σειρά}"}-
-            {"{θέση}"}), συν τυχόν ειδικές θέσεις εκτός διαδρόμων. Πατήστε μια θέση για να τη δείτε ή να
-            την αλλάξετε.
+            12 διάδρομοι με την πραγματική αρίθμηση θέσεων (E{"{διάδρομος}"}-{"{στήλη}"}-{"{σειρά}"}-
+            {"{θέση}"}) και οι ειδικές θέσεις. Πατήστε μια θέση για να τη δείτε ή να την αλλάξετε.
           </p>
-          <div className="userbar">
-            {userEmail && <span>{userEmail}</span>}
-            <span className="role">{role === "admin" ? "Διαχειριστής" : "Προσωπικό"}</span>
-            <LogoutButton />
-          </div>
         </div>
         <div className="stats">
           <div className="stat total">
@@ -370,5 +363,6 @@ export default function Board({
 
       <div className={`toast${toast ? " show" : ""}`}>{toast}</div>
     </div>
+    </>
   );
 }
