@@ -6,6 +6,7 @@
 // Μόνο `import type` από άλλα αρχεία -- τίποτα σε runtime.
 
 import type { ComponentNeed, PickLine, RecipeAnalysis, StockIndex } from "./repack";
+import type { Job, JobStats } from "./jobs";
 
 const q = (n: number) => n.toLocaleString("el-GR", { maximumFractionDigits: 3 });
 const stamp = (d: Date) =>
@@ -471,4 +472,69 @@ export function availablePdf(
 
   footer(doc, "Διαθέσιμες ανασυσκευασίες · Fagron Hellas");
   return { doc, fileName: `diathesimes-anasyskevasies-${stamp(meta.generatedAt)}.pdf`, count: rows.length };
+}
+
+// ============================================================ Excel χρόνων
+
+
+type JobHelpers = {
+  durationSec: (j: Pick<Job, "started_at" | "finished_at">) => number;
+  statsByRecipe: (jobs: Job[]) => JobStats[];
+};
+
+const minutes = (sec: number) => Math.round((sec / 60) * 100) / 100;
+const seconds = (sec: number) => Math.round(sec * 10) / 10;
+
+/** Excel χρόνων: ανά κωδικό (μέσοι όροι) + κάθε εργασία. Οι χρόνοι σε αριθμούς, για υπολογισμούς. */
+export function jobsWorkbook(XLSX: XLSXLib, jobs: Job[], meta: ExportMeta, h: JobHelpers) {
+  const done = jobs.filter((j) => j.status === "done" && j.finished_at && (j.packages ?? 0) > 0);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    wb,
+    sheet(
+      XLSX,
+      h.statsByRecipe(done).map((s) => ({
+        "Κωδικός": s.recipeId,
+        "Περιγραφή": s.description,
+        "Εργασίες": s.jobs,
+        "Συσκευασίες": s.packages,
+        "Τεμάχια": s.units,
+        "Συνολικός χρόνος (λεπτά)": minutes(s.totalSec),
+        "Μέσος χρόνος / συσκευασία (δευτ.)": seconds(s.secPerPackage),
+        "Μέσος χρόνος / τεμάχιο (δευτ.)": s.secPerUnit !== null ? seconds(s.secPerUnit) : "",
+        "Συσκευασίες / ώρα": Math.round(s.packagesPerHour * 10) / 10,
+        "Γρηγορότερη (δευτ./συσκ.)": seconds(s.fastestSecPerPackage),
+        "Αργότερη (δευτ./συσκ.)": seconds(s.slowestSecPerPackage),
+      })),
+      [16, 46, 9, 11, 9, 14, 16, 14, 12, 14, 14]
+    ),
+    "Ανά κωδικό"
+  );
+  XLSX.utils.book_append_sheet(
+    wb,
+    sheet(
+      XLSX,
+      [...done]
+        .sort((a, b) => (b.finished_at as string).localeCompare(a.finished_at as string))
+        .map((j) => {
+          const sec = h.durationSec(j);
+          return {
+            "Κωδικός": j.recipe_id,
+            "Περιγραφή": j.description,
+            "Χρήστης": j.user_email ?? "",
+            "Έναρξη": new Date(j.started_at),
+            "Λήξη": new Date(j.finished_at as string),
+            "Διάρκεια (λεπτά)": minutes(sec),
+            "Συσκευασίες": j.packages,
+            "Τεμάχια": j.units ?? "",
+            "Μέσος / συσκευασία (δευτ.)": seconds(sec / (j.packages as number)),
+            "Μέσος / τεμάχιο (δευτ.)": j.units ? seconds(sec / j.units) : "",
+            "Σημειώσεις": j.notes,
+          };
+        }),
+      [16, 40, 28, 17, 17, 12, 11, 9, 14, 13, 40]
+    ),
+    "Εργασίες"
+  );
+  return { wb, fileName: `xronoi-anasyskevasias-${stamp(meta.generatedAt)}.xlsx` };
 }

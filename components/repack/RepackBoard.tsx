@@ -4,6 +4,8 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import AppBar from "@/components/AppBar";
 import type { ExportMeta, PdfFonts } from "@/lib/exports";
+import type { Job } from "@/lib/jobs";
+import { FinishDialog, LiveClock, PlayIcon, RunningJobs, TimesView, type FinishFields } from "@/components/repack/Jobs";
 import {
   areasOf,
   buildPlan,
@@ -64,12 +66,16 @@ export default function RepackBoard({
   initialRecipes,
   initialStock,
   initialUploads,
+  initialJobs,
+  userId,
   userEmail,
   role,
 }: {
   initialRecipes: Recipe[];
   initialStock: StockRow[];
   initialUploads: Record<string, UploadInfo>;
+  initialJobs: Job[];
+  userId: string;
   userEmail: string | null;
   role: "admin" | "staff";
 }) {
@@ -79,7 +85,9 @@ export default function RepackBoard({
   const [planned, setPlanned] = useState<Record<string, number>>({});
   const [excluded, setExcluded] = useState<string[]>([]);
   const [hydrated, setHydrated] = useState(false);
-  const [tab, setTab] = useState<"plan" | "specs">("plan");
+  const [tab, setTab] = useState<"plan" | "specs" | "times">("plan");
+  const [jobs, setJobs] = useState<Job[]>(initialJobs);
+  const [finishing, setFinishing] = useState<Job | null>(null);
   const [query, setQuery] = useState("");
   const [onlyFeasible, setOnlyFeasible] = useState(true);
   const [busy, setBusy] = useState<null | "recipes" | "stock">(null);
@@ -100,6 +108,84 @@ export default function RepackBoard({
   useEffect(() => {
     if (hydrated) saveLS(LS_AREAS, excluded);
   }, [excluded, hydrated]);
+
+  // ---------------------------------------------------------------- εργασίες (έναρξη / λήξη)
+  // ζωντανή ενημέρωση: όταν κάποιος ξεκινά/τελειώνει, φαίνεται σε όλους
+  useEffect(() => {
+    const supabase = createClient();
+    const channel = supabase
+      .channel("repack_jobs")
+      .on("postgres_changes", { event: "*", schema: "public", table: "repack_jobs" }, (payload) => {
+        if (payload.eventType === "DELETE") {
+          const id = (payload.old as { id?: string }).id;
+          setJobs((prev) => prev.filter((j) => j.id !== id));
+        } else {
+          const row = payload.new as Job;
+          setJobs((prev) => [row, ...prev.filter((j) => j.id !== row.id)]);
+        }
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const runningJobs = useMemo(
+    () => jobs.filter((j) => j.status === "running").sort((a, b) => a.started_at.localeCompare(b.started_at)),
+    [jobs]
+  );
+  const runningByRecipe = useMemo(() => {
+    const m = new Map<string, Job>();
+    for (const j of runningJobs) if (!m.has(j.recipe_id) || j.user_id === userId) m.set(j.recipe_id, j);
+    return m;
+  }, [runningJobs, userId]);
+
+  const upsertJob = (row: Job) => setJobs((prev) => [row, ...prev.filter((j) => j.id !== row.id)]);
+
+  async function startJob(r: Recipe) {
+    const { data, error } = await createClient()
+      .from("repack_jobs")
+      .insert({ recipe_id: r.id, product_code: r.product_code, description: r.description })
+      .select()
+      .single();
+    if (error || !data) {
+      setNotice({ tone: "error", text: `Η έναρξη απέτυχε: ${error?.message ?? "άγνωστο σφάλμα"}` });
+      return;
+    }
+    upsertJob(data as Job);
+  }
+
+  async function saveFinish(job: Job, f: FinishFields): Promise<string | null> {
+    const { data, error } = await createClient()
+      .from("repack_jobs")
+      .update({ status: "done", units: f.units, packages: f.packages, started_at: f.started_at, finished_at: f.finished_at, notes: f.notes })
+      .eq("id", job.id)
+      .select()
+      .single();
+    if (error || !data) return `Η αποθήκευση απέτυχε: ${error?.message ?? "άγνωστο σφάλμα"}`;
+    upsertJob(data as Job);
+    setFinishing(null);
+    return null;
+  }
+
+  async function cancelJob(job: Job) {
+    if (!window.confirm(`Ακύρωση της εργασίας ${job.recipe_id}; Δεν θα μετρήσει στους χρόνους.`)) return;
+    const { data, error } = await createClient()
+      .from("repack_jobs")
+      .update({ status: "cancelled", finished_at: new Date().toISOString() })
+      .eq("id", job.id)
+      .select()
+      .single();
+    if (error || !data) setNotice({ tone: "error", text: `Η ακύρωση απέτυχε: ${error?.message ?? ""}` });
+    else upsertJob(data as Job);
+  }
+
+  async function deleteJob(job: Job) {
+    if (!window.confirm(`Οριστική διαγραφή της εργασίας ${job.recipe_id} (${new Date(job.started_at).toLocaleString("el-GR")});`)) return;
+    const { error } = await createClient().from("repack_jobs").delete().eq("id", job.id);
+    if (error) setNotice({ tone: "error", text: `Η διαγραφή απέτυχε: ${error.message}` });
+    else setJobs((prev) => prev.filter((j) => j.id !== job.id));
+  }
 
   const excludedSet = useMemo(() => new Set(excluded), [excluded]);
   const areas = useMemo(() => areasOf(stock), [stock]);
@@ -250,6 +336,13 @@ export default function RepackBoard({
       doc.save(fileName);
     });
 
+  const exportJobsExcel = (list: Job[]) =>
+    run("jobs-xlsx", async () => {
+      const [XLSX, ex, jl] = await Promise.all([import("xlsx"), import("@/lib/exports"), import("@/lib/jobs")]);
+      const { wb, fileName } = ex.jobsWorkbook(XLSX, list, exportMeta(), jl);
+      XLSX.writeFile(wb, fileName);
+    });
+
   const exportPicklistPdf = () =>
     run("pick-pdf", async () => {
       const [{ jsPDF }, { autoTable }, ex, fonts] = await Promise.all([
@@ -384,6 +477,9 @@ export default function RepackBoard({
               <button type="button" role="tab" aria-selected={tab === "specs"} className={tab === "specs" ? "on" : ""} onClick={() => setTab("specs")}>
                 Προδιαγραφές
               </button>
+              <button type="button" role="tab" aria-selected={tab === "times"} className={tab === "times" ? "on" : ""} onClick={() => setTab("times")}>
+                Χρόνοι
+              </button>
             </div>
             <div className="search">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
@@ -398,7 +494,7 @@ export default function RepackBoard({
                 Μόνο όσα βγαίνουν
               </label>
             )}
-            <div className="rp-areas">
+            <div className="rp-areas" hidden={tab === "times"}>
               <span className="rp-areas-label">Περιοχές αποθέματος:</span>
               {areas.map(({ area, rows }) => {
                 const on = !excludedSet.has(area);
@@ -419,12 +515,14 @@ export default function RepackBoard({
           </div>
 
           {tab === "plan" ? (
+            <>
+            <RunningJobs jobs={runningJobs} userId={userId} isAdmin={isAdmin} onFinish={setFinishing} onCancel={cancelJob} />
             <div className="rp-layout">
               {/* ---------- λίστα κωδικών ---------- */}
               <section className="rp-list" aria-label="Κωδικοί ανασυσκευασίας">
                 {visible.length === 0 && <div className="rp-empty small">Κανένας κωδικός δεν ταιριάζει.</div>}
                 {visible.map((a) => (
-                  <RecipeCard key={a.recipe.id} a={a} avail={(c) => stockIdx.get(c)?.total ?? 0} recipeById={recipeById} shortCodes={shortCodes} onQty={setQty} />
+                  <RecipeCard key={a.recipe.id} a={a} avail={(c) => stockIdx.get(c)?.total ?? 0} recipeById={recipeById} shortCodes={shortCodes} onQty={setQty} running={runningByRecipe.get(a.recipe.id)} userId={userId} onStart={startJob} onFinish={setFinishing} />
                 ))}
               </section>
 
@@ -563,12 +661,25 @@ export default function RepackBoard({
               )}
               </div>
             </div>
-          ) : (
+            </>
+          ) : tab === "specs" ? (
             <SpecsView recipes={recipes.filter(matches)} stockIdx={stockIdx} analyses={plan.analyses} />
+          ) : (
+            <TimesView
+              jobs={jobs}
+              query={(text) => !q || searchKey(text).includes(q)}
+              userId={userId}
+              isAdmin={isAdmin}
+              onEdit={setFinishing}
+              onDelete={deleteJob}
+              onExport={exportJobsExcel}
+              exporting={exporting === "jobs-xlsx"}
+            />
           )}
         </>
       )}
 
+      {finishing && <FinishDialog key={finishing.id} job={finishing} onClose={() => setFinishing(null)} onSave={(f) => saveFinish(finishing, f)} />}
     </div>
     </>
   );
@@ -632,9 +743,17 @@ function RecipeCard({
   recipeById,
   shortCodes,
   onQty,
+  running,
+  userId,
+  onStart,
+  onFinish,
 }: {
   a: RecipeAnalysis;
   shortCodes: Set<string>;
+  running?: Job;
+  userId: string;
+  onStart: (r: Recipe) => void;
+  onFinish: (job: Job) => void;
   avail: (code: string) => number;
   recipeById: Map<string, Recipe>;
   onQty: (id: string, n: number) => void;
@@ -708,6 +827,22 @@ function RecipeCard({
         >
           {remaining > 0 ? `Μέγ. (+${fmtQty(remaining)})` : planned > 0 ? "Εξαντλήθηκε" : "Δεν βγαίνει"}
         </button>
+        {running ? (
+          <button
+            type="button"
+            className={`rp-running ${running.user_id === userId ? "mine" : ""}`}
+            onClick={() => running.user_id === userId && onFinish(running)}
+            title={running.user_id === userId ? "Πατήστε για λήξη" : `Σε εξέλιξη από ${running.user_email ?? "άλλον χρήστη"}`}
+          >
+            <span className="dot" aria-hidden />
+            <LiveClock startedAt={running.started_at} />
+            {running.user_id === userId ? " · Λήξη" : ""}
+          </button>
+        ) : (
+          <button type="button" className="rp-start" onClick={() => onStart(recipe)}>
+            <PlayIcon /> Έναρξη
+          </button>
+        )}
       </div>
     </article>
   );

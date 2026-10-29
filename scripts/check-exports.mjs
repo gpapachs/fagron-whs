@@ -10,7 +10,8 @@ import { jsPDF } from "jspdf";
 import { autoTable } from "jspdf-autotable";
 import * as XLSX from "xlsx";
 import { buildPlan, indexStock } from "../lib/repack.ts";
-import { availablePdf, availableWorkbook, picklistPdf, planWorkbook } from "../lib/exports.ts";
+import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkbook } from "../lib/exports.ts";
+import * as jobsLib from "../lib/jobs.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
 const outDir = path.join(root, "out", "_check");
@@ -86,5 +87,23 @@ const backA = XLSX.read(fs.readFileSync(path.join(outDir, "sample-available.xlsx
 const firstRow = XLSX.utils.sheet_to_json(backA.Sheets["Διαθέσιμες"])[0];
 if (!String(firstRow?.["Περιγραφή"] ?? "").includes("άέήίόύώ")) fail("τα ελληνικά δεν διατηρήθηκαν στο Excel");
 if (a.count !== plan.analyses.filter((x) => x.max > 0).length) fail("λάθος πλήθος διαθέσιμων");
+
+// ---- Excel χρόνων + μέσοι όροι
+const t0 = Date.parse("2026-10-01T08:00:00Z");
+const jobs = [
+  { id: "a", recipe_id: "71-90-001", product_code: "71-90-001", description: "ΒΑΖΑΚΙ ΔΟΚΙΜΗΣ", status: "done", started_at: new Date(t0).toISOString(), finished_at: new Date(t0 + 1200e3).toISOString(), units: 120, packages: 40, notes: "", user_id: "u", user_email: "dokimi@example.com" },
+  { id: "b", recipe_id: "71-90-001", product_code: "71-90-001", description: "ΒΑΖΑΚΙ ΔΟΚΙΜΗΣ", status: "done", started_at: new Date(t0 + 86400e3).toISOString(), finished_at: new Date(t0 + 86400e3 + 600e3).toISOString(), units: 30, packages: 10, notes: "διάλειμμα", user_id: "u", user_email: "dokimi@example.com" },
+  { id: "c", recipe_id: "71-90-002", product_code: "71-90-002", description: "ΑΚΥΡΩΜΕΝΗ", status: "cancelled", started_at: new Date(t0).toISOString(), finished_at: new Date(t0 + 60e3).toISOString(), units: null, packages: null, notes: "", user_id: "u", user_email: null },
+];
+const st = jobsLib.statsByRecipe(jobs);
+// 1800 δευτ. / 50 συσκευασίες = 36 δευτ./συσκ. (σταθμισμένος μέσος, όχι μέσος των 30 και 60)
+if (st.length !== 1 || Math.abs(st[0].secPerPackage - 36) > 1e-9) fail(`λάθος μέσος χρόνος: ${st[0]?.secPerPackage}`);
+if (jobsLib.fmtDuration(36) !== "36δ" || jobsLib.fmtDuration(3725) !== "1ώ 02λ") fail("λάθος μορφή διάρκειας");
+const jw = jobsWorkbook(XLSX, jobs, meta, jobsLib);
+fs.writeFileSync(path.join(outDir, "sample-times.xlsx"), XLSX.write(jw.wb, { type: "buffer", bookType: "xlsx" }));
+const jback = XLSX.read(fs.readFileSync(path.join(outDir, "sample-times.xlsx")));
+const per = XLSX.utils.sheet_to_json(jback.Sheets["Ανά κωδικό"])[0];
+console.log(`sample-times.xlsx: ${jback.SheetNames.join(" / ")} · μέσος/συσκ. ${per?.["Μέσος χρόνος / συσκευασία (δευτ.)"]} δευτ.`);
+if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) fail("λάθος μέσος χρόνος στο Excel χρόνων");
 
 console.log(process.exitCode ? "ΑΠΕΤΥΧΕ" : "OK: όλες οι εξαγωγές δουλεύουν");
