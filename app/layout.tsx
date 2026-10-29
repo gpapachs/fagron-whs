@@ -1,19 +1,20 @@
 import type { Metadata } from "next";
-import { Big_Shoulders_Display, Public_Sans, IBM_Plex_Mono } from "next/font/google";
+import { Fira_Sans_Condensed, Fira_Sans, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
-const display = Big_Shoulders_Display({
+// Και οι τρεις έχουν πλήρη ελληνικά (subset "greek").
+const display = Fira_Sans_Condensed({
   subsets: ["latin", "greek"],
   weight: ["600", "700", "800"],
   variable: "--font-display",
 });
-const body = Public_Sans({
+const body = Fira_Sans({
   subsets: ["latin", "greek"],
   weight: ["400", "500", "600", "700"],
   variable: "--font-body",
 });
-const mono = IBM_Plex_Mono({
-  subsets: ["latin"],
+const mono = JetBrains_Mono({
+  subsets: ["latin", "greek"],
   weight: ["400", "500", "600"],
   variable: "--font-mono",
 });
