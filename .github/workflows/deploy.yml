@@ -1,0 +1,39 @@
+# Χτίζει τη στατική εφαρμογή και τη δημοσιεύει στο GitHub Pages
+# σε κάθε push στο main: https://gpapachs.github.io/fagron-whs/
+# (το Pages σερβίρει το branch gh-pages -- Settings -> Pages -> Source: gh-pages)
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # για να γράψει το branch gh-pages
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # Δημόσια στοιχεία Supabase (το anon key είναι σχεδιασμένο να βρίσκεται
+      # στον browser -- τα δεδομένα τα προστατεύει η σύνδεση + RLS).
+      NEXT_PUBLIC_SUPABASE_URL: https://rvxjwjvwpbljmosdgvzf.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2eGp3anZ3cGJsam1vc2RndnpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMyNzU3NDQsImV4cCI6MjEwODg1MTc0NH0.mKSk_OJyn9B6pd35S7G5klJfj0ks-XBLb3_lGuDQNrY
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - run: npx next build
+      - name: Δημοσίευση στο branch gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./out
+          force_orphan: true

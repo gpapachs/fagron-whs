@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
@@ -10,6 +10,15 @@ export default function LoginForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // ήδη συνδεδεμένος -> κατευθείαν στην εφαρμογή
+  useEffect(() => {
+    createClient()
+      .auth.getUser()
+      .then(({ data: { user } }) => {
+        if (user) router.replace("/");
+      });
+  }, [router]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -22,8 +31,7 @@ export default function LoginForm() {
       setError("Λάθος email ή κωδικός.");
       return;
     }
-    router.push("/");
-    router.refresh();
+    router.replace("/");
   }
 
   return (

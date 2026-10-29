@@ -1,6 +1,7 @@
 # Πλάνο Αποθήκης -- Fagron Hellas
 
-Next.js 15 (App Router) + Supabase. Έκδοση "online" του εργαλείου διαχείρισης
+Next.js 15 (App Router, στατικό export) + Supabase, δημοσιευμένο στο
+GitHub Pages: **https://gpapachs.github.io/fagron-whs/** Έκδοση "online" του εργαλείου διαχείρισης
 παλετοθέσεων -- ίδιος σχεδιασμός/λειτουργίες με πριν, plus:
 
 - **Σύνδεση με κωδικό** -- καμία σελίδα δεν δείχνει δεδομένα αποθήκης χωρίς
@@ -23,8 +24,16 @@ Next.js 15 (App Router) + Supabase. Έκδοση "online" του εργαλεί�
 προβολή, η αναζήτηση προϊόντος, τα φίλτρα κατάστασης και το import από
 Excel παραμένουν ακριβώς όπως ήταν.
 
-Δεν έγινε `npm install` σε αυτό το περιβάλλον (δεν είχε πρόσβαση στο npm
-registry) -- το πρώτο `npm install` θα τρέξει στον υπολογιστή σου.
+## 0. Δημοσίευση (GitHub Pages)
+
+Κάθε push στο `main` χτίζει και ανεβάζει αυτόματα την εφαρμογή
+(`.github/workflows/deploy.yml`, καρτέλα **Actions** στο GitHub). Το Supabase
+URL και το anon key είναι μέσα στο workflow -- είναι δημόσια εκ σχεδιασμού.
+
+Η εφαρμογή είναι στατική (δεν υπάρχει server): ο έλεγχος σύνδεσης γίνεται
+στον browser (`components/auth/AuthGate.tsx`) και τα δεδομένα τα προστατεύει
+η βάση με Row Level Security -- χωρίς σύνδεση το Supabase δεν επιστρέφει
+τίποτα.
 
 ## 1. Supabase
 
@@ -63,13 +72,13 @@ npm install
 npm run dev
 ```
 
-Άνοιξε http://localhost:3000 -- θα σε πάει στο `/login`.
+Άνοιξε http://localhost:3000/fagron-whs/ -- θα σε πάει στη σύνδεση.
 
 ## 4. Δομή
 
 ```
 app/
-  page.tsx                το πλάνο (πίσω από σύνδεση, middleware.ts το επιβάλλει)
+  page.tsx                το πλάνο (πίσω από σύνδεση -- AuthGate)
   login/                  σελίδα σύνδεσης
 lib/
   corridors.ts            η πραγματική διάταξη διαδρόμων/θέσεων (πηγή αλήθειας)
@@ -83,7 +92,8 @@ components/
     QuickLookup.tsx          γρήγορη αναζήτηση / barcode
     ExcelImport.tsx          εισαγωγή αποθέματος από Excel
   auth/                     login form, logout button
-middleware.ts               φρουρός σύνδεσης για όλη την εφαρμογή
+  auth/AuthGate.tsx         φρουρός σύνδεσης (στον browser)
+.github/workflows/deploy.yml  build + δημοσίευση στο GitHub Pages
 supabase/
   migrations/0001_init.sql            schema + RLS + audit log trigger + realtime
   migrations/0002_seed_positions.sql  οι 799 πραγματικές θέσεις
