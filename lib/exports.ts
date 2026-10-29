@@ -5,7 +5,7 @@
 //  - το scripts/check-exports.mjs να τρέχει τα ίδια ακριβώς functions στο CI
 // Μόνο `import type` από άλλα αρχεία -- τίποτα σε runtime.
 
-import type { ComponentNeed, PickLine, RecipeAnalysis, StockIndex } from "./repack";
+import type { ComponentNeed, PickLine, RecipeAnalysis, RecipePick, StockIndex } from "./repack";
 import type { Job, JobStats } from "./jobs";
 
 const q = (n: number) => n.toLocaleString("el-GR", { maximumFractionDigits: 3 });
@@ -321,18 +321,36 @@ export function picklistPdf(
   planned: RecipeAnalysis[],
   needs: ComponentNeed[],
   picks: PickLine[],
-  meta: ExportMeta
+  meta: ExportMeta,
+  extra: {
+    /** από picksByRecipe(): ανά τελικό -> συστατικά -> θέσεις */
+    byRecipe: RecipePick[];
+    /** εκτιμώμενα δευτερόλεπτα ανά κωδικό πλάνου (αν υπάρχει ιστορικό χρόνων) */
+    estimateSec?: Map<string, number>;
+    fmtDuration?: (sec: number) => string;
+  }
 ) {
   const doc = newDoc(jsPDF, fonts, "portrait");
-  let y = header(doc, "Λίστα συλλογής", metaLines(meta));
+  const est = extra.estimateSec;
+  const fd = extra.fmtDuration ?? ((s: number) => `${Math.round(s / 60)} λεπτά`);
+  const totalSec = est ? [...est.values()].reduce((a, b) => a + b, 0) : 0;
+  let y = header(doc, "Λίστα συλλογής", [
+    ...metaLines(meta),
+    ...(est && est.size ? [`Εκτιμώμενος χρόνος: ${fd(totalSec)}${est.size < planned.length ? ` (για ${est.size} από ${planned.length} κωδικούς με ιστορικό χρόνων)` : ""}`] : []),
+  ]);
 
+  // ---- σύνοψη πλάνου
   y = sectionTitle(doc, "Πλάνο ανασυσκευασίας", y);
   autoTable(doc, {
     ...baseTable,
     startY: y,
-    head: [["Κωδικός", "Περιγραφή", "Ποσότητα"]],
-    body: planned.map((a) => [a.recipe.id, a.recipe.description, q(a.planned)]),
-    columnStyles: { 0: { cellWidth: 30, fontStyle: "bold" }, 2: { cellWidth: 22, halign: "right", fontStyle: "bold" } },
+    head: [["Κωδικός", "Περιγραφή", "Ποσότητα", ...(est ? ["Εκτ. χρόνος"] : [])]],
+    body: planned.map((a) => [a.recipe.id, a.recipe.description, q(a.planned), ...(est ? [est.has(a.recipe.id) ? fd(est.get(a.recipe.id) as number) : "—"] : [])]),
+    columnStyles: {
+      0: { cellWidth: 30, fontStyle: "bold" },
+      2: { cellWidth: 22, halign: "right", fontStyle: "bold" },
+      3: { cellWidth: 24, halign: "right" },
+    },
   });
   y = doc.lastAutoTable.finalY + 7;
 
@@ -354,7 +372,82 @@ export function picklistPdf(
     y = doc.lastAutoTable.finalY + 7;
   }
 
-  y = sectionTitle(doc, `Συλλογή ανά θέση · ${new Set(picks.map((p) => p.position)).size} στάσεις`, y);
+  // ---- ανά τελικό: συστατικά και από ποια θέση
+  y = sectionTitle(doc, "Ανά τελικό κωδικό", y);
+  for (const r of extra.byRecipe) {
+    const pageH = doc.internal.pageSize.getHeight();
+    if (y > pageH - 45) {
+      doc.addPage();
+      y = 18;
+    }
+    // κεφαλίδα τελικού
+    const w = doc.internal.pageSize.getWidth();
+    doc.setFillColor(...ACCENT);
+    doc.roundedRect(14, y, w - 28, 9, 1.2, 1.2, "F");
+    doc.setFont(FONT, "bold");
+    doc.setFontSize(9.5);
+    doc.setTextColor(255, 255, 255);
+    doc.text(r.recipe.id, 17, y + 6);
+    doc.setFont(FONT, "normal");
+    const qtyText = `${q(r.planned)} τεμ.${est?.has(r.recipe.id) ? ` · ~${fd(est.get(r.recipe.id) as number)}` : ""}`;
+    doc.text(qtyText, w - 17, y + 6, { align: "right" });
+    const descMax = w - 28 - 40 - doc.getTextWidth(qtyText) - 6;
+    doc.text(doc.splitTextToSize(r.recipe.description, descMax)[0] ?? "", 48, y + 6);
+    y += 10.5;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const body: any[] = [];
+    for (const c of r.components) {
+      const rows = c.from.length ? c.from : [{ position: "", area: "", take: 0 }];
+      rows.forEach((f, i) => {
+        body.push([
+          i === 0 ? { content: `${c.code}\n${c.description}`, rowSpan: rows.length } : null,
+          i === 0 ? { content: `${q(c.need)} ${c.unit}`, rowSpan: rows.length, styles: { halign: "right", fontStyle: "bold" } } : null,
+          f.position ? `${f.position}\n${f.area}` : c.short > 0 ? "ΔΕΝ ΥΠΑΡΧΕΙ" : "—",
+          f.position ? q(f.take) : "",
+          "",
+        ].filter((x) => x !== null));
+      });
+      if (c.short > 0 && c.from.length) {
+        body.push([{ content: `Λείπουν ${q(c.short)} ${c.unit} από ${c.code}`, colSpan: 5, styles: { textColor: RED, fillColor: RED_BG, fontStyle: "bold" } }]);
+      }
+    }
+    autoTable(doc, {
+      ...baseTable,
+      startY: y,
+      margin: { ...baseTable.margin, top: 16 },
+      head: [["Συστατικό", "Χρειάζεται", "Θέση", "Πάρε", ""]],
+      body,
+      rowPageBreak: "avoid",
+      columnStyles: {
+        1: { cellWidth: 24 },
+        2: { cellWidth: 40, fontStyle: "bold" },
+        3: { cellWidth: 18, halign: "right", fontStyle: "bold" },
+        4: { cellWidth: 9 },
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      didParseCell: (d: any) => {
+        if (d.section === "body" && d.column.index === 2 && typeof d.cell.raw === "string" && d.cell.raw && d.cell.raw !== "—") {
+          d.cell.styles.fillColor = d.cell.raw === "ΔΕΝ ΥΠΑΡΧΕΙ" ? RED_BG : RACK;
+          if (d.cell.raw === "ΔΕΝ ΥΠΑΡΧΕΙ") d.cell.styles.textColor = RED;
+          d.cell.styles.fontSize = 8;
+        }
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      didDrawCell: (d: any) => {
+        if (d.section === "body" && d.column.index === 4) {
+          doc.setDrawColor(...INK);
+          doc.setLineWidth(0.3);
+          doc.rect(d.cell.x + 2, d.cell.y + 1.6, 4.2, 4.2);
+        }
+      },
+    });
+    y = doc.lastAutoTable.finalY + 6;
+  }
+
+  doc.addPage();
+  y = 18;
+  y = sectionTitle(doc, `Διαδρομή ανά θέση · ${new Set(picks.map((p) => p.position)).size} στάσεις (όλα μαζί)`, y);
 
   // εναλλασσόμενο φόντο ανά θέση, για να ξεχωρίζουν οι ομάδες
   let group = -1;

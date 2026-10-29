@@ -124,3 +124,38 @@ export function toLocalInput(iso: string): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 export const fromLocalInput = (v: string) => new Date(v).toISOString();
+
+// ------------------------------------------------------------- εκτίμηση χρόνου
+
+export type Rate = {
+  /** δευτερόλεπτα ανά 1 τεμάχιο τελικού (ή ανά συσκευασία αν δεν δόθηκαν τεμάχια) */
+  secPerUnit: number;
+  basis: "unit" | "package";
+  jobs: number;
+};
+
+/** Ρυθμός ανά κωδικό από τις ολοκληρωμένες εργασίες. */
+export function ratesByRecipe(jobs: Job[]): Map<string, Rate> {
+  const m = new Map<string, Rate>();
+  for (const s of statsByRecipe(jobs)) {
+    if (s.secPerUnit !== null && s.units > 0) m.set(s.recipeId, { secPerUnit: s.secPerUnit, basis: "unit", jobs: s.jobs });
+    else m.set(s.recipeId, { secPerUnit: s.secPerPackage, basis: "package", jobs: s.jobs });
+  }
+  return m;
+}
+
+/** Συνολική εκτίμηση για λίστα (κωδικός, ποσότητα). */
+export function estimateTotal(items: { recipeId: string; qty: number }[], rates: Map<string, Rate>) {
+  let sec = 0;
+  let covered = 0;
+  const missing: string[] = [];
+  for (const it of items) {
+    if (it.qty <= 0) continue;
+    const r = rates.get(it.recipeId);
+    if (r) {
+      sec += r.secPerUnit * it.qty;
+      covered++;
+    } else missing.push(it.recipeId);
+  }
+  return { sec, covered, missing };
+}

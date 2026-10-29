@@ -9,7 +9,7 @@ import path from "node:path";
 import { jsPDF } from "jspdf";
 import { autoTable } from "jspdf-autotable";
 import * as XLSX from "xlsx";
-import { buildPlan, filterStockForRecipes, indexStock } from "../lib/repack.ts";
+import { buildPlan, filterStockForRecipes, indexStock, picksByRecipe } from "../lib/repack.ts";
 import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkbook } from "../lib/exports.ts";
 import * as jobsLib from "../lib/jobs.ts";
 
@@ -61,7 +61,20 @@ const fail = (msg) => {
 };
 
 // ---- PDF
-const pick = picklistPdf(jsPDF, autoTable, fonts, plannedLines, plan.needs, plan.picks, meta);
+// μοιρασιά λίστας συλλογής ανά τελικό: κάθε συστατικό καλύπτεται ακριβώς (ή σημειώνεται έλλειψη)
+const byRecipe = picksByRecipe(plannedLines, plan.picks);
+for (const r of byRecipe) for (const c of r.components) {
+  const got = c.from.reduce((s, f) => s + f.take, 0);
+  if (Math.abs(got + c.short - c.need) > 1e-6) fail(`μοιρασιά ${r.recipe.id}/${c.code}: ${got}+${c.short} != ${c.need}`);
+}
+const shortCount = byRecipe.flatMap((r) => r.components).filter((c) => c.short > 0).length;
+console.log(`ανά τελικό: ${byRecipe.length} κωδικοί, ${shortCount} συστατικά με έλλειψη`);
+const estimateSec = new Map(plannedLines.slice(0, 3).map((a) => [a.recipe.id, a.planned * 12.5]));
+const pick = picklistPdf(jsPDF, autoTable, fonts, plannedLines, plan.needs, plan.picks, meta, {
+  byRecipe,
+  estimateSec,
+  fmtDuration: (sec) => `${Math.round(sec / 60)}λ`,
+});
 const avail = availablePdf(jsPDF, autoTable, fonts, plan.analyses, stockIdx, meta);
 for (const [name, res] of [["sample-picklist.pdf", pick], ["sample-available.pdf", avail]]) {
   const buf = Buffer.from(res.doc.output("arraybuffer"));

@@ -4,12 +4,13 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import AppBar from "@/components/AppBar";
 import type { ExportMeta, PdfFonts } from "@/lib/exports";
-import type { Job } from "@/lib/jobs";
+import { estimateTotal, fmtDuration, ratesByRecipe, type Job, type Rate } from "@/lib/jobs";
 import { FinishDialog, LiveClock, PlayIcon, RunningJobs, TimesView, type FinishFields } from "@/components/repack/Jobs";
 import {
   areasOf,
   buildPlan,
   filterStockForRecipes,
+  picksByRecipe,
   fmtQty,
   indexStock,
   parseRecipeRows,
@@ -140,6 +141,8 @@ export default function RepackBoard({
     for (const j of runningJobs) if (!m.has(j.recipe_id) || j.user_id === userId) m.set(j.recipe_id, j);
     return m;
   }, [runningJobs, userId]);
+
+  const rates = useMemo(() => ratesByRecipe(jobs), [jobs]);
 
   const upsertJob = (row: Job) => setJobs((prev) => [row, ...prev.filter((j) => j.id !== row.id)]);
 
@@ -366,7 +369,16 @@ export default function RepackBoard({
         import("@/lib/exports"),
         loadPdfFonts(),
       ]);
-      const { doc, fileName } = ex.picklistPdf(jsPDF, autoTable, fonts, plannedLines, plan.needs, plan.picks, exportMeta());
+      const estimateSec = new Map<string, number>();
+      for (const a of plannedLines) {
+        const r = rates.get(a.recipe.id);
+        if (r) estimateSec.set(a.recipe.id, r.secPerUnit * a.planned);
+      }
+      const { doc, fileName } = ex.picklistPdf(jsPDF, autoTable, fonts, plannedLines, plan.needs, plan.picks, exportMeta(), {
+        byRecipe: picksByRecipe(plannedLines, plan.picks),
+        estimateSec: rates.size ? estimateSec : undefined,
+        fmtDuration,
+      });
       doc.save(fileName);
     });
 
@@ -537,7 +549,7 @@ export default function RepackBoard({
               <section className="rp-list" aria-label="Κωδικοί ανασυσκευασίας">
                 {visible.length === 0 && <div className="rp-empty small">Κανένας κωδικός δεν ταιριάζει.</div>}
                 {visible.map((a) => (
-                  <RecipeCard key={a.recipe.id} a={a} avail={(c) => stockIdx.get(c)?.total ?? 0} recipeById={recipeById} shortCodes={shortCodes} onQty={setQty} running={runningByRecipe.get(a.recipe.id)} userId={userId} onStart={startJob} onFinish={setFinishing} />
+                  <RecipeCard key={a.recipe.id} a={a} avail={(c) => stockIdx.get(c)?.total ?? 0} recipeById={recipeById} shortCodes={shortCodes} onQty={setQty} running={runningByRecipe.get(a.recipe.id)} userId={userId} onStart={startJob} onFinish={setFinishing} positionsOf={(c) => stockIdx.get(c)?.rows ?? []} rate={rates.get(a.recipe.id)} />
                 ))}
               </section>
 
@@ -567,6 +579,17 @@ export default function RepackBoard({
                         </li>
                       ))}
                     </ul>
+                    {(() => {
+                      const e = estimateTotal(plannedLines.map((a) => ({ recipeId: a.recipe.id, qty: a.planned })), rates);
+                      if (!e.covered) return rates.size ? <p className="rp-hint">Δεν υπάρχει ιστορικό χρόνων για αυτούς τους κωδικούς ακόμα.</p> : null;
+                      return (
+                        <div className="rp-estimate">
+                          <span className="l">Εκτιμώμενος χρόνος</span>
+                          <span className="n">{fmtDuration(e.sec)}</span>
+                          {e.missing.length > 0 && <span className="rp-hint">χωρίς τους {e.missing.join(", ")} (χωρίς ιστορικό)</span>}
+                        </div>
+                      );
+                    })()}
                     <div className={`rp-verdict ${plan.feasible ? "ok" : "bad"}`}>
                       {plan.feasible
                         ? `Το απόθεμα επαρκεί · ${pickStops} στάσ${pickStops === 1 ? "η" : "εις"} συλλογής`
@@ -682,6 +705,8 @@ export default function RepackBoard({
           ) : (
             <TimesView
               jobs={jobs}
+              analyses={plan.analyses}
+              rates={rates}
               query={(text) => !q || searchKey(text).includes(q)}
               userId={userId}
               isAdmin={isAdmin}
@@ -762,6 +787,8 @@ function RecipeCard({
   userId,
   onStart,
   onFinish,
+  positionsOf,
+  rate,
 }: {
   a: RecipeAnalysis;
   shortCodes: Set<string>;
@@ -769,6 +796,8 @@ function RecipeCard({
   userId: string;
   onStart: (r: Recipe) => void;
   onFinish: (job: Job) => void;
+  positionsOf: (code: string) => StockRow[];
+  rate?: Rate;
   avail: (code: string) => number;
   recipeById: Map<string, Recipe>;
   onQty: (id: string, n: number) => void;
@@ -801,6 +830,7 @@ function RecipeCard({
                 <span className="desc">{c.description}</span>
                 <span className="per">×{fmtQty(c.qty)}</span>
                 <span className={`have ${have < c.qty ? "zero" : ""}`}>{have > 0 ? fmtQty(have) : "0"}</span>
+                <PosChips rows={positionsOf(c.code)} />
               </li>
             );
           })}
@@ -822,6 +852,11 @@ function RecipeCard({
         <div className="rp-max">
           <span className="n">{fmtQty(max)}</span>
           <span className="l">μέγιστο</span>
+          {rate && max > 0 && (
+            <span className="rp-est" title={`Από ${rate.jobs} εργασί${rate.jobs === 1 ? "α" : "ες"} · ${fmtDuration(rate.secPerUnit)} ανά ${rate.basis === "unit" ? "τεμάχιο" : "συσκευασία"}`}>
+              ≈ {fmtDuration(rate.secPerUnit * max)}
+            </span>
+          )}
         </div>
         <div className="rp-qty">
           <button type="button" aria-label="Λιγότερα" onClick={() => onQty(recipe.id, planned - 1)} disabled={planned <= 0}>
@@ -847,6 +882,7 @@ function RecipeCard({
         >
           {remaining > 0 ? `Μέγ. (+${fmtQty(remaining)})` : planned > 0 ? "Εξαντλήθηκε" : "Δεν βγαίνει"}
         </button>
+        {rate && planned > 0 && <span className="rp-est plan">πλάνο ≈ {fmtDuration(rate.secPerUnit * planned)}</span>}
         {running ? (
           <button
             type="button"
@@ -865,6 +901,28 @@ function RecipeCard({
         )}
       </div>
     </article>
+  );
+}
+
+function PosChips({ rows }: { rows: StockRow[] }) {
+  const [all, setAll] = useState(false);
+  if (!rows.length) return <span className="rp-poslist none">Χωρίς θέση</span>;
+  const sorted = [...rows].sort((x, y) => y.qty - x.qty);
+  const MAX = 4;
+  const shown = all ? sorted : sorted.slice(0, MAX);
+  return (
+    <span className="rp-poslist">
+      {shown.map((r) => (
+        <span key={r.position} className="rp-pos" title={r.area}>
+          <span className="rack">{r.position}</span> {fmtQty(r.qty)}
+        </span>
+      ))}
+      {sorted.length > MAX && (
+        <button type="button" className="rp-link" onClick={() => setAll(!all)}>
+          {all ? "λιγότερες" : `+${sorted.length - MAX} θέσεις`}
+        </button>
+      )}
+    </span>
   );
 }
 

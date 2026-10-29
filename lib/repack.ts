@@ -374,3 +374,59 @@ export function filterStockForRecipes(stock: StockRow[], recipes: Recipe[]) {
     componentCount: components.size,
   };
 }
+
+export type RecipePick = {
+  recipe: Recipe;
+  planned: number;
+  components: {
+    code: string;
+    description: string;
+    unit: string;
+    need: number;
+    short: number;
+    from: { position: string; area: string; take: number }[];
+  }[];
+};
+
+/**
+ * Μοιράζει τη λίστα συλλογής (που είναι ανά συστατικό/θέση) στους τελικούς
+ * κωδικούς του πλάνου, με τη σειρά του πλάνου: για κάθε τελικό -> κάθε
+ * συστατικό -> από ποιες θέσεις παίρνεις πόσο. Ό,τι δεν καλύπτεται = short.
+ */
+export function picksByRecipe(planned: RecipeAnalysis[], picks: PickLine[]): RecipePick[] {
+  // ουρά διαθέσιμων λήψεων ανά συστατικό (ίδια σειρά με τη λίστα συλλογής)
+  const queue = new Map<string, { position: string; area: string; left: number }[]>();
+  for (const p of picks) {
+    const q = queue.get(p.item) ?? [];
+    q.push({ position: p.position, area: p.area, left: p.take });
+    queue.set(p.item, q);
+  }
+  return planned
+    .filter((a) => a.planned > 0)
+    .map((a) => ({
+      recipe: a.recipe,
+      planned: a.planned,
+      components: a.recipe.components.map((c) => {
+        const need = round(a.planned * c.qty);
+        let left = need;
+        const from: { position: string; area: string; take: number }[] = [];
+        for (const slot of queue.get(c.code) ?? []) {
+          if (left <= EPS) break;
+          if (slot.left <= EPS) continue;
+          const take = round(Math.min(slot.left, left));
+          slot.left = round(slot.left - take);
+          left = round(left - take);
+          from.push({ position: slot.position, area: slot.area, take });
+        }
+        const pick = picks.find((p) => p.item === c.code);
+        return {
+          code: c.code,
+          description: pick?.description || c.description,
+          unit: c.unit || pick?.unit || "",
+          need,
+          short: left > EPS ? left : 0,
+          from,
+        };
+      }),
+    }));
+}

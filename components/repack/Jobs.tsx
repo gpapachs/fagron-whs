@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { RecipeAnalysis } from "@/lib/repack";
 import {
   durationSec,
+  type Rate,
   fmtClock,
   fmtDuration,
   fromLocalInput,
@@ -219,6 +221,8 @@ const PERIODS = [
 
 export function TimesView({
   jobs,
+  analyses,
+  rates,
   query,
   userId,
   isAdmin,
@@ -228,6 +232,8 @@ export function TimesView({
   exporting,
 }: {
   jobs: Job[];
+  analyses: RecipeAnalysis[];
+  rates: Map<string, Rate>;
   query: (text: string) => boolean;
   userId: string;
   isAdmin: boolean;
@@ -254,8 +260,74 @@ export function TimesView({
     [inPeriod]
   );
 
+  // εκτίμηση: ρυθμός από ΟΛΟ το ιστορικό (όχι μόνο την περίοδο), επί όσα βγαίνουν τώρα
+  const est = useMemo(() => {
+    const rows = analyses
+      .filter((a) => a.max > 0 && query(`${a.recipe.id} ${a.recipe.product_code} ${a.recipe.description}`))
+      .map((a) => ({ a, rate: rates.get(a.recipe.id) }))
+      .sort((x, y) => Number(!!y.rate) - Number(!!x.rate) || (y.rate ? y.rate.secPerUnit * y.a.max : 0) - (x.rate ? x.rate.secPerUnit * x.a.max : 0));
+    const withRate = rows.filter((r) => r.rate);
+    const allSec = withRate.reduce((s, r) => s + (r.rate as Rate).secPerUnit * r.a.max, 0);
+    const planSec = withRate.reduce((s, r) => s + (r.rate as Rate).secPerUnit * r.a.planned, 0);
+    return { rows, withRate: withRate.length, allSec, planSec, planned: rows.some((r) => r.a.planned > 0) };
+  }, [analyses, rates, query]);
+
   return (
     <section className="times">
+      {rates.size > 0 && est.rows.length > 0 && (
+        <div className="times-card">
+          <h2>Εκτίμηση χρόνου</h2>
+          <p className="rp-hint">
+            Μέσος χρόνος ανά τεμάχιο κάθε κωδικού (από όλο το ιστορικό) × όσα βγαίνουν με το τρέχον απόθεμα. Το σύνολο αθροίζει κάθε κωδικό σαν να
+            γινόταν μόνος του — κωδικοί με κοινά συστατικά δεν βγαίνουν όλοι στο μέγιστο ταυτόχρονα.
+          </p>
+          <div className="kpis">
+            <div className="kpi accent">
+              <span className="n">{fmtDuration(est.allSec)}</span>
+              <span className="l">για όλο το διαθέσιμο απόθεμα ({est.withRate} κωδικοί)</span>
+            </div>
+            <div className="kpi">
+              <span className="n">{est.planned ? fmtDuration(est.planSec) : "—"}</span>
+              <span className="l">για το τρέχον πλάνο</span>
+            </div>
+            <div className="kpi">
+              <span className="n">{est.rows.length - est.withRate}</span>
+              <span className="l">κωδικοί χωρίς ιστορικό χρόνων</span>
+            </div>
+          </div>
+          <div className="table-scroll">
+            <table className="rp-spec-table times-table">
+              <thead>
+                <tr>
+                  <th>Κωδικός</th>
+                  <th>Περιγραφή</th>
+                  <th className="num">Βγαίνουν</th>
+                  <th className="num">Χρόνος / τεμ.</th>
+                  <th className="num">Πλήρης εκτέλεση</th>
+                  <th className="num">Στο πλάνο</th>
+                  <th className="num">Χρόνος πλάνου</th>
+                </tr>
+              </thead>
+              <tbody>
+                {est.rows.slice(0, 200).map(({ a, rate }) => (
+                  <tr key={a.recipe.id} className={rate ? "" : "dim-row"}>
+                    <td className="mono">{a.recipe.id}</td>
+                    <td>{a.recipe.description}</td>
+                    <td className="num">{fmtN(a.max)}</td>
+                    <td className="num">
+                      {rate ? fmtDuration(rate.secPerUnit) : "—"}
+                      {rate?.basis === "package" && <span className="unit" title="Δεν δόθηκαν τεμάχια — χρόνος ανά συσκευασία"> /συσκ.</span>}
+                    </td>
+                    <td className="num strong">{rate ? fmtDuration(rate.secPerUnit * a.max) : "χωρίς ιστορικό"}</td>
+                    <td className="num">{a.planned ? fmtN(a.planned) : "—"}</td>
+                    <td className="num">{rate && a.planned ? fmtDuration(rate.secPerUnit * a.planned) : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
       <div className="times-bar">
         <div className="seg rp-tabs" role="tablist" aria-label="Περίοδος">
           {PERIODS.map((p) => (

@@ -870,3 +870,20 @@ th.num { font-family: var(--font-body), sans-serif; }
   .rp-source { flex-direction: column; align-items: stretch; }
   .rp-source .import-btn { justify-content: center; }
 }
+
+/* θέσεις μέσα στις κάρτες του πλάνου + εκτιμήσεις */
+.rp-comps li { grid-template-columns: 84px minmax(0, 1fr) auto 64px; row-gap: 3px; }
+.rp-poslist { grid-column: 2 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 12px; }
+.rp-poslist .rp-pos { margin: 0; font-size: 12px; }
+.rp-poslist.none { color: var(--occupied); font-size: 12px; }
+.rp-poslist .rp-link { font-size: 12px; }
+@media (max-width: 640px) { .rp-poslist { grid-column: 1 / -1; } }
+.rp-est { font-size: 12px; color: var(--ink-dim); margin-top: 2px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rp-est.plan { color: var(--ink); font-weight: 600; }
+.rp-estimate { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 10px 12px; border-radius: var(--r-sm); background: var(--surface-2); box-shadow: inset 3px 0 0 var(--rack); }
+.rp-estimate .l { font-size: 13px; color: var(--ink-dim); }
+.rp-estimate .n { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.rp-estimate .rp-hint { flex-basis: 100%; }
+.times-table tr.dim-row td { color: var(--ink-dim); }
+.times-card .kpis { box-shadow: none; }
+.times-table .unit { font-size: 11px; color: var(--ink-dim); }
