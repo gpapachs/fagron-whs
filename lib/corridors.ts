@@ -76,7 +76,7 @@ export function codeFor(cid: number | string, idx: number): string {
   return `E${pad(cid as number)}-${pad(l.col)}-${l.row}-${l.pos}`;
 }
 
-export const TOTAL_POSITIONS = ALL_IDS.reduce((n, cid) => n + layoutFor(cid).length, 0);
+export const TOTAL_POSITIONS = ALL_IDS.reduce<number>((n, cid) => n + layoutFor(cid).length, 0);
 
 // normalized code -> {cid, idx}: built once so a scanned/typed/imported code
 // can be resolved back to its corridor + index for the grid, the 3D view,
@@ -160,7 +160,7 @@ export function columnLayoutFor(cid: number): ColumnInfo[] & { totalWidth: numbe
   const cached = columnLayoutCache.get(cid);
   if (cached) return cached;
   const spec = CORRIDOR_SPEC[cid] || [];
-  const arr = [] as ColumnInfo[] & { totalWidth: number };
+  const arr = Object.assign([] as ColumnInfo[], { totalWidth: 0 });
   let xCursor = 0;
   spec.forEach((rowCounts, ci) => {
     const maxCount = Math.max(...rowCounts);

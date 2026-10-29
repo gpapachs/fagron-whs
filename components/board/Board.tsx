@@ -25,7 +25,7 @@ const Board3D = dynamic(() => import("./Board3D"), { ssr: false });
 type View = "2d" | "3d";
 type Current = { cid: number | string; idx: number; code: string };
 
-async function inBatches<T, R>(items: T[], size: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+async function inBatches<T, R>(items: T[], size: number, fn: (item: T) => PromiseLike<R>): Promise<R[]> {
   const out: R[] = [];
   for (let i = 0; i < items.length; i += size) {
     const batch = items.slice(i, i + size);
