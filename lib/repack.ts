@@ -44,8 +44,12 @@ function num(v: Cell): number | null {
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
   const s = str(v).replace(/\s/g, "");
   if (!s) return null;
-  // ελληνική μορφή "1.234,5" ή απλό "0,3"
-  const normalized = s.includes(",") ? s.replace(/\./g, "").replace(",", ".") : s;
+  // ελληνική μορφή "1.234,5", "0,3" ή "2.400" (τελεία = χιλιάδες)
+  const normalized = s.includes(",")
+    ? s.replace(/\./g, "").replace(",", ".")
+    : /^-?\d{1,3}(\.\d{3})+$/.test(s)
+      ? s.replace(/\./g, "")
+      : s;
   const n = Number(normalized);
   return Number.isFinite(n) ? n : null;
 }
@@ -521,4 +525,98 @@ export function planForReserved(
     if (left > 0) uncovered.push({ productCode, missing: left });
   }
   return { plan: next, uncovered };
+}
+
+// ---------------------------------------------------- δεσμευμένα από Excel
+
+export type ReservedItem = { code: string; qty: number; orders: number };
+
+/**
+ * Excel εκκρεμών παραγγελιών -> δεσμευμένα ανά κωδικό.
+ * Βρίσκει μόνο του τις στήλες (κωδικός / ποσότητα / παραγγελία) από τις
+ * επικεφαλίδες· χωρίς επικεφαλίδες: στήλη Α = κωδικός, Β = ποσότητα.
+ * Ίδιος κωδικός σε πολλές γραμμές (πολλές παραγγελίες) αθροίζεται.
+ */
+export function parseReservedRows(rows: Cell[][]): {
+  items: ReservedItem[];
+  columns?: { code: string; qty: string; order?: string };
+  skipped: number;
+  error?: string;
+} {
+  let headerIdx = -1;
+  let cCode = -1;
+  let cQty = -1;
+  let cOrder = -1;
+  let names: string[] = [];
+  const pick = (cands: ((n: string) => boolean)[]) => {
+    for (const test of cands) {
+      const i = names.findIndex((n) => n && test(n));
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+  for (let i = 0; i < Math.min(rows.length, 10); i++) {
+    names = (rows[i] ?? []).map((c) => norm(str(c)));
+    const code = pick([
+      (n) => ["κωδικος", "κωδικοςειδους", "κωδειδους", "κωδικοςτελικου", "ειδος", "item", "code", "sku"].includes(n),
+      (n) => n.startsWith("κωδ") && !n.includes("συναλ") && !n.includes("πελατ"),
+    ]);
+    const qty = pick([
+      (n) => n.includes("δεσμ"),
+      (n) => n.includes("εκκρεμ"),
+      (n) => n.includes("υπολοιπ"),
+      (n) => n.includes("ποσοτ") || n === "ποσ" || n.startsWith("ποσ1") || n === "qty" || n === "quantity",
+      (n) => n.startsWith("τεμ"),
+    ]);
+    if (code >= 0 && qty >= 0 && code !== qty) {
+      headerIdx = i;
+      cCode = code;
+      cQty = qty;
+      cOrder = pick([(n) => n.includes("παραγγ") || n.includes("order"), (n) => n.includes("παραστατ") || n.startsWith("αριθμ")]);
+      break;
+    }
+  }
+  const header = headerIdx >= 0 ? rows[headerIdx] : null;
+  if (headerIdx < 0) {
+    // χωρίς επικεφαλίδες: Α = κωδικός, Β = ποσότητα, αν μοιάζει έτσι
+    const sample = rows.slice(0, 20).filter((r) => str(r?.[0]));
+    const looks = sample.length > 0 && sample.filter((r) => /^\d{2}-\d{2}-\d{3}/.test(str(r[0])) && num(r[1]) !== null).length >= Math.ceil(sample.length / 2);
+    if (!looks) {
+      return {
+        items: [],
+        skipped: 0,
+        error: "Δεν βρέθηκαν στήλες κωδικού και ποσότητας. Βάλτε επικεφαλίδες π.χ. «Κωδικός» και «Δεσμευμένα» (ή κατεβάστε το Πρότυπο).",
+      };
+    }
+    cCode = 0;
+    cQty = 1;
+  }
+
+  const map = new Map<string, { qty: number; orders: Set<string>; lines: number }>();
+  let skipped = 0;
+  for (const row of rows.slice(headerIdx + 1)) {
+    const code = str(row[cCode]).toUpperCase();
+    const qty = num(row[cQty]);
+    if (!code) continue;
+    if (qty === null || qty <= 0) {
+      skipped++;
+      continue;
+    }
+    const e = map.get(code) ?? { qty: 0, orders: new Set<string>(), lines: 0 };
+    e.qty = round(e.qty + qty);
+    e.lines++;
+    if (cOrder >= 0 && str(row[cOrder])) e.orders.add(str(row[cOrder]));
+    map.set(code, e);
+  }
+  const items = [...map.entries()]
+    .map(([code, e]) => ({ code, qty: Math.round(e.qty), orders: cOrder >= 0 ? e.orders.size : e.lines }))
+    .filter((x) => x.qty > 0)
+    .sort((a, b) => a.code.localeCompare(b.code, "el", { numeric: true }));
+  return {
+    items,
+    skipped,
+    columns: header
+      ? { code: str(header[cCode]), qty: str(header[cQty]), order: cOrder >= 0 ? str(header[cOrder]) : undefined }
+      : { code: "στήλη Α", qty: "στήλη Β" },
+  };
 }

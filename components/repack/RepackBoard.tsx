@@ -12,6 +12,7 @@ import {
   filterStockForRecipes,
   picksByRecipe,
   planForReserved,
+  parseReservedRows,
   lotLabel,
   reservedShortfall,
   type ProductSettings,
@@ -102,10 +103,11 @@ export default function RepackBoard({
   const [onlyReserved, setOnlyReserved] = useState(false);
   const [query, setQuery] = useState("");
   const [onlyFeasible, setOnlyFeasible] = useState(true);
-  const [busy, setBusy] = useState<null | "recipes" | "stock">(null);
+  const [busy, setBusy] = useState<null | "recipes" | "stock" | "reserved">(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const recipeInput = useRef<HTMLInputElement>(null);
   const stockInput = useRef<HTMLInputElement>(null);
+  const reservedInput = useRef<HTMLInputElement>(null);
   const isAdmin = role === "admin";
 
   // πλάνο + φίλτρο περιοχών: θυμούνται σε αυτόν τον browser
@@ -380,6 +382,82 @@ export default function RepackBoard({
     }
   }
 
+  async function handleReserved(file: File) {
+    setBusy("reserved");
+    setNotice(null);
+    try {
+      const { items, columns, skipped, error: parseError } = parseReservedRows(await readSheet(file));
+      if (parseError) {
+        setNotice({ tone: "error", text: parseError });
+        return;
+      }
+      const finals = new Set(recipes.map((r) => r.product_code.toUpperCase()));
+      const unknown = items.filter((i) => !finals.has(i.code));
+      if (
+        !window.confirm(
+          `Αντικατάσταση δεσμευμένων: ${items.length} κωδικοί, ${items.reduce((n, i) => n + i.qty, 0).toLocaleString("el-GR")} τεμάχια.\n` +
+            `Στήλες: «${columns?.code}» / «${columns?.qty}»${columns?.order ? ` / «${columns.order}»` : ""}.\n\n` +
+            "Τα δεσμευμένα που δεν υπάρχουν στο αρχείο θα μηδενιστούν. Συνέχεια;"
+        )
+      )
+        return;
+      const { error } = await createClient().rpc("repack_replace_reserved", { items, file_name: file.name });
+      if (error) {
+        setNotice({ tone: "error", text: `Η αποθήκευση απέτυχε: ${error.message}` });
+        return;
+      }
+      // τοπική ενημέρωση: μηδένισε όλα, βάλε τα νέα (τα τμχ/συσκ. μένουν)
+      setSettings((prev) => {
+        const next: Record<string, ProductSettings> = {};
+        for (const [k, v] of Object.entries(prev)) next[k] = { ...v, reserved: 0, reserved_note: "" };
+        for (const i of items)
+          next[i.code] = {
+            ...(next[i.code] ?? { product_code: i.code, units_per_package: null }),
+            reserved: i.qty,
+            reserved_note: i.orders > 1 ? `${i.orders} παραγγελίες` : i.orders === 1 ? "1 παραγγελία" : "",
+          } as ProductSettings;
+        return next;
+      });
+      setUploads((u) => ({ ...u, reserved: { file_name: file.name, row_count: items.length, uploaded_at: new Date().toISOString(), uploaded_by_email: userEmail } }));
+      const n = (x: number) => x.toLocaleString("el-GR");
+      const details: string[] = [];
+      if (unknown.length)
+        details.push(
+          `${unknown.length} κωδικοί δεν είναι τελικοί κωδικοί των προδιαγραφών (κρατήθηκαν, αλλά δεν εμφανίζονται στο πλάνο): ${unknown
+            .slice(0, 12)
+            .map((u) => u.code)
+            .join(", ")}${unknown.length > 12 ? ", …" : ""}`
+        );
+      if (skipped) details.push(`${n(skipped)} γραμμές χωρίς ποσότητα αγνοήθηκαν.`);
+      setNotice({
+        tone: unknown.length ? "warn" : "ok",
+        text: `Δεσμευμένα φορτώθηκαν: ${n(items.length)} κωδικοί, ${n(items.reduce((x, i) => x + i.qty, 0))} τεμάχια.`,
+        details,
+      });
+    } catch {
+      setNotice({ tone: "error", text: "Το αρχείο δεν ήταν δυνατό να διαβαστεί." });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Πρότυπο Excel με τα τρέχοντα δεσμευμένα (διορθώνεται και ξανανεβαίνει). */
+  async function downloadReservedTemplate() {
+    const XLSX = await import("xlsx");
+    const desc = new Map(recipes.map((r) => [r.product_code, r.description]));
+    const current = Object.values(settings)
+      .filter((x) => (x.reserved ?? 0) > 0)
+      .sort((a, b) => a.product_code.localeCompare(b.product_code, "el", { numeric: true }));
+    const rows = current.length
+      ? current.map((x) => ({ "Κωδικός": x.product_code, "Περιγραφή": desc.get(x.product_code) ?? "", "Δεσμευμένα": x.reserved }))
+      : [{ "Κωδικός": recipes[0]?.product_code ?? "71-00-000", "Περιγραφή": recipes[0]?.description ?? "", "Δεσμευμένα": 0 }];
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws["!cols"] = [{ wch: 16 }, { wch: 52 }, { wch: 12 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Δεσμευμένα");
+    XLSX.writeFile(wb, "desmevmena.xlsx");
+  }
+
   // ---------------------------------------------------------------- export
 
   const [exporting, setExporting] = useState<string | null>(null);
@@ -541,6 +619,24 @@ export default function RepackBoard({
           </button>
         </div>
         <input ref={recipeInput} type="file" accept=".xlsx,.xls" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) handleRecipes(f); }} />
+        <div className="rp-source">
+          <div>
+            <div className="rp-source-title">Δεσμευμένα (παραγγελίες)</div>
+            <div className="meta">
+              {uploads.reserved
+                ? `${uploads.reserved.file_name || "Excel"} · ${fmtDate(uploads.reserved.uploaded_at)}${uploads.reserved.uploaded_by_email ? ` · ${uploads.reserved.uploaded_by_email}` : ""}`
+                : "Excel εκκρεμών παραγγελιών: κωδικός + ποσότητα"}
+            </div>
+            <button type="button" className="rp-link" onClick={downloadReservedTemplate}>
+              Πρότυπο / τρέχοντα
+            </button>
+          </div>
+          <button className="import-btn" type="button" disabled={busy !== null || !recipes.length} onClick={() => reservedInput.current?.click()}>
+            <UploadIcon />
+            {busy === "reserved" ? "Φόρτωση…" : "Ανέβασμα"}
+          </button>
+        </div>
+        <input ref={reservedInput} type="file" accept=".xlsx,.xls,.csv" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) handleReserved(f); }} />
         <input ref={stockInput} type="file" accept=".xlsx,.xls,.csv" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) handleStock(f); }} />
       </div>
 
@@ -1058,7 +1154,7 @@ function ProductMeta({
       </span>
       <NumField
         label="Δεσμευμένα"
-        title="Τεμάχια που χρειάζονται για παραγγελίες σε εκκρεμότητα"
+        title={`Τεμάχια για παραγγελίες σε εκκρεμότητα${setting?.reserved_note ? ` (${setting.reserved_note})` : ""}`}
         value={reserved || null}
         onCommit={(n) => onSave(productCode, { reserved: n ?? 0 })}
       />

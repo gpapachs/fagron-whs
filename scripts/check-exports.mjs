@@ -116,6 +116,20 @@ if (a.count !== plan.analyses.filter((x) => x.max > 0).length) fail("λάθος 
   if (lots.length !== 2 || m?.qty !== 42 || m?.expiry !== "2035-04-22") fail("λάθος ανάγνωση παρτίδων");
 }
 
+// ---- δεσμευμένα από Excel (μορφή ERP εκκρεμοτήτων + πρότυπο)
+{
+  const { parseReservedRows } = await import("../lib/repack.ts");
+  const erp = parseReservedRows([
+    ["Αρ. Παραγγελίας", "Πελάτης", "Κωδ.Συναλλ.", "Κωδικός Είδους", "Περιγραφή", "Ποσότητα", "Εκκρεμότητα"],
+    ["ΠΑ-101", "Α", "99-1", "71-00-110", "ΒΑΖΟ", 100, 60],
+    ["ΠΑ-102", "Β", "99-2", "71-00-110", "ΒΑΖΟ", 50, 50],
+    ["ΠΑ-103", "Γ", "99-3", "71-00-081", "Π", 12, "2.400"],
+  ]);
+  const b110 = erp.items.find((i) => i.code === "71-00-110");
+  console.log(`δεσμευμένα: ${erp.items.map((i) => `${i.code}=${i.qty}/${i.orders}π`).join(", ")} · στήλη «${erp.columns?.qty}»`);
+  if (b110?.qty !== 110 || b110.orders !== 2 || erp.items.find((i) => i.code === "71-00-081")?.qty !== 2400) fail("λάθος ανάγνωση δεσμευμένων");
+}
+
 // ---- φιλτράρισμα ολόκληρου αποθέματος
 const noise = Array.from({ length: 5000 }, (_, i) => ({ position: `Z${i}`, area: "Χ", item: `00-99-${i % 900}`, description: "άσχετο", qty: 3, unit: "ΤΕΜ" }));
 const flt = filterStockForRecipes([...stock, ...noise, { position: "300.01", area: "Κ", item: "71-90-001", description: "τελικό", qty: 9, unit: "ΤΕΜ" }], recipes);
