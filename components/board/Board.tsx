@@ -17,6 +17,7 @@ import PositionPanel from "./PositionPanel";
 import QuickLookup from "./QuickLookup";
 import ExcelImport from "./ExcelImport";
 import LogoutButton from "@/components/auth/LogoutButton";
+import NavTabs from "@/components/NavTabs";
 import type { Board3DHandle } from "./Board3D";
 
 const Board3D = dynamic(() => import("./Board3D"), { ssr: false });
@@ -223,6 +224,7 @@ export default function Board({
 
   return (
     <div className="wrap">
+      <NavTabs />
       <div className="header">
         <div className="titleblock">
           <p className="eyebrow">Fagron Hellas &middot; Διαχείριση χώρου &middot; Live</p>
