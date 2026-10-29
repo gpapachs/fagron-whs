@@ -420,7 +420,7 @@ export function picklistPdf(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const body: any[] = [];
     for (const c of r.components) {
-      const rows = c.from.length ? c.from : [{ position: "", area: "", take: 0 }];
+      const rows = c.from.length ? c.from : [{ position: "", area: "", lot: "", expiry: null as string | null, take: 0 }];
       rows.forEach((f, i) => {
         body.push([
           i === 0 ? { content: `${c.code}\n${c.description}`, rowSpan: rows.length } : null,
