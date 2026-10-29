@@ -3,6 +3,7 @@
 import Link from "next/link";
 import NavTabs from "@/components/NavTabs";
 import LogoutButton from "@/components/auth/LogoutButton";
+import { versionLabel, versionTitle } from "@/lib/version";
 
 export default function AppBar({ email, role }: { email: string | null; role: "admin" | "staff" }) {
   const initial = (email ?? "?").trim().charAt(0).toUpperCase();
@@ -19,6 +20,9 @@ export default function AppBar({ email, role }: { email: string | null; role: "a
             Fagron <b>WHS</b>
           </span>
         </Link>
+        <span className="version" title={versionTitle}>
+          {versionLabel}
+        </span>
         <NavTabs />
         <div className="appbar-user">
           <span className="avatar" aria-hidden>

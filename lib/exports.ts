@@ -5,7 +5,7 @@
 //  - το scripts/check-exports.mjs να τρέχει τα ίδια ακριβώς functions στο CI
 // Μόνο `import type` από άλλα αρχεία -- τίποτα σε runtime.
 
-import type { ComponentNeed, PickLine, RecipeAnalysis, RecipePick, StockIndex } from "./repack";
+import type { ComponentNeed, PickLine, ProductSettings, RecipeAnalysis, RecipePick, StockIndex } from "./repack";
 import type { Job, JobStats } from "./jobs";
 
 const q = (n: number) => n.toLocaleString("el-GR", { maximumFractionDigits: 3 });
@@ -97,7 +97,13 @@ function sheet(XLSX: XLSXLib, rows: Record<string, unknown>[], widths: number[])
 }
 
 /** Excel με όλες τις ανασυσκευασίες που μπορούν να γίνουν τώρα. */
-export function availableWorkbook(XLSX: XLSXLib, analyses: RecipeAnalysis[], stockIdx: StockIndex, meta: ExportMeta) {
+export function availableWorkbook(
+  XLSX: XLSXLib,
+  analyses: RecipeAnalysis[],
+  stockIdx: StockIndex,
+  meta: ExportMeta,
+  settings: Record<string, ProductSettings> = {}
+) {
   const { rows, components } = availableData(analyses, stockIdx);
   const wb = XLSX.utils.book_new();
 
@@ -113,8 +119,13 @@ export function availableWorkbook(XLSX: XLSXLib, analyses: RecipeAnalysis[], sto
         "Περιοριστικό συστατικό": r.limiting,
         "Κοινό συστατικό με": r.sharedWith,
         "Στο πλάνο": r.planned || "",
+        "Τμχ/συσκ.": settings[r.productCode]?.units_per_package ?? "",
+        "Μέγιστο (συσκ.)": settings[r.productCode]?.units_per_package ? Math.floor(r.max / (settings[r.productCode].units_per_package as number)) : "",
+        "Απόθεμα τελικού": stockIdx.get(r.productCode)?.total ?? 0,
+        "Δεσμευμένα": settings[r.productCode]?.reserved || "",
+        "Λείπουν για παραγγελίες": Math.max(0, (settings[r.productCode]?.reserved ?? 0) - (stockIdx.get(r.productCode)?.total ?? 0)) || "",
       })),
-      [16, 14, 50, 13, 20, 30, 10]
+      [16, 14, 50, 13, 20, 30, 10, 10, 13, 14, 12, 18]
     ),
     "Διαθέσιμες"
   );

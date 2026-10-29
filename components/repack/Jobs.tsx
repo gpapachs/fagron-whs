@@ -96,6 +96,7 @@ export function RunningJobs({
 export type FinishFields = {
   units: number;
   packages: number;
+  unitsPerPackage: number | null;
   started_at: string;
   finished_at: string;
   notes: string;
@@ -103,16 +104,25 @@ export type FinishFields = {
 
 export function FinishDialog({
   job,
+  unitsPerPackage,
   onClose,
   onSave,
 }: {
   job: Job;
+  unitsPerPackage: number | null;
   onClose: () => void;
   onSave: (fields: FinishFields) => Promise<string | null>;
 }) {
   const [openedAt] = useState(() => new Date().toISOString());
-  const [units, setUnits] = useState(job.units ? String(job.units) : "");
   const [packages, setPackages] = useState(job.packages ? String(job.packages) : "");
+  const [upp, setUpp] = useState(
+    unitsPerPackage ? String(unitsPerPackage) : job.units && job.packages && job.units % job.packages === 0 ? String(job.units / job.packages) : ""
+  );
+  const [unitsText, setUnitsText] = useState(job.units ? String(job.units) : "");
+  // τα τεμάχια βγαίνουν αυτόματα (συσκευασίες × τμχ/συσκ.) μέχρι να τα αλλάξει ο χρήστης
+  const [unitsManual, setUnitsManual] = useState(!!job.units && !unitsPerPackage);
+  const autoUnits = Number(packages) > 0 && Number(upp) > 0 ? String(Number(packages) * Number(upp)) : "";
+  const units = unitsManual ? unitsText : autoUnits || unitsText;
   const [start, setStart] = useState(toLocalInput(job.started_at));
   const [end, setEnd] = useState(toLocalInput(job.finished_at ?? openedAt));
   const [notes, setNotes] = useState(job.notes ?? "");
@@ -138,7 +148,14 @@ export function FinishDialog({
     e.preventDefault();
     if (!valid) return;
     setSaving(true);
-    const err = await onSave({ units: units === "" ? 0 : un, packages: pk, started_at: startIso, finished_at: endIso, notes: notes.trim() });
+    const err = await onSave({
+      units: units === "" ? 0 : un,
+      packages: pk,
+      unitsPerPackage: Number(upp) > 0 ? Number(upp) : null,
+      started_at: startIso,
+      finished_at: endIso,
+      notes: notes.trim(),
+    });
     setSaving(false);
     if (err) setError(err);
   }
@@ -159,12 +176,26 @@ export function FinishDialog({
 
         <div className="dlg-grid">
           <label className="field">
-            Συσκευασίες που έγιναν
+            Συσκευασίες
             <input inputMode="numeric" autoFocus required value={packages} onChange={(e) => setPackages(e.target.value.replace(/\D/g, ""))} placeholder="π.χ. 40" />
           </label>
           <label className="field">
-            Τεμάχια
-            <input inputMode="numeric" value={units} onChange={(e) => setUnits(e.target.value.replace(/\D/g, ""))} placeholder="π.χ. 120" />
+            Τμχ / συσκευασία
+            <input inputMode="numeric" value={upp} onChange={(e) => setUpp(e.target.value.replace(/\D/g, ""))} placeholder="π.χ. 6" />
+          </label>
+          <label className="field">
+            <span>
+              Τεμάχια{!unitsManual && autoUnits ? <span className="field-hint"> · αυτόματα</span> : null}
+            </span>
+            <input
+              inputMode="numeric"
+              value={units}
+              onChange={(e) => {
+                setUnitsManual(true);
+                setUnitsText(e.target.value.replace(/\D/g, ""));
+              }}
+              placeholder="π.χ. 120"
+            />
           </label>
           <label className="field">
             Έναρξη

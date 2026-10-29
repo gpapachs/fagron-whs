@@ -430,3 +430,59 @@ export function picksByRecipe(planned: RecipeAnalysis[], picks: PickLine[]): Rec
       }),
     }));
 }
+
+// ---------------------------------------------------- ρυθμίσεις ανά τελικό
+
+export type ProductSettings = {
+  product_code: string;
+  units_per_package: number | null; // τεμάχια ανά συσκευασία
+  reserved: number; // τεμάχια για παραγγελίες σε εκκρεμότητα
+  reserved_note: string;
+  updated_at?: string;
+  updated_by_email?: string | null;
+};
+
+/** Πόσα λείπουν για τις παραγγελίες: δεσμευμένα − απόθεμα τελικού (≥ 0). */
+export function reservedShortfall(reserved: number, finalStock: number) {
+  return Math.max(0, Math.round(reserved - finalStock));
+}
+
+/**
+ * Πλάνο που καλύπτει τα δεσμευμένα: για κάθε τελικό κωδικό με έλλειψη,
+ * όσα λείπουν -- αλλά όχι παραπάνω από όσα επιτρέπει το απόθεμα συστατικών
+ * που μένει (με τη σειρά: μεγαλύτερη έλλειψη πρώτα). Αν ένας τελικός έχει
+ * εναλλακτικές προδιαγραφές, προτιμάται η κύρια (id = κωδικός τελικού).
+ * Επιστρέφει νέο πλάνο (κρατά ό,τι υπάρχει για τους υπόλοιπους κωδικούς)
+ * και τι δεν καλύφθηκε.
+ */
+export function planForReserved(
+  recipes: Recipe[],
+  stock: StockRow[],
+  current: Record<string, number>,
+  shortfallByProduct: Map<string, number>,
+  excludedAreas: Set<string> = new Set()
+) {
+  const next: Record<string, number> = { ...current };
+  const uncovered: { productCode: string; missing: number }[] = [];
+  const order = [...shortfallByProduct.entries()].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+  for (const [productCode, need] of order) {
+    const options = recipes
+      .filter((r) => r.product_code === productCode)
+      .sort((a, b) => Number(b.id === productCode) - Number(a.id === productCode));
+    // καθάρισε ό,τι υπήρχε για αυτόν τον τελικό, ώστε να μη μετρηθεί δύο φορές
+    for (const r of options) delete next[r.id];
+    let left = need;
+    for (const r of options) {
+      if (left <= 0) break;
+      const plan = buildPlan(recipes, stock, next, excludedAreas);
+      const room = plan.analyses.find((a) => a.recipe.id === r.id)?.remaining ?? 0;
+      const take = Math.min(room, left);
+      if (take > 0) {
+        next[r.id] = take;
+        left -= take;
+      }
+    }
+    if (left > 0) uncovered.push({ productCode, missing: left });
+  }
+  return { plan: next, uncovered };
+}

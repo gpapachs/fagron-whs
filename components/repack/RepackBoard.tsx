@@ -11,6 +11,9 @@ import {
   buildPlan,
   filterStockForRecipes,
   picksByRecipe,
+  planForReserved,
+  reservedShortfall,
+  type ProductSettings,
   fmtQty,
   indexStock,
   parseRecipeRows,
@@ -69,6 +72,7 @@ export default function RepackBoard({
   initialStock,
   initialUploads,
   initialJobs,
+  initialSettings,
   userId,
   userEmail,
   role,
@@ -77,6 +81,7 @@ export default function RepackBoard({
   initialStock: StockRow[];
   initialUploads: Record<string, UploadInfo>;
   initialJobs: Job[];
+  initialSettings: ProductSettings[];
   userId: string;
   userEmail: string | null;
   role: "admin" | "staff";
@@ -90,6 +95,10 @@ export default function RepackBoard({
   const [tab, setTab] = useState<"plan" | "specs" | "times">("plan");
   const [jobs, setJobs] = useState<Job[]>(initialJobs);
   const [finishing, setFinishing] = useState<Job | null>(null);
+  const [settings, setSettings] = useState<Record<string, ProductSettings>>(() =>
+    Object.fromEntries(initialSettings.map((x) => [x.product_code, x]))
+  );
+  const [onlyReserved, setOnlyReserved] = useState(false);
   const [query, setQuery] = useState("");
   const [onlyFeasible, setOnlyFeasible] = useState(true);
   const [busy, setBusy] = useState<null | "recipes" | "stock">(null);
@@ -144,6 +153,49 @@ export default function RepackBoard({
 
   const rates = useMemo(() => ratesByRecipe(jobs), [jobs]);
 
+  // ---------------------------------------------------------------- ρυθμίσεις ανά τελικό
+  useEffect(() => {
+    const supabase = createClient();
+    const channel = supabase
+      .channel("repack_product_settings")
+      .on("postgres_changes", { event: "*", schema: "public", table: "repack_product_settings" }, (payload) => {
+        const row = payload.new as ProductSettings;
+        if (row?.product_code) setSettings((prev) => ({ ...prev, [row.product_code]: row }));
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  async function saveSetting(productCode: string, patch: Partial<Pick<ProductSettings, "units_per_package" | "reserved">>) {
+    const prev = settings[productCode];
+    const optimistic: ProductSettings = {
+      product_code: productCode,
+      units_per_package: prev?.units_per_package ?? null,
+      reserved: prev?.reserved ?? 0,
+      reserved_note: prev?.reserved_note ?? "",
+      ...patch,
+    };
+    setSettings((s) => ({ ...s, [productCode]: optimistic }));
+    const { data, error } = await createClient()
+      .from("repack_product_settings")
+      .upsert({ product_code: productCode, ...patch }, { onConflict: "product_code" })
+      .select()
+      .single();
+    if (error || !data) {
+      setSettings((s) => {
+        const n = { ...s };
+        if (prev) n[productCode] = prev;
+        else delete n[productCode];
+        return n;
+      });
+      setNotice({ tone: "error", text: `Η αποθήκευση για ${productCode} απέτυχε: ${error?.message ?? ""}` });
+      return;
+    }
+    setSettings((s) => ({ ...s, [productCode]: data as ProductSettings }));
+  }
+
   const upsertJob = (row: Job) => setJobs((prev) => [row, ...prev.filter((j) => j.id !== row.id)]);
 
   async function startJob(r: Recipe) {
@@ -160,6 +212,10 @@ export default function RepackBoard({
   }
 
   async function saveFinish(job: Job, f: FinishFields): Promise<string | null> {
+    const code = job.product_code || job.recipe_id;
+    if (f.unitsPerPackage && f.unitsPerPackage !== settings[code]?.units_per_package) {
+      saveSetting(code, { units_per_package: f.unitsPerPackage });
+    }
     const { data, error } = await createClient()
       .from("repack_jobs")
       .update({ status: "done", units: f.units, packages: f.packages, started_at: f.started_at, finished_at: f.finished_at, notes: f.notes })
@@ -204,6 +260,25 @@ export default function RepackBoard({
   const shortCodes = new Set(shortages.map((n) => n.code));
   const pickStops = new Set(plan.picks.map((p) => p.position)).size;
 
+  const finalStockOf = (productCode: string) => stockIdx.get(productCode)?.total ?? 0;
+  const shortfallByProduct = new Map<string, number>();
+  for (const [code, st] of Object.entries(settings)) {
+    const n = reservedShortfall(st.reserved ?? 0, finalStockOf(code));
+    if (n > 0) shortfallByProduct.set(code, n);
+  }
+  const reservedCodes = Object.values(settings).filter((x) => (x.reserved ?? 0) > 0).length;
+
+  function fillPlanFromReserved() {
+    const { plan: next, uncovered } = planForReserved(recipes, stock, planned, shortfallByProduct, excludedSet);
+    setPlanned(next);
+    const n = (x: number) => x.toLocaleString("el-GR");
+    setNotice({
+      tone: uncovered.length ? "warn" : "ok",
+      text: `Μπήκαν στο πλάνο όσα λείπουν για τις παραγγελίες (${shortfallByProduct.size} κωδικοί).`,
+      details: uncovered.map((u) => `${u.productCode}: δεν φτάνουν τα συστατικά για ${n(u.missing)} τεμ.`),
+    });
+  }
+
   const q = searchKey(query.trim());
   const matches = (r: Recipe) =>
     !q ||
@@ -212,6 +287,7 @@ export default function RepackBoard({
   const visible = plan.analyses
     .filter((a) => matches(a.recipe))
     .filter((a) => !onlyFeasible || a.max > 0 || a.planned > 0)
+    .filter((a) => !onlyReserved || (settings[a.recipe.product_code]?.reserved ?? 0) > 0)
     .sort((a, b) => b.planned - a.planned || Number(b.max > 0) - Number(a.max > 0) || a.recipe.id.localeCompare(b.recipe.id, "el", { numeric: true }));
 
   function setQty(id: string, value: number) {
@@ -331,7 +407,7 @@ export default function RepackBoard({
   const exportAvailableExcel = () =>
     run("avail-xlsx", async () => {
       const [XLSX, ex] = await Promise.all([import("xlsx"), import("@/lib/exports")]);
-      const { wb, fileName } = ex.availableWorkbook(XLSX, plan.analyses, stockIdx, exportMeta());
+      const { wb, fileName } = ex.availableWorkbook(XLSX, plan.analyses, stockIdx, exportMeta(), settings);
       XLSX.writeFile(wb, fileName);
     });
 
@@ -521,6 +597,12 @@ export default function RepackBoard({
                 Μόνο όσα βγαίνουν
               </label>
             )}
+            {tab === "plan" && reservedCodes > 0 && (
+              <label className="rp-check">
+                <input type="checkbox" checked={onlyReserved} onChange={(e) => setOnlyReserved(e.target.checked)} />
+                Μόνο με δεσμευμένα
+              </label>
+            )}
             <div className="rp-areas" hidden={tab === "times"}>
               <span className="rp-areas-label">Περιοχές αποθέματος:</span>
               {areas.map(({ area, rows }) => {
@@ -549,7 +631,7 @@ export default function RepackBoard({
               <section className="rp-list" aria-label="Κωδικοί ανασυσκευασίας">
                 {visible.length === 0 && <div className="rp-empty small">Κανένας κωδικός δεν ταιριάζει.</div>}
                 {visible.map((a) => (
-                  <RecipeCard key={a.recipe.id} a={a} avail={(c) => stockIdx.get(c)?.total ?? 0} recipeById={recipeById} shortCodes={shortCodes} onQty={setQty} running={runningByRecipe.get(a.recipe.id)} userId={userId} onStart={startJob} onFinish={setFinishing} positionsOf={(c) => stockIdx.get(c)?.rows ?? []} rate={rates.get(a.recipe.id)} />
+                  <RecipeCard key={a.recipe.id} a={a} avail={(c) => stockIdx.get(c)?.total ?? 0} recipeById={recipeById} shortCodes={shortCodes} onQty={setQty} running={runningByRecipe.get(a.recipe.id)} userId={userId} onStart={startJob} onFinish={setFinishing} positionsOf={(c) => stockIdx.get(c)?.rows ?? []} rate={rates.get(a.recipe.id)} setting={settings[a.recipe.product_code]} finalStock={finalStockOf(a.recipe.product_code)} onSaveSetting={saveSetting} />
                 ))}
               </section>
 
@@ -558,11 +640,18 @@ export default function RepackBoard({
               <aside className="rp-summary">
                 <div className="rp-summary-head">
                   <h2>Πλάνο</h2>
-                  {plannedLines.length > 0 && (
-                    <button type="button" className="rp-link" onClick={() => setPlanned({})}>
-                      Καθαρισμός
-                    </button>
-                  )}
+                  <div className="rp-summary-tools">
+                    {shortfallByProduct.size > 0 && (
+                      <button type="button" className="rp-link" onClick={fillPlanFromReserved} title="Βάζει στο πλάνο όσα λείπουν για τις παραγγελίες σε εκκρεμότητα">
+                        Από δεσμευμένα ({shortfallByProduct.size})
+                      </button>
+                    )}
+                    {plannedLines.length > 0 && (
+                      <button type="button" className="rp-link" onClick={() => window.confirm("Καθαρισμός όλου του πλάνου;") && setPlanned({})}>
+                        Καθαρισμός
+                      </button>
+                    )}
+                  </div>
                 </div>
                 {plannedLines.length === 0 ? (
                   <p className="rp-hint">
@@ -576,6 +665,9 @@ export default function RepackBoard({
                           <span className="mono">{a.recipe.id}</span>
                           <span className="desc">{a.recipe.description}</span>
                           <span className="qty">{fmtQty(a.planned)}</span>
+                          <button type="button" className="rp-remove" onClick={() => setQty(a.recipe.id, 0)} aria-label={`Αφαίρεση ${a.recipe.id} από το πλάνο`} title="Αφαίρεση από το πλάνο">
+                            ×
+                          </button>
                         </li>
                       ))}
                     </ul>
@@ -701,7 +793,7 @@ export default function RepackBoard({
             </div>
             </>
           ) : tab === "specs" ? (
-            <SpecsView recipes={recipes.filter(matches)} stockIdx={stockIdx} analyses={plan.analyses} />
+            <SpecsView recipes={recipes.filter(matches)} stockIdx={stockIdx} analyses={plan.analyses} settings={settings} />
           ) : (
             <TimesView
               jobs={jobs}
@@ -719,7 +811,15 @@ export default function RepackBoard({
         </>
       )}
 
-      {finishing && <FinishDialog key={finishing.id} job={finishing} onClose={() => setFinishing(null)} onSave={(f) => saveFinish(finishing, f)} />}
+      {finishing && (
+        <FinishDialog
+          key={finishing.id}
+          job={finishing}
+          unitsPerPackage={settings[finishing.product_code || finishing.recipe_id]?.units_per_package ?? null}
+          onClose={() => setFinishing(null)}
+          onSave={(f) => saveFinish(finishing, f)}
+        />
+      )}
     </div>
     </>
   );
@@ -789,8 +889,14 @@ function RecipeCard({
   onFinish,
   positionsOf,
   rate,
+  setting,
+  finalStock,
+  onSaveSetting,
 }: {
   a: RecipeAnalysis;
+  setting?: ProductSettings;
+  finalStock: number;
+  onSaveSetting: (productCode: string, patch: Partial<Pick<ProductSettings, "units_per_package" | "reserved">>) => void;
   shortCodes: Set<string>;
   running?: Job;
   userId: string;
@@ -813,13 +919,17 @@ function RecipeCard({
         <div className="rp-card-title">
           <span className="mono code">{recipe.id}</span>
           {recipe.product_code !== recipe.id && <span className="rp-alt">εναλλακτική του {recipe.product_code}</span>}
-          {avail(recipe.product_code) > 0 && (
-            <span className="rp-alt" title="Υπάρχον απόθεμα του τελικού κωδικού">
-              απόθεμα τελικού {fmtQty(avail(recipe.product_code))}
-            </span>
-          )}
           <h3>{recipe.description}</h3>
         </div>
+        <ProductMeta
+          productCode={recipe.product_code}
+          setting={setting}
+          finalStock={finalStock}
+          onSave={onSaveSetting}
+          onPlan={(n) => onQty(recipe.id, Math.min(n, planned + remaining))}
+          canPlan={planned + remaining}
+          planned={planned}
+        />
         <ul className="rp-comps">
           {recipe.components.map((c) => {
             const have = avail(c.code);
@@ -852,6 +962,9 @@ function RecipeCard({
         <div className="rp-max">
           <span className="n">{fmtQty(max)}</span>
           <span className="l">μέγιστο</span>
+          {setting?.units_per_package && max > 0 && (
+            <span className="rp-est">= {fmtQty(Math.floor(max / setting.units_per_package))} συσκ.</span>
+          )}
           {rate && max > 0 && (
             <span className="rp-est" title={`Από ${rate.jobs} εργασί${rate.jobs === 1 ? "α" : "ες"} · ${fmtDuration(rate.secPerUnit)} ανά ${rate.basis === "unit" ? "τεμάχιο" : "συσκευασία"}`}>
               ≈ {fmtDuration(rate.secPerUnit * max)}
@@ -873,6 +986,14 @@ function RecipeCard({
             +
           </button>
         </div>
+        {planned > 0 && (
+          <button type="button" className="rp-link danger" onClick={() => onQty(recipe.id, 0)}>
+            Αφαίρεση από πλάνο
+          </button>
+        )}
+        {planned > 0 && setting?.units_per_package && (
+          <span className="rp-est">= {fmtQty(Math.ceil(planned / setting.units_per_package))} συσκ.</span>
+        )}
         <button
           type="button"
           className="rp-link"
@@ -904,6 +1025,100 @@ function RecipeCard({
   );
 }
 
+/** Απόθεμα τελικού, δεσμευμένα, τμχ/συσκευασία -- ανά τελικό κωδικό, αποθηκεύεται στη βάση. */
+function ProductMeta({
+  productCode,
+  setting,
+  finalStock,
+  onSave,
+  onPlan,
+  canPlan,
+  planned,
+}: {
+  planned: number;
+  productCode: string;
+  setting?: ProductSettings;
+  finalStock: number;
+  onSave: (productCode: string, patch: Partial<Pick<ProductSettings, "units_per_package" | "reserved">>) => void;
+  onPlan: (n: number) => void;
+  canPlan: number;
+}) {
+  const reserved = setting?.reserved ?? 0;
+  const upp = setting?.units_per_package ?? null;
+  const short = reservedShortfall(reserved, finalStock);
+  return (
+    <div className="pm">
+      <span className="pm-item" title="Απόθεμα του τελικού κωδικού στο αρχείο αποθέματος">
+        <span className="l">Απόθεμα τελικού</span>
+        <span className="v">{fmtQty(finalStock)}</span>
+      </span>
+      <NumField
+        label="Δεσμευμένα"
+        title="Τεμάχια που χρειάζονται για παραγγελίες σε εκκρεμότητα"
+        value={reserved || null}
+        onCommit={(n) => onSave(productCode, { reserved: n ?? 0 })}
+      />
+      <NumField
+        label="Τμχ/συσκ."
+        title="Τεμάχια ανά συσκευασία"
+        value={upp}
+        onCommit={(n) => onSave(productCode, { units_per_package: n && n > 0 ? n : null })}
+      />
+      {reserved > 0 &&
+        (short > 0 && planned >= short ? (
+          <span className="pm-ok">Λείπουν {fmtQty(short)} για παραγγελίες · καλύπτονται από το πλάνο ✓</span>
+        ) : short > 0 ? (
+          <span className="pm-short">
+            Λείπουν {fmtQty(short)} για παραγγελίες
+            {canPlan > 0 && (
+              <button type="button" className="rp-link" onClick={() => onPlan(short)} title={short > canPlan ? `Βγαίνουν μέχρι ${fmtQty(canPlan)}` : undefined}>
+                {planned > 0 ? `Πλάνο → ${fmtQty(Math.min(short, canPlan))}` : `Στο πλάνο ${fmtQty(Math.min(short, canPlan))}`}
+              </button>
+            )}
+          </span>
+        ) : (
+          <span className="pm-ok">Καλύπτονται από το απόθεμα</span>
+        ))}
+    </div>
+  );
+}
+
+/** Αριθμητικό πεδίο που αποθηκεύει όταν φύγει το focus ή πατηθεί Enter. */
+function NumField({
+  label,
+  title,
+  value,
+  onCommit,
+}: {
+  label: string;
+  title: string;
+  value: number | null;
+  onCommit: (n: number | null) => void;
+}) {
+  const [text, setText] = useState(value ? String(value) : "");
+  useEffect(() => setText(value ? String(value) : ""), [value]);
+  const commit = () => {
+    const n = text === "" ? null : Number(text);
+    if ((n ?? null) !== (value ?? null)) onCommit(n);
+  };
+  return (
+    <label className="pm-item pm-field" title={title}>
+      <span className="l">{label}</span>
+      <input
+        inputMode="numeric"
+        value={text}
+        placeholder="—"
+        onChange={(e) => setText(e.target.value.replace(/\D/g, ""))}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          if (e.key === "Escape") setText(value ? String(value) : "");
+        }}
+      />
+    </label>
+  );
+}
+
 function PosChips({ rows }: { rows: StockRow[] }) {
   const [all, setAll] = useState(false);
   if (!rows.length) return <span className="rp-poslist none">Χωρίς θέση</span>;
@@ -930,8 +1145,10 @@ function SpecsView({
   recipes,
   stockIdx,
   analyses,
+  settings,
 }: {
   recipes: Recipe[];
+  settings: Record<string, ProductSettings>;
   stockIdx: ReturnType<typeof indexStock>;
   analyses: RecipeAnalysis[];
 }) {
@@ -987,6 +1204,20 @@ function SpecsView({
                   <span className="n dim">{finalStock ? fmtQty(finalStock.total) : "—"}</span>
                   <span className="l">απόθεμα τελικού</span>
                 </div>
+                {(settings[r.product_code]?.reserved ?? 0) > 0 && (
+                  <div title="Τεμάχια για παραγγελίες σε εκκρεμότητα">
+                    <span className={`n ${reservedShortfall(settings[r.product_code].reserved, finalStock?.total ?? 0) > 0 ? "bad" : ""}`}>
+                      {fmtQty(settings[r.product_code].reserved)}
+                    </span>
+                    <span className="l">δεσμευμένα</span>
+                  </div>
+                )}
+                {settings[r.product_code]?.units_per_package && (
+                  <div title="Τεμάχια ανά συσκευασία">
+                    <span className="n dim">{settings[r.product_code].units_per_package}</span>
+                    <span className="l">τμχ/συσκ.</span>
+                  </div>
+                )}
               </div>
             </header>
             <table className="spec-comps">
