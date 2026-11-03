@@ -592,6 +592,8 @@ function Run-Live {
   $serialCol = if ($sc.Count) { $sc[0].column } else { '' }
   $q = Build-MovesQuery 's.ID > @lastId'
   if (-not $q) { Fail 'Live: δεν βρέθηκε το ms_StockTrans' }
+  # λίγες κάθε φορά, με τη σειρά (αν το πλήρες sync είναι πίσω, προλαβαίνει σταδιακά)
+  $q = ($q -replace '^select ', 'select top 5000 ') + "`r`norder by s.ID"
   $lastId = $null
   try { $lastId = Sb-Request 'POST' '/rest/v1/rpc/wms_moves_last_id' @{} } catch {}
   if (-not $lastId) {
