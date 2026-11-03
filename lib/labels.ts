@@ -9,9 +9,8 @@ export type LabelData = {
   descEl: string; // ελληνική περιγραφή
   descEn: string; // αγγλική περιγραφή
   quantity: number | string | null; // τεμάχια στη συσκευασία (ή κείμενο, π.χ. «1 KG»)
-  batch: string; // παρτίδα ή serial number
-  /** τι είναι το `batch`: παρτίδα (προεπιλογή) ή serial number */
-  kind?: "batch" | "serial";
+  batch: string; // παρτίδα (κενό αν δεν υπάρχει)
+  serial?: string; // serial number (κενό στις ανασυσκευασίες)
 };
 
 export type LabelOptions = {
@@ -52,12 +51,11 @@ function rotationCm(rot: number, W: number, H: number): number[] | null {
   return null;
 }
 
-/** Ίδια μορφή με τις υπάρχουσες ετικέτες: κωδικός#παρτίδα#EN | QUANTITY: x BATCH NO.: παρτίδα */
+/** Μορφή DataMatrix (ίδια για όλες τις ετικέτες): κωδικός#παρτίδα#serial#ποσότητα
+ *  -- κενό πεδίο μένει κενό, π.χ. 71-01-359#1236095-01##75 */
 export function dataMatrixText(l: LabelData): string {
-  const en = (l.descEn || l.descEl).trim();
-  const qty = l.quantity ?? "";
-  const tag = l.kind === "serial" ? "SERIAL NO." : "BATCH NO.";
-  return `${l.code}#${l.batch}#${en} | QUANTITY: ${qty} ${tag}: ${l.batch}`;
+  const clean = (v: unknown) => String(v ?? "").replace(/#/g, "").trim();
+  return [l.code, l.batch, l.serial ?? "", l.quantity ?? ""].map(clean).join("#");
 }
 
 /** μόνο ASCII μπαίνει καθαρά στο DataMatrix (οι σαρωτές δεν διαβάζουν σωστά ελληνικά) */
@@ -141,21 +139,25 @@ export function layoutLabel(data: LabelData, mat: Raw, opts: LabelOptions, measu
   }
 
   // 3. στοιχεία (αριστερά)
+  // Batch πάντα όταν δεν υπάρχει serial· με serial: Serial No. (+ Batch αν υπάρχει)
   const rows: [string, string][] = [
     ["Item Code", data.code],
     ["Quantity", data.quantity != null ? String(data.quantity) : ""],
-    [data.kind === "serial" ? "Serial No." : "Batch.", data.batch],
   ];
-  const y0 = m + 12.6 * k + extra * 0.6;
-  const lh = 3.6 * k;
+  if (data.batch || !data.serial) rows.push(["Batch.", data.batch]);
+  if (data.serial) rows.push(["Serial No.", data.serial]);
+  const four = rows.length > 3; // 4 γραμμές: πιο πυκνά, για να μη φτάσουν στο προεκτυπωμένο λογότυπο
+  const y0 = m + (four ? 11.9 : 12.6) * k + extra * (four ? 0.4 : 0.6);
+  const lh = (four ? 3.0 : 3.6) * k;
+  const fs = (four ? 6.0 : 6.6) * k;
   rows.forEach(([l, v], i) => {
-    text(m + 0.6 * k, y0 + i * lh, l, 6.6 * k, false);
-    text(m + 12.8 * k, y0 + i * lh, ":", 6.6 * k, false);
-    text(m + 14.6 * k, y0 + i * lh, v, 6.6 * k, false);
+    text(m + 0.6 * k, y0 + i * lh, l, fs, false);
+    text(m + 12.8 * k, y0 + i * lh, ":", fs, false);
+    text(m + 14.6 * k, y0 + i * lh, v, fs, false);
   });
 
   // 4. λογότυπο ή όνομα εταιρείας (μόνο σε λευκό χαρτί)
-  const logoY = y0 + 3 * lh - 1.2 * k;
+  const logoY = m + 12.6 * k + extra * 0.6 + 3 * 3.6 * k - 1.2 * k;
   if (!opts.preprinted) {
     if (opts.logoDataUrl) ops.push({ t: "logo", x: m + 3.6 * k, y: logoY, h: 4.6 * k, maxW: 26 * k });
     else if (opts.companyText) ops.push({ t: "text", x: m + 3.6 * k, y: logoY + 3.6 * k, text: opts.companyText, size: 9 * k, bold: true });

@@ -279,7 +279,13 @@ export default function LabelsBoard({
   // όλες οι ετικέτες που θα τυπωθούν: μία ανά επιλεγμένο serial, αλλιώς μία με το Batch/Serial του πεδίου
   const ids = effKind === "serial" && serials.length ? serials : batch.trim() ? [batch.trim()] : [];
   const labelList: LabelData[] = code
-    ? (ids.length ? ids : [""]).map((id) => ({ code, descEl: descEl.trim(), descEn: descEn.trim(), quantity: qtyValue, batch: id, kind: effKind }))
+    ? (ids.length ? ids : [""]).map((id) => {
+        const base = { code, descEl: descEl.trim(), descEn: descEn.trim(), quantity: qtyValue };
+        if (effKind !== "serial") return { ...base, batch: id, serial: "" };
+        // serial: η παρτίδα έρχεται από το απόθεμα του ίδιου serial (αν υπάρχει)
+        const lot = ownSerials.find((r) => r.serial === id)?.lot ?? "";
+        return { ...base, batch: lot, serial: id };
+      })
     : [];
   const data: LabelData | null = labelList[0] ?? null;
   const dmText = data ? dataMatrixText(data) : "";
@@ -658,8 +664,7 @@ export default function LabelsBoard({
 
                 {!asciiOk && (
                   <p className="rp-notice warn">
-                    Το DataMatrix θα περιέχει ελληνικούς χαρακτήρες (από την αγγλική περιγραφή). Οι σαρωτές συνήθως δεν τους διαβάζουν σωστά —
-                    γράψε την αγγλική περιγραφή με λατινικούς χαρακτήρες.
+                    Το DataMatrix θα περιέχει μη λατινικούς χαρακτήρες (στον κωδικό, στο Batch/Serial ή στο Quantity). Οι σαρωτές συνήθως δεν τους διαβάζουν σωστά.
                   </p>
                 )}
                 {error && <p className="rp-notice error">{error}</p>}

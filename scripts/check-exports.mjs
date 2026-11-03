@@ -161,10 +161,14 @@ if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) 
 {
   const label = { code: "71-01-359", descEl: "ΣΩΛΗΝΑΡΙΟ ΑΛΟΥΜΙΝΙΟΥ GALENPACK 30 ML", descEn: "ALUMINIUM TUBE GALENPACK 30 ml", quantity: 75, batch: "1236095-01" };
   const txt = dataMatrixText(label);
-  const want = "71-01-359#1236095-01#ALUMINIUM TUBE GALENPACK 30 ml | QUANTITY: 75 BATCH NO.: 1236095-01";
+  const want = "71-01-359#1236095-01##75";
   if (txt !== want) fail(`DataMatrix: «${txt}» αντί για «${want}»`);
-  const sn = dataMatrixText({ ...label, code: "12-12-309", batch: "SN-0001", kind: "serial", quantity: 1 });
-  if (sn !== "12-12-309#SN-0001#ALUMINIUM TUBE GALENPACK 30 ml | QUANTITY: 1 SERIAL NO.: SN-0001") fail(`DataMatrix serial: ${sn}`);
+  const sn = dataMatrixText({ ...label, code: "12-12-309", batch: "L77", serial: "SN-0001", quantity: 1 });
+  if (sn !== "12-12-309#L77#SN-0001#1") fail(`DataMatrix serial: ${sn}`);
+  const sn2 = dataMatrixText({ ...label, code: "12-12-309", batch: "", serial: "SN-0002", quantity: "500 G" });
+  if (sn2 !== "12-12-309##SN-0002#500 G") fail(`DataMatrix serial χωρίς παρτίδα: ${sn2}`);
+  const four = labelsPdf(jsPDF, bwipjs, fonts, [{ data: { ...label, serial: "SN-0001" }, copies: 1 }], DEFAULT_LABEL_OPTIONS);
+  fs.writeFileSync(path.join(outDir, "sample-label-batch-serial.pdf"), Buffer.from(four.doc.output("arraybuffer")));
   const { doc, pages } = labelsPdf(jsPDF, bwipjs, fonts, [{ data: label, copies: 2 }], DEFAULT_LABEL_OPTIONS);
   const buf = Buffer.from(doc.output("arraybuffer"));
   fs.writeFileSync(path.join(outDir, "sample-label.pdf"), buf);
