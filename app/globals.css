@@ -1138,3 +1138,26 @@ label.field select {
 .sl-state.repack { background: var(--reserved-bg); color: var(--reserved); }
 .sl-state.partial { background: rgba(217, 154, 0, 0.15); color: #a86f00; }
 .sl-state.none { background: var(--occupied-bg); color: var(--occupied); }
+.sl-quick { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sl-tag.abroad { margin-left: 6px; background: #efe7fb; color: #6b3fc4; }
+button.sl-caret { all: unset; cursor: pointer; padding: 0 4px; color: var(--ink-dim); font-size: 11px; }
+a.sl-open { color: var(--link); text-decoration: none; }
+a.sl-open:hover { text-decoration: underline; }
+
+/* προβολή λίστας πώλησης */
+.sl-status.big { font-size: 14px; vertical-align: middle; margin-left: 8px; }
+.sv-line { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--border); border-radius: var(--r); padding: 10px 12px; box-shadow: var(--shadow); }
+.sv-line.ok { border-left-color: #12805c; }
+.sv-line.repack { border-left-color: var(--reserved); }
+.sv-line.partial { border-left-color: #d99a00; }
+.sv-line.none { border-left-color: #c4291c; }
+.sv-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-bottom: 6px; }
+.sv-code { font-weight: 800; font-size: 13px; }
+.sv-desc { font-weight: 600; font-size: 13px; flex: 1 1 260px; }
+.sv-nums { font-size: 12.5px; color: var(--ink-dim); white-space: nowrap; }
+.sv-nums b { color: var(--ink); }
+.sv-stock { border: 1px solid var(--border); border-radius: var(--r-sm); }
+.sv-stock tr.sv-take td { background: rgba(255, 204, 0, 0.18); font-weight: 600; }
+.sv-none { padding: 4px 0; }
+.sv-repack { margin-top: 8px; }
+.sv-repack-head { font-size: 12.5px; font-weight: 700; color: var(--reserved); margin-bottom: 4px; }

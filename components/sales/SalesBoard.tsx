@@ -6,31 +6,25 @@ import LivePill from "@/components/LivePill";
 import { createClient } from "@/lib/supabase/client";
 import { loadPdfFonts } from "@/lib/pdfFonts";
 import { useWmsLive } from "@/lib/live";
-import { indexStock, type Recipe, type StockIndex, type StockRow } from "@/lib/repack";
+import type { Recipe, StockIndex } from "@/lib/repack";
+import { loadSalesContext, SALES_COLS } from "@/lib/salesData";
 import { evaluateOrders, isRepackCode, type OrderColor, type OrderEval } from "@/lib/sales";
 import type { OrderRow } from "@/lib/exports";
 
 type Status = "open" | "completed" | "all";
-type F = { status: Status; customer: string; item: string; doc: string; erp: string; list: string; from: string; to: string };
+type Region = "all" | "gr" | "abroad";
+type F = { status: Status; region: Region; customer: string; item: string; doc: string; erp: string; list: string; from: string; to: string };
 const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-const EMPTY = (): F => ({ status: "open", customer: "", item: "", doc: "", erp: "", list: "", from: iso(new Date(Date.now() - 30 * 86400000)), to: iso(new Date()) });
+const EMPTY = (): F => ({ status: "open", region: "all", customer: "", item: "", doc: "", erp: "", list: "", from: iso(new Date(Date.now() - 30 * 86400000)), to: iso(new Date()) });
 const LS = "sales.filters.v1";
+const daysAgo = (n: number) => iso(new Date(Date.now() - n * 86400000));
 const LIMIT = 5000;
 const esc = (s: string) => s.trim().replace(/[\\%_]/g, (c) => `\\${c}`);
 const fmtDt = (s: string | null) => (s ? new Date(s).toLocaleString("el-GR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }) : "");
 const fmtQ = (n: number) => n.toLocaleString("el-GR", { maximumFractionDigits: 3 });
-const COLS =
-  "id, order_id, list_no, doc_type, doc_no, erp_code, order_date, customer, item, description, lot, sn, qty, init_qty, from_pos, to_pos, wms_status, line_no, collected, collected_at, collected_by, picker, is_completed, is_strict";
+const COLS = SALES_COLS;
 const COLOR_LABEL: Record<OrderColor, string> = { green: "Όλα διαθέσιμα", yellow: "Μερική συλλογή", red: "Χωρίς απόθεμα" };
 const STATE_LABEL = { ok: "Διαθέσιμο", repack: "Ανασυσκευασία", partial: "Μερικό", none: "Δεν υπάρχει" } as const;
-
-async function inChunks<T>(values: string[], size: number, fn: (part: string[]) => Promise<T[]>): Promise<T[]> {
-  const out: T[] = [];
-  const parts: string[][] = [];
-  for (let i = 0; i < values.length; i += size) parts.push(values.slice(i, i + size));
-  for (let i = 0; i < parts.length; i += 6) (await Promise.all(parts.slice(i, i + 6).map(fn))).forEach((r) => out.push(...r));
-  return out;
-}
 
 export default function SalesBoard({ userEmail, role }: { userEmail: string | null; role: "admin" | "staff" }) {
   const [f, setF] = useState<F>(EMPTY);
@@ -78,6 +72,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
       let q = sb.from("wms_orders_v").select(COLS, { count: "exact" }).eq("doc_type", "SALEXPORTLS");
       if (ff.status === "open") q = q.eq("is_completed", false);
       if (ff.status === "completed") q = q.eq("is_completed", true);
+      if (ff.region !== "all") q = q.eq("is_abroad", ff.region === "abroad");
       if (ff.customer.trim()) q = q.ilike("customer", `%${esc(ff.customer)}%`);
       if (ff.item.trim()) q = q.ilike("item", `${esc(ff.item)}%`);
       if (ff.doc.trim()) q = q.ilike("doc_no", `%${esc(ff.doc)}%`);
@@ -93,36 +88,8 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
       const { data, error: err, count } = await q.order("order_date", { ascending: false }).order("list_no", { ascending: false }).order("line_no").limit(LIMIT);
       if (err) throw new Error(err.message);
       const list = ((data ?? []) as OrderRow[]).map((r) => ({ ...r, qty: r.qty == null ? null : Number(r.qty), init_qty: r.init_qty == null ? null : Number(r.init_qty) }));
-      // προδιαγραφές ανασυσκευασίας για 00-* / 71-*
-      const items = [...new Set(list.map((r) => r.item).filter(Boolean))];
-      const finals = items.filter(isRepackCode);
-      const recRows = await inChunks(finals, 150, async (part) => {
-        const { data: d, error: e2 } = await sb.from("repack_recipes").select("id, product_code, description").in("product_code", part);
-        if (e2) throw new Error(e2.message);
-        return (d ?? []) as { id: string; product_code: string; description: string }[];
-      });
-      const compRows = await inChunks(
-        recRows.map((r) => r.id),
-        150,
-        async (part) => {
-          const { data: d, error: e2 } = await sb.from("repack_components").select("recipe_id, code, description, qty, unit").in("recipe_id", part).order("sort");
-          if (e2) throw new Error(e2.message);
-          return (d ?? []) as { recipe_id: string; code: string; description: string; qty: number | string; unit: string }[];
-        }
-      );
-      const byRecipe = new Map<string, Recipe>();
-      for (const r of recRows) byRecipe.set(r.id, { id: r.id, product_code: r.product_code, description: r.description, components: [] });
-      for (const c of compRows) byRecipe.get(c.recipe_id)?.components.push({ code: c.code, description: c.description, qty: Number(c.qty), unit: c.unit });
-      const recMap = new Map<string, Recipe[]>();
-      for (const r of byRecipe.values()) if (r.components.length) recMap.set(r.product_code, [...(recMap.get(r.product_code) ?? []), r]);
-      // απόθεμα: είδη + συστατικά
-      const codes = [...new Set([...items, ...compRows.map((c) => c.code)])];
-      const stock = await inChunks(codes, 150, async (part) => {
-        const { data: d, error: e2 } = await sb.from("wms_stock_v").select("item, position, area, lot, expiry, qty, description").in("item", part).limit(10000);
-        if (e2) throw new Error(e2.message);
-        return ((d ?? []) as (Omit<StockRow, "unit" | "qty"> & { qty: number | string })[]).map((s) => ({ ...s, qty: Number(s.qty), unit: "", lot: s.lot ?? "", expiry: s.lot ? s.expiry ?? null : null }));
-      });
-      setIdx(indexStock(stock as StockRow[]));
+      const { idx: newIdx, recipes: recMap } = await loadSalesContext(list);
+      setIdx(newIdx);
       setRecipes(recMap);
       setRows(list);
       setTotal(count ?? null);
@@ -165,6 +132,15 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
   const toggleOpen = (k: string) => setOpen((s) => (s.has(k) ? new Set([...s].filter((x) => x !== k)) : new Set([...s, k])));
   const toggleSel = (k: string, on: boolean) => setSel((s) => (on ? new Set([...s, k]) : new Set([...s].filter((x) => x !== k))));
   const allSel = shown.length > 0 && shown.every((o) => sel.has(o.key));
+
+  // γρήγορα φίλτρα: αλλάζουν και ψάχνουν αμέσως
+  function quick(patch: Partial<F>) {
+    const nf = { ...f, ...patch };
+    setF(nf);
+    search(undefined, false, nf);
+  }
+  const viewUrl = (key: string) => `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/sales/view/?list=${encodeURIComponent(key)}`;
+  const openView = (key: string) => window.open(viewUrl(key), `lista-${key}`);
 
   const field = (k: keyof F, label: string, ph = "", type = "text") => (
     <label className="field">
@@ -211,9 +187,32 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
           {field("erp", "Κωδικός ERP")}
           {field("from", "Από ημερομηνία", "", "date")}
           {field("to", "Έως ημερομηνία", "", "date")}
+          <label className="field">
+            Ελλάδα / Εξωτερικό
+            <select value={f.region} onChange={(e) => quick({ region: e.target.value as Region })}>
+              <option value="all">Όλοι</option>
+              <option value="gr">Ελλάδα</option>
+              <option value="abroad">Εξωτερικό</option>
+            </select>
+          </label>
           <div className="mv-buttons">
             <button type="submit" className="btn primary" disabled={loading}>
               {loading ? "Φόρτωση…" : "Αναζήτηση"}
+            </button>
+          </div>
+          <div className="sl-quick">
+            <span className="rp-hint">Γρήγορα:</span>
+            <button type="button" className={`sl-chip ${f.from === iso(new Date()) && f.to === iso(new Date()) ? "on" : ""}`} onClick={() => quick({ from: iso(new Date()), to: iso(new Date()) })}>
+              Σήμερα
+            </button>
+            <button type="button" className={`sl-chip ${f.from === daysAgo(1) && f.to === iso(new Date()) ? "on" : ""}`} onClick={() => quick({ from: daysAgo(1), to: iso(new Date()) })}>
+              Από χθες
+            </button>
+            <button type="button" className={`sl-chip ${f.from === daysAgo(7) ? "on" : ""}`} onClick={() => quick({ from: daysAgo(7), to: iso(new Date()) })}>
+              7 ημέρες
+            </button>
+            <button type="button" className={`sl-chip ${f.from === daysAgo(30) ? "on" : ""}`} onClick={() => quick({ from: daysAgo(30), to: iso(new Date()) })}>
+              30 ημέρες
             </button>
           </div>
         </form>
@@ -265,14 +264,32 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
                 const missing = o.lines.filter((l) => l.state === "none" || l.state === "partial").length;
                 return (
                   <tbody key={o.key}>
-                    <tr className={`sl-row ${o.completed ? "done" : o.color}`} onClick={() => toggleOpen(o.key)}>
+                    <tr className={`sl-row ${o.completed ? "done" : o.color}`} onClick={() => openView(o.key)} title="Άνοιγμα σε νέο παράθυρο με τα αποθέματα">
                       <td onClick={(e) => e.stopPropagation()}>
                         <input type="checkbox" checked={sel.has(o.key)} onChange={(e) => toggleSel(o.key, e.target.checked)} aria-label={`Επιλογή λίστας ${o.key}`} />
                       </td>
                       <td className="mono">
-                        <span className="sl-caret">{isOpen ? "▾" : "▸"}</span> <b>{o.key}</b>
+                        <button
+                          type="button"
+                          className="sl-caret"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleOpen(o.key);
+                          }}
+                          aria-label={isOpen ? "Κλείσιμο γραμμών" : "Γραμμές εδώ"}
+                          title="Γραμμές εδώ (χωρίς νέο παράθυρο)"
+                        >
+                          {isOpen ? "▾" : "▸"}
+                        </button>{" "}
+                        <a href={viewUrl(o.key)} target={`lista-${o.key}`} onClick={(e) => e.stopPropagation()} className="sl-open">
+                          <b>{o.key}</b>
+                        </a>
                       </td>
-                      <td className="st-desc">{o.head.customer}</td>
+                      <td className="st-desc">
+                        {o.head.customer}
+                        {o.head.is_abroad && <span className="sl-tag abroad">Εξωτερικό</span>}
+                        {o.head.customer_city && <div className="dim">{o.head.customer_city}</div>}
+                      </td>
                       <td className="mono">
                         {o.head.doc_no}
                         {o.head.erp_code && <div className="dim">ERP {o.head.erp_code}</div>}

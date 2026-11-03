@@ -895,6 +895,10 @@ export type OrderRow = {
   picker: string; // χρήστης WMS που έκανε τη συλλογή
   is_completed?: boolean; // λίστες πωλήσεων: ολοκληρωμένη στο WMS
   is_strict?: boolean; // αυστηρή συλλογή
+  customer_city?: string;
+  customer_zip?: string;
+  customer_vat?: string;
+  is_abroad?: boolean;
 };
 
 /** ομάδες ανά αριθμό λίστας (σειρά εμφάνισης) */

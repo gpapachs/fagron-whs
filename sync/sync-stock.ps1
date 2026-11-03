@@ -723,7 +723,9 @@ function Orders-Query([string]$where, [string]$code = 'SALEXPORTCL') {
 select cast(d.ID as varchar(30)) as id, cast(m.ID as varchar(30)) as order_id, cast(m.Num as varchar(30)) as list_no,
        t.Code as doc_type, m.ErpDocCode as doc_no, m.ErpKey as erp_code,
        cast(cast(m.RecDate as date) as datetime) + cast(cast(m.RecTime as time) as datetime) as order_date,
-       pe.Descr as customer, i.code as item, d.Lot as lot, d.sn as sn, d.Qty1 as qty, d.InitQty1 as init_qty,
+       pe.Descr as customer, pe.City1 as customer_city, pe.ZipCode as customer_zip,
+       coalesce(nullif(ltrim(rtrim(pe.TaxRegNumEU)), ''), pe.TaxRegNum) as customer_vat,
+       i.code as item, d.Lot as lot, d.sn as sn, d.Qty1 as qty, d.InitQty1 as init_qty,
        pf.code as from_pos, pt.code as to_pos,
        case when m.isChecked = 1 then 'checked' when m.isCompleted = 1 then 'completed' else '' end as wms_status,
        d.LineOrder as line_no,
@@ -741,6 +743,16 @@ where $where
 "@
 }
 
+# Ελλάδα ή εξωτερικό: ΑΦΜ με πρόθεμα χώρας ≠ EL/GR -> εξωτερικό· αλλιώς ΤΚ που δεν
+# είναι ελληνικός (5 ψηφία, 1xx xx – 8xx xx) -> εξωτερικό· αλλιώς Ελλάδα.
+function Test-Abroad([string]$vat, [string]$zip) {
+  $v = ($vat -replace '[\s.\-]', '').ToUpperInvariant()
+  if ($v -match '^([A-Z]{2})') { return -not ($Matches[1] -eq 'EL' -or $Matches[1] -eq 'GR') }
+  $z = ($zip -replace '\s', '')
+  if ($z -and $z -notmatch '^[1-8]\d{4}$') { return $true }
+  return $false
+}
+
 function Convert-Orders($t) {
   $rows = New-Object Collections.ArrayList
   foreach ($r in $t.Rows) {
@@ -753,6 +765,8 @@ function Convert-Orders($t) {
       qty = To-Num $r['qty']; init_qty = To-Num $r['init_qty']; from_pos = To-Str $r['from_pos']; to_pos = To-Str $r['to_pos']
       wms_status = To-Str $r['wms_status']; line_no = To-Num $r['line_no']; picker = To-Str $r['picker']
       is_completed = ((To-Num $r['is_completed']) -eq 1); is_strict = ((To-Num $r['is_strict']) -eq 1)
+      customer_city = To-Str $r['customer_city']; customer_zip = To-Str $r['customer_zip']; customer_vat = To-Str $r['customer_vat']
+      is_abroad = (Test-Abroad (To-Str $r['customer_vat']) (To-Str $r['customer_zip']))
     })
   }
   return ,$rows
@@ -772,8 +786,8 @@ function Sync-Orders([string]$code = 'SALEXPORTCL') {
   # ξαναδιαβάζει τις τελευταίες 3 ημέρες (αλλαγές σε λίστες που ήδη υπάρχουν)
   $since = if ($last) { ([DateTime]::Parse([string]$last, $Inv)).ToLocalTime().Date.AddDays(-3) } else { (Get-Date).Date.AddDays(-$days) }
   # μία φορά: ξαναδιαβάζει όλο το διάστημα για να συμπληρωθεί ο χρήστης συλλογής
-  $mark = Join-Path $Here 'orders-picker.done'
-  if ($code -eq 'SALEXPORTCL' -and -not (Test-Path $mark)) { $since = (Get-Date).Date.AddDays(-$days) }
+  $mark = Join-Path $Here "orders-v2-$code.done"
+  if (-not (Test-Path $mark)) { $since = (Get-Date).Date.AddDays(-$days) }
   # λίστες πωλήσεων: και όλες οι ανοιχτές του τελευταίου έτους (μπορεί να είναι παλιές)
   $where = if ($code -eq 'SALEXPORTLS') { "(m.RecDate >= cast(@since as date) or (isnull(m.isCompleted, 0) = 0 and m.RecDate >= dateadd(day, -365, getdate())))" } else { 'm.RecDate >= cast(@since as date)' }
   try { $t = Invoke-Sql (Orders-Query $where $code) @{ since = $since } } catch { Log ("Orders $($code): το query απέτυχε (" + $_.Exception.Message + ")"); return }
@@ -793,7 +807,7 @@ function Sync-Orders([string]$code = 'SALEXPORTCL') {
   }
   try { Upload-Orders $rows } catch { Log ("Orders $($code): ανέβασμα απέτυχε (" + $_ + ")"); return }
   Log ("Orders {0}: {1} γραμμές από {2:dd/MM/yyyy} και μετά." -f $code, $rows.Count, $since)
-  if ($code -eq 'SALEXPORTCL' -and -not (Test-Path $mark)) { [IO.File]::WriteAllText($mark, (Get-Date).ToString('o')) }
+  if (-not (Test-Path $mark)) { [IO.File]::WriteAllText($mark, (Get-Date).ToString('o')) }
   if ($rows.Count) { try { [void](Sb-Request 'POST' '/rest/v1/rpc/wms_signal' @{ p_key = 'orders_sync'; p_n = $rows.Count }) } catch {} }
 }
 
