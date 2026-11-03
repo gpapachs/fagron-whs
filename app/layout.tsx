@@ -28,7 +28,15 @@ export const viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="el" className={`${inter.variable} ${mono.variable}`}>
-      <body>{children}</body>
+      <body>
+        {/* μετά από νέα δημοσίευση: αν λείπει αρχείο της παλιάς έκδοσης, ανανέωση μία φορά */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){function r(m){try{if(/ChunkLoadError|Loading chunk|dynamically imported module/i.test(m)&&!sessionStorage.getItem("whs.reloaded")){sessionStorage.setItem("whs.reloaded","1");location.reload();}}catch(e){}}window.addEventListener("error",function(e){r(String(e&&(e.message||(e.error&&e.error.message))))});window.addEventListener("unhandledrejection",function(e){r(String(e&&e.reason&&(e.reason.message||e.reason)))});setTimeout(function(){try{sessionStorage.removeItem("whs.reloaded")}catch(e){}},15000);})();`,
+          }}
+        />
+        {children}
+      </body>
     </html>
   );
 }
