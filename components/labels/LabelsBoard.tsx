@@ -5,7 +5,8 @@ import AppBar from "@/components/AppBar";
 import { createClient } from "@/lib/supabase/client";
 import { loadPdfFonts } from "@/lib/pdfFonts";
 import { autoEnglish } from "@/lib/translate";
-import { DEFAULT_LABEL_OPTIONS, dataMatrixText, isAscii, type LabelData, type LabelOptions } from "@/lib/labels";
+import { DEFAULT_LABEL_OPTIONS, dataMatrixText, isAscii, pageSize, type LabelData, type LabelOptions } from "@/lib/labels";
+import { loadCanvasFonts, pickPrinter, zebraDpi, zebraPrinters, zebraSend, type ZebraDevice } from "@/lib/zebra";
 import type { ProductSettings } from "@/lib/repack";
 
 export type LabelProduct = { code: string; description: string; components: { code: string; description: string }[] };
@@ -13,6 +14,18 @@ export type LotRow = { item: string; lot: string; expiry: string | null; positio
 
 const LS_OPTS = "labels.options.v1";
 const PRINTER_HINT = "Packaging Station 2";
+const LS_PRINT = "labels.printer.v1";
+type PrintCfg = { printer: string; dpi: "auto" | 203 | 300 | 600; detected: Record<string, number> };
+const DEFAULT_PRINT: PrintCfg = { printer: PRINTER_HINT, dpi: "auto", detected: {} };
+function loadPrint(): PrintCfg {
+  try {
+    const raw = window.localStorage.getItem(LS_PRINT);
+    if (raw) return { ...DEFAULT_PRINT, ...JSON.parse(raw) };
+  } catch {
+    /* τίποτα */
+  }
+  return DEFAULT_PRINT;
+}
 
 function loadOpts(): LabelOptions {
   try {
@@ -64,10 +77,38 @@ export default function LabelsBoard({
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const previewUrl = useRef<string | null>(null);
+  const [printCfg, setPrintCfg] = useState<PrintCfg>(DEFAULT_PRINT);
+  const [zebraList, setZebraList] = useState<ZebraDevice[] | null>(null); // null = άγνωστο / δεν τρέχει
+  const [zebraErr, setZebraErr] = useState<string | null>(null);
 
   const byCode = useMemo(() => new Map(products.map((p) => [p.code, p])), [products]);
 
-  useEffect(() => setOpts(loadOpts()), []);
+  useEffect(() => {
+    setOpts(loadOpts());
+    setPrintCfg(loadPrint());
+    refreshPrinters();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(LS_PRINT, JSON.stringify(printCfg));
+    } catch {
+      /* τίποτα */
+    }
+  }, [printCfg]);
+
+  async function refreshPrinters() {
+    try {
+      const list = await zebraPrinters();
+      setZebraList(list);
+      setZebraErr(list.length ? null : "Το Zebra Browser Print τρέχει αλλά δεν βλέπει εκτυπωτή.");
+      return list;
+    } catch {
+      setZebraList(null);
+      setZebraErr("Δεν βρέθηκε το Zebra Browser Print σε αυτόν τον υπολογιστή.");
+      return null;
+    }
+  }
   useEffect(() => {
     try {
       window.localStorage.setItem(LS_OPTS, JSON.stringify({ offsetXMm: opts.offsetXMm, offsetYMm: opts.offsetYMm, rotation: opts.rotation ?? 0 }));
@@ -192,28 +233,82 @@ export default function LabelsBoard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code, descEl, descEn, qty, batch, opts.offsetXMm, opts.offsetYMm, opts.rotation]);
 
+  /** Απευθείας εκτύπωση: Zebra Browser Print (ZPL, χωρίς παράθυρο). Αν δεν υπάρχει,
+   *  εκτύπωση από τον browser χωρίς PDF (ανοίγει μόνο το παράθυρο επιλογής εκτυπωτή). */
   async function print() {
+    if (!data) return;
     setBusy(true);
     setError(null);
+    setSaved(null);
     try {
-      const { doc } = await build(nCopies);
-      doc.autoPrint();
-      const url = URL.createObjectURL(doc.output("blob"));
-      const w = window.open(url, "_blank");
-      if (!w) setError("Ο browser μπλόκαρε το νέο παράθυρο — επίτρεψε τα αναδυόμενα για αυτή τη σελίδα, ή πάτα «Λήψη PDF».");
+      const [bwip, family, L] = await Promise.all([import("bwip-js"), loadCanvasFonts(), import("@/lib/labels")]);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const engine = (bwip as any).default ?? bwip;
+      const o = { ...opts, preprinted: true };
+      const list = zebraList ?? (await refreshPrinters());
+      const dev = list ? pickPrinter(list, printCfg.printer) : null;
+      if (dev) {
+        let dpi = printCfg.dpi === "auto" ? printCfg.detected[dev.name] : printCfg.dpi;
+        if (!dpi) {
+          dpi = (await zebraDpi(dev)) ?? 203;
+          const got = dpi;
+          setPrintCfg((c) => ({ ...c, detected: { ...c.detected, [dev.name]: got } }));
+        }
+        const bmp = L.labelBitmap(document.createElement("canvas"), engine, data, o, dpi, family);
+        await zebraSend(dev, L.bitmapToZpl(bmp, nCopies));
+        setSaved(`✓ Στάλθηκ${nCopies > 1 ? `αν ${nCopies} ετικέτες` : "ε 1 ετικέτα"} στον ${dev.name} (${dpi} dpi).`);
+      } else {
+        await browserPrint(L, engine, family, o);
+      }
       rememberEnglish();
     } catch (e) {
-      setError(`Η δημιουργία απέτυχε: ${(e as Error).message}`);
+      setError(`Η εκτύπωση απέτυχε: ${(e as Error).message}`);
     } finally {
       setBusy(false);
     }
   }
 
-  async function download() {
+  // εκτύπωση από τον browser με εικόνα ετικέτας (όχι PDF) σε κρυφό iframe
+  async function browserPrint(
+    L: typeof import("@/lib/labels"),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    engine: any,
+    family: string,
+    o: LabelOptions
+  ) {
+    if (!data) return;
+    const canvas = document.createElement("canvas");
+    L.labelBitmap(canvas, engine, data, o, 300, family);
+    const url = canvas.toDataURL("image/png");
+    const { PW, PH } = pageSize(o);
+    const imgs = Array.from({ length: nCopies }, () => `<img src="${url}">`).join("");
+    const frame = document.createElement("iframe");
+    frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
+    frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><style>@page{size:${PW}mm ${PH}mm;margin:0}html,body{margin:0;padding:0}img{display:block;width:${PW}mm;height:${PH}mm;break-after:page;page-break-after:always}img:last-child{break-after:auto;page-break-after:auto}</style></head><body>${imgs}</body></html>`;
+    await new Promise<void>((resolve) => {
+      frame.onload = () => {
+        const w = frame.contentWindow;
+        const imgsReady = Array.from(w?.document.images ?? []).map((im) => (im.complete ? Promise.resolve() : new Promise((r) => (im.onload = r))));
+        Promise.all(imgsReady).then(() => {
+          w?.focus();
+          w?.print();
+          setTimeout(() => frame.remove(), 60000);
+          resolve();
+        });
+      };
+      document.body.appendChild(frame);
+    });
+    setSaved(`Άνοιξε το παράθυρο εκτύπωσης — διάλεξε ${PRINTER_HINT}. Για εκτύπωση με ένα κλικ, εγκατάστησε το Zebra Browser Print (δες «Εκτυπωτής»).`);
+  }
+
+  async function openPdf() {
     setBusy(true);
+    setError(null);
     try {
       const { doc } = await build(nCopies);
-      doc.save(`etiketa-${code}-${batch || "x"}.pdf`);
+      const url = URL.createObjectURL(doc.output("blob"));
+      const w = window.open(url, "_blank");
+      if (!w) doc.save(`etiketa-${code}-${batch || "x"}.pdf`);
       rememberEnglish();
     } catch (e) {
       setError(`Η δημιουργία απέτυχε: ${(e as Error).message}`);
@@ -375,11 +470,18 @@ export default function LabelsBoard({
                   <button type="button" className="btn primary" onClick={print} disabled={!ready || busy}>
                     {busy ? "Δημιουργία…" : `Εκτύπωση ${nCopies > 1 ? `${nCopies} ετικετών` : "ετικέτας"}`}
                   </button>
-                  <button type="button" className="btn ghost" onClick={download} disabled={!ready || busy}>
-                    Λήψη PDF
+                  <button type="button" className="btn ghost" onClick={openPdf} disabled={!ready || busy} title="Άνοιγμα ως PDF (αποθήκευση / αρχείο)">
+                    PDF
                   </button>
                 </div>
                 {!ready && <p className="rp-hint">Συμπλήρωσε Quantity και Batch για εκτύπωση.</p>}
+                {ready && (
+                  <p className="rp-hint">
+                    {zebraList?.length
+                      ? `Απευθείας στον ${pickPrinter(zebraList, printCfg.printer)?.name} (Zebra Browser Print).`
+                      : "Zebra Browser Print: δεν βρέθηκε — η εκτύπωση θα ανοίξει το παράθυρο επιλογής εκτυπωτή."}
+                  </p>
+                )}
               </>
             )}
           </section>
@@ -397,6 +499,59 @@ export default function LabelsBoard({
                 <code>{dmText}</code>
               </details>
             )}
+            <details className="lb-setup">
+              <summary>Εκτυπωτής</summary>
+              {zebraList?.length ? (
+                <>
+                  <label className="field">
+                    Εκτυπωτής Zebra
+                    <select value={pickPrinter(zebraList, printCfg.printer)?.name ?? ""} onChange={(e) => setPrintCfg((c) => ({ ...c, printer: e.target.value }))}>
+                      {zebraList.map((d) => (
+                        <option key={d.uid} value={d.name}>
+                          {d.name} ({d.connection})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    Ανάλυση κεφαλής
+                    <select
+                      value={String(printCfg.dpi)}
+                      onChange={(e) => setPrintCfg((c) => ({ ...c, dpi: e.target.value === "auto" ? "auto" : (Number(e.target.value) as 203 | 300 | 600) }))}
+                    >
+                      <option value="auto">
+                        Αυτόματα{printCfg.detected[pickPrinter(zebraList, printCfg.printer)?.name ?? ""] ? ` (${printCfg.detected[pickPrinter(zebraList, printCfg.printer)?.name ?? ""]} dpi)` : ""}
+                      </option>
+                      <option value="203">203 dpi (8 κουκκίδες/mm)</option>
+                      <option value="300">300 dpi (12 κουκκίδες/mm)</option>
+                      <option value="600">600 dpi</option>
+                    </select>
+                  </label>
+                  <p className="rp-hint">
+                    Αν η ετικέτα βγαίνει μικρότερη ή μεγαλύτερη από το χαρτί, άλλαξε την ανάλυση (τη γράφει το αυτοκόλλητο κάτω από τον εκτυπωτή).
+                  </p>
+                </>
+              ) : (
+                <div className="rp-hint">
+                  <p>
+                    {zebraErr ?? "Έλεγχος…"} Για εκτύπωση <b>με ένα κλικ</b> (χωρίς παράθυρο), στον υπολογιστή του {PRINTER_HINT}:
+                  </p>
+                  <ol>
+                    <li>
+                      Εγκατάστησε το δωρεάν <b>Zebra Browser Print</b> (zebra.com → Support → Software → Browser Print, Windows).
+                    </li>
+                    <li>Άνοιξέ το και βεβαιώσου ότι βλέπει τον {PRINTER_HINT} ως προεπιλεγμένο.</li>
+                    <li>
+                      Πάτα «Έλεγχος ξανά» εδώ και αποδέξου το μήνυμα που θα εμφανιστεί (επιτρέπει σε αυτή τη σελίδα να τυπώνει). Αν δεν συνδέεται, άνοιξε μία
+                      φορά το <code>https://127.0.0.1:9101/ssl_support</code> και πάτα «Συνέχεια».
+                    </li>
+                  </ol>
+                </div>
+              )}
+              <button type="button" className="btn ghost" onClick={refreshPrinters}>
+                Έλεγχος ξανά
+              </button>
+            </details>
             <details className="lb-setup" open={showSetup} onToggle={(e) => setShowSetup((e.target as HTMLDetailsElement).open)}>
               <summary>Προσανατολισμός & ευθυγράμμιση</summary>
               <label className="field">

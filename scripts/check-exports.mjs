@@ -13,7 +13,7 @@ import { buildPlan, filterStockForRecipes, indexStock, picksByRecipe } from "../
 import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkbook } from "../lib/exports.ts";
 import * as jobsLib from "../lib/jobs.ts";
 import bwipjs from "bwip-js";
-import { DEFAULT_LABEL_OPTIONS, dataMatrixText, labelsPdf } from "../lib/labels.ts";
+import { DEFAULT_LABEL_OPTIONS, bitmapToZpl, dataMatrixText, labelsPdf } from "../lib/labels.ts";
 import { autoEnglish } from "../lib/translate.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -180,6 +180,18 @@ if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) 
     if (w !== want[0] || h !== want[1]) fail(`στροφή ${rotation}: σελίδα ${w}×${h}`);
     fs.writeFileSync(path.join(outDir, `sample-label-rot${rotation}.pdf`), Buffer.from(r.doc.output("arraybuffer")));
   }
+}
+
+// ---- ZPL (απευθείας εκτύπωση Zebra): 10×2 κουκκίδες, 1η στήλη μαύρη
+{
+  const bits = new Uint8Array(20);
+  bits[0] = 1;
+  bits[10] = 1;
+  bits[9] = 1;
+  const z = bitmapToZpl({ width: 10, height: 2, bits }, 4);
+  const want = "^XA^PW10^LL2^LH0,0^FO0,0^GFA,4,4,2,80408000^FS^PQ4,0,1,Y^XZ";
+  if (z !== want) fail(`ZPL: ${z} αντί για ${want}`);
+  console.log("ZPL ^GFA OK");
 }
 
 // ---- αυτόματη αγγλική περιγραφή

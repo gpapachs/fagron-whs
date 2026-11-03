@@ -72,12 +72,118 @@ function matrix(bwip: Bwip, text: string): Raw {
   return { pixx: r.pixx, pixy: r.pixy, pixs: Array.from(r.pixs as ArrayLike<number>) };
 }
 
+// ------------------------------------------------------------------ διάταξη
+// Η διάταξη υπολογίζεται ΜΙΑ φορά ως λίστα «εντολών» (κείμενο / DataMatrix / λογότυπο)
+// και ζωγραφίζεται είτε σε PDF (jsPDF) είτε σε bitmap για απευθείας εκτύπωση στη Zebra.
+// Συντεταγμένες σε mm, πάνω-αριστερά, μέγεθος γραμματοσειράς σε pt, y = baseline.
+
+export const PT_MM = 25.4 / 72;
+/** πλάτος κειμένου σε mm για δοσμένο μέγεθος (pt) */
+export type Measure = (text: string, sizePt: number, bold: boolean) => number;
+
+export type LabelOp =
+  | { t: "text"; x: number; y: number; text: string; size: number; bold: boolean; align?: "center"; gray?: boolean }
+  | { t: "matrix"; x: number; y: number; size: number; m: Raw }
+  | { t: "logo"; x: number; y: number; h: number; maxW: number };
+
+function fit(measure: Measure, text: string, maxW: number, size: number, min: number, bold: boolean) {
+  let s = size;
+  while (s > min && measure(text, s, bold) > maxW) s -= 0.2;
+  return s;
+}
+
+function wrap(measure: Measure, text: string, maxW: number, size: number, bold: boolean): string[] {
+  const lines: string[] = [];
+  let cur = "";
+  for (const w of text.split(/\s+/).filter(Boolean)) {
+    const next = cur ? `${cur} ${w}` : w;
+    if (cur && measure(next, size, bold) > maxW) {
+      lines.push(cur);
+      cur = w;
+    } else cur = next;
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
+export function layoutLabel(data: LabelData, mat: Raw, opts: LabelOptions, measure: Measure): LabelOp[] {
+  const W = opts.widthMm;
+  const H = opts.heightMm;
+  const k = H / 35; // κλίμακα αν αλλάξει το μέγεθος
+  const m = 2.4 * k; // περιθώριο
+  const ox = opts.offsetXMm || 0;
+  const oy = opts.offsetYMm || 0;
+  const ops: LabelOp[] = [];
+  const text = (x: number, y: number, t: string, size: number, bold: boolean) =>
+    ops.push({ t: "text", x: x + ox, y: y + oy, text: t, size, bold });
+  const maxW = W - 2 * m;
+
+  // 1. ελληνική περιγραφή (έντονα) -- μία γραμμή αν χωράει, αλλιώς δύο
+  let extra = 0;
+  const sEl = fit(measure, data.descEl, maxW, 7.4 * k, 6.2 * k, true);
+  if (measure(data.descEl, sEl, true) > maxW) {
+    const size = Math.min(sEl, 6.2 * k);
+    wrap(measure, data.descEl, maxW, size, true)
+      .slice(0, 2)
+      .forEach((l, i) => text(m, m + 2.4 * k + i * size * 1.1 * PT_MM, l, size, true));
+    extra = 2.3 * k;
+  } else {
+    text(m, m + 2.6 * k, data.descEl, sEl, true);
+  }
+
+  // 2. αγγλική περιγραφή
+  if (data.descEn) {
+    const s = fit(measure, data.descEn, maxW, 6.6 * k, 4.8 * k, false);
+    text(m, m + 7.2 * k + extra, data.descEn, s, false);
+  }
+
+  // 3. στοιχεία (αριστερά)
+  const rows: [string, string][] = [
+    ["Item Code", data.code],
+    ["Quantity", data.quantity != null ? String(data.quantity) : ""],
+    ["Batch.", data.batch],
+  ];
+  const y0 = m + 12.6 * k + extra * 0.6;
+  const lh = 3.6 * k;
+  rows.forEach(([l, v], i) => {
+    text(m + 0.6 * k, y0 + i * lh, l, 6.6 * k, false);
+    text(m + 12.8 * k, y0 + i * lh, ":", 6.6 * k, false);
+    text(m + 14.6 * k, y0 + i * lh, v, 6.6 * k, false);
+  });
+
+  // 4. λογότυπο ή όνομα εταιρείας (μόνο σε λευκό χαρτί)
+  const logoY = y0 + 3 * lh - 1.2 * k;
+  if (!opts.preprinted) {
+    if (opts.logoDataUrl) ops.push({ t: "logo", x: m + 3.6 * k, y: logoY, h: 4.6 * k, maxW: 26 * k });
+    else if (opts.companyText) ops.push({ t: "text", x: m + 3.6 * k, y: logoY + 3.6 * k, text: opts.companyText, size: 9 * k, bold: true });
+  }
+
+  // 5. DataMatrix (δεξιά) -- με τίτλο δύο γραμμών λίγο μικρότερο και χαμηλότερα
+  const dmSize = extra ? 13 * k : 15.5 * k;
+  ops.push({ t: "matrix", x: W - m - dmSize - 1.6 * k + ox, y: (extra ? m + 9.8 * k + extra : m + 8.6 * k) + oy, size: dmSize, m: mat });
+
+  // 6. υποσέλιδο (μόνο σε λευκό χαρτί)
+  if (!opts.preprinted) {
+    const s = fit(measure, opts.footer, maxW, 4.6 * k, 3.6 * k, false);
+    ops.push({ t: "text", x: W / 2, y: H - m + 0.4 * k, text: opts.footer, size: s, bold: false, align: "center", gray: true });
+  }
+  return ops;
+}
+
+/** μέγεθος σελίδας/bitmap μετά την περιστροφή */
+export function pageSize(opts: LabelOptions) {
+  const rot = opts.rotation ?? 0;
+  const side = rot === 90 || rot === 270;
+  return { rot, PW: side ? opts.heightMm : opts.widthMm, PH: side ? opts.widthMm : opts.heightMm };
+}
+
+// ------------------------------------------------------------------ PDF
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function drawMatrix(doc: any, m: Raw, x: number, y: number, size: number) {
+function drawMatrixPdf(doc: any, m: Raw, x: number, y: number, size: number) {
   const cell = size / Math.max(m.pixx, m.pixy);
   doc.setFillColor(0, 0, 0);
   for (let row = 0; row < m.pixy; row++) {
-    // ενώνει συνεχόμενα μαύρα κελιά της ίδιας σειράς σε ένα ορθογώνιο (μικρότερο, καθαρότερο PDF)
+    // ενώνει συνεχόμενα μαύρα κελιά της ίδιας σειράς σε ένα ορθογώνιο
     let start = -1;
     for (let col = 0; col <= m.pixx; col++) {
       const on = col < m.pixx && m.pixs[row * m.pixx + col] === 1;
@@ -90,18 +196,6 @@ function drawMatrix(doc: any, m: Raw, x: number, y: number, size: number) {
   }
 }
 
-/** Το κείμενο σε μία γραμμή: μικραίνει τη γραμματοσειρά μέχρι να χωρέσει (όχι κάτω από min). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function fitText(doc: any, text: string, maxW: number, size: number, min: number) {
-  let s = size;
-  doc.setFontSize(s);
-  while (s > min && doc.getTextWidth(text) > maxW) {
-    s -= 0.2;
-    doc.setFontSize(s);
-  }
-  return s;
-}
-
 export function labelsPdf(
   jsPDF: JsPDFCtor,
   bwip: Bwip,
@@ -111,28 +205,24 @@ export function labelsPdf(
 ) {
   const W = opts.widthMm;
   const H = opts.heightMm;
-  const rot = opts.rotation ?? 0;
+  const { rot, PW, PH } = pageSize(opts);
   const cm = rotationCm(rot, W, H);
-  // μέγεθος ΣΕΛΙΔΑΣ: στις 90/270 αντιμετατίθενται πλάτος/ύψος
-  const PW = rot === 90 || rot === 270 ? H : W;
-  const PH = rot === 90 || rot === 270 ? W : H;
   // ΠΡΟΣΟΧΗ: format [PW, PH] με ρητό orientation, αλλιώς το jsPDF τα αντιστρέφει
   const doc = new jsPDF({ orientation: PW >= PH ? "landscape" : "portrait", unit: "mm", format: [PW, PH], compress: true });
   doc.addFileToVFS("DejaVu.ttf", fonts.regular);
   doc.addFont("DejaVu.ttf", "DejaVu", "normal");
   doc.addFileToVFS("DejaVu-Bold.ttf", fonts.bold);
   doc.addFont("DejaVu-Bold.ttf", "DejaVu", "bold");
+  const measure: Measure = (t, size, bold) => {
+    doc.setFont("DejaVu", bold ? "bold" : "normal");
+    doc.setFontSize(size);
+    return doc.getTextWidth(t);
+  };
 
-  const k = H / 35; // κλίμακα αν αλλάξει το μέγεθος
-  const m = 2.4 * k; // περιθώριο
-  const ox = opts.offsetXMm || 0;
-  const oy = opts.offsetYMm || 0;
-  const dm = 15.5 * k; // πλευρά DataMatrix
   let first = true;
   let pages = 0;
-
   for (const { data, copies } of labels) {
-    const mat = matrix(bwip, dataMatrixText(data));
+    const ops = layoutLabel(data, matrix(bwip, dataMatrixText(data)), opts, measure);
     for (let c = 0; c < copies; c++) {
       if (!first) doc.addPage([PW, PH], PW >= PH ? "landscape" : "portrait");
       first = false;
@@ -141,80 +231,116 @@ export function labelsPdf(
         doc.internal.write("q");
         doc.internal.write(`${cm.map((v) => +v.toFixed(4)).join(" ")} cm`);
       }
-      doc.setTextColor(0, 0, 0);
-      // μετατόπιση: όλες οι συντεταγμένες παρακάτω περνούν από εδώ
-      const T = (x: number, y: number) => [x + ox, y + oy] as const;
-
-      // 1. ελληνική περιγραφή (έντονα) -- μία γραμμή αν χωράει, αλλιώς δύο
-      doc.setFont("DejaVu", "bold");
-      let extra = 0;
-      const sEl = fitText(doc, data.descEl, W - 2 * m, 7.4 * k, 6.2 * k);
-      if (doc.getTextWidth(data.descEl) > W - 2 * m) {
-        doc.setFontSize(Math.min(sEl, 6.2 * k));
-        const lines = doc.splitTextToSize(data.descEl, W - 2 * m).slice(0, 2);
-        doc.text(lines, ...T(m, m + 2.4 * k), { lineHeightFactor: 1.1 });
-        extra = 2.3 * k;
-      } else {
-        doc.text(data.descEl, ...T(m, m + 2.6 * k));
-      }
-
-      // 2. αγγλική περιγραφή
-      doc.setFont("DejaVu", "normal");
-      if (data.descEn) {
-        fitText(doc, data.descEn, W - 2 * m, 6.6 * k, 4.8 * k);
-        doc.text(data.descEn, ...T(m, m + 7.2 * k + extra));
-      }
-
-      // 3. στοιχεία (αριστερά)
-      const rows: [string, string][] = [
-        ["Item Code", data.code],
-        ["Quantity", data.quantity != null ? String(data.quantity) : ""],
-        ["Batch.", data.batch],
-      ];
-      const y0 = m + 12.6 * k + extra * 0.6;
-      const lh = 3.6 * k;
-      doc.setFontSize(6.6 * k);
-      rows.forEach(([l, v], i) => {
-        doc.setFont("DejaVu", "normal");
-        doc.text(l, ...T(m + 0.6 * k, y0 + i * lh));
-        doc.text(":", ...T(m + 12.8 * k, y0 + i * lh));
-        doc.text(v, ...T(m + 14.6 * k, y0 + i * lh));
-      });
-
-      // 4. λογότυπο ή όνομα εταιρείας
-      const logoY = y0 + 3 * lh - 1.2 * k;
-      if (opts.preprinted) {
-        /* προεκτυπωμένο λογότυπο */
-      } else if (opts.logoDataUrl) {
-        try {
-          const fmt = opts.logoDataUrl.startsWith("data:image/png") ? "PNG" : "JPEG";
-          const props = doc.getImageProperties(opts.logoDataUrl);
-          const h = 4.6 * k;
-          const w = Math.min((props.width / props.height) * h, 26 * k);
-          doc.addImage(opts.logoDataUrl, fmt, m + 3.6 * k, logoY, w, (w / props.width) * props.height);
-        } catch {
-          /* χαλασμένη εικόνα -> χωρίς λογότυπο */
+      for (const op of ops) {
+        if (op.t === "text") {
+          doc.setFont("DejaVu", op.bold ? "bold" : "normal");
+          doc.setFontSize(op.size);
+          if (op.gray) doc.setTextColor(60, 60, 60);
+          else doc.setTextColor(0, 0, 0);
+          doc.text(op.text, op.x, op.y, op.align ? { align: op.align } : undefined);
+        } else if (op.t === "matrix") {
+          drawMatrixPdf(doc, op.m, op.x, op.y, op.size);
+        } else if (op.t === "logo" && opts.logoDataUrl) {
+          try {
+            const fmt = opts.logoDataUrl.startsWith("data:image/png") ? "PNG" : "JPEG";
+            const props = doc.getImageProperties(opts.logoDataUrl);
+            const w = Math.min((props.width / props.height) * op.h, op.maxW);
+            doc.addImage(opts.logoDataUrl, fmt, op.x, op.y, w, (w / props.width) * props.height);
+          } catch {
+            /* χαλασμένη εικόνα -> χωρίς λογότυπο */
+          }
         }
-      } else if (opts.companyText) {
-        doc.setFont("DejaVu", "bold");
-        doc.setFontSize(9 * k);
-        doc.text(opts.companyText, m + 3.6 * k, logoY + 3.6 * k);
-      }
-
-      // 5. DataMatrix (δεξιά)
-      // με τίτλο δύο γραμμών: λίγο μικρότερο και χαμηλότερα, κάτω από την αγγλική περιγραφή
-      const dmSize = extra ? 13 * k : dm;
-      drawMatrix(doc, mat, ...T(W - m - dmSize - 1.6 * k, extra ? m + 9.8 * k + extra : m + 8.6 * k), dmSize);
-
-      // 6. υποσέλιδο (μόνο σε λευκό χαρτί)
-      if (!opts.preprinted) {
-        doc.setFont("DejaVu", "normal");
-        doc.setTextColor(60, 60, 60);
-        fitText(doc, opts.footer, W - 2 * m, 4.6 * k, 3.6 * k);
-        doc.text(opts.footer, W / 2, H - m + 0.4 * k, { align: "center" });
       }
       if (cm) doc.internal.write("Q");
     }
   }
   return { doc, pages };
+}
+
+// ------------------------------------------------------------------ bitmap (Zebra)
+/** Μονόχρωμο bitmap: 1 = μαύρο. Γραμμή-γραμμή, width × height κουκκίδες. */
+export type MonoBitmap = { width: number; height: number; bits: Uint8Array };
+
+/**
+ * Ζωγραφίζει την ετικέτα σε canvas στην ανάλυση του εκτυπωτή (dpi) και επιστρέφει
+ * μονόχρωμο bitmap. Το DataMatrix μπαίνει με ΑΚΕΡΑΙΟ αριθμό κουκκίδων ανά κελί
+ * (καθαρό σκανάρισμα). `fontFamily`: FontFace με τα DejaVu ήδη φορτωμένα.
+ */
+export function labelBitmap(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  canvas: any,
+  bwip: Bwip,
+  data: LabelData,
+  opts: LabelOptions,
+  dpi: number,
+  fontFamily: string
+): MonoBitmap {
+  const d = dpi / 25.4; // κουκκίδες ανά mm
+  const { rot, PW, PH } = pageSize(opts);
+  const cw = Math.round(PW * d);
+  const ch = Math.round(PH * d);
+  canvas.width = cw;
+  canvas.height = ch;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, cw, ch);
+  // περιστροφή χώρου ετικέτας (κουκκίδες) -> σελίδα
+  if (rot === 90) ctx.setTransform(0, 1, -1, 0, cw, 0);
+  else if (rot === 180) ctx.setTransform(-1, 0, 0, -1, cw, ch);
+  else if (rot === 270) ctx.setTransform(0, -1, 1, 0, 0, ch);
+  const font = (size: number, bold: boolean) => `${bold ? "bold " : ""}${size * PT_MM * d}px ${fontFamily}`;
+  const measure: Measure = (t, size, bold) => {
+    ctx.font = font(size, bold);
+    return ctx.measureText(t).width / d;
+  };
+  const ops = layoutLabel(data, matrix(bwip, dataMatrixText(data)), opts, measure);
+  ctx.textBaseline = "alphabetic";
+  for (const op of ops) {
+    if (op.t === "text") {
+      ctx.font = font(op.size, op.bold);
+      ctx.fillStyle = "#000";
+      ctx.textAlign = op.align ?? "left";
+      ctx.fillText(op.text, op.x * d, op.y * d);
+    } else if (op.t === "matrix") {
+      const n = Math.max(op.m.pixx, op.m.pixy);
+      const cell = Math.max(1, Math.floor((op.size * d) / n));
+      // κεντραρισμένο στη θέση του, σε ακέραιες κουκκίδες
+      const x0 = Math.round(op.x * d + (op.size * d - cell * n) / 2);
+      const y0 = Math.round(op.y * d + (op.size * d - cell * n) / 2);
+      ctx.fillStyle = "#000";
+      for (let r = 0; r < op.m.pixy; r++)
+        for (let c = 0; c < op.m.pixx; c++) if (op.m.pixs[r * op.m.pixx + c] === 1) ctx.fillRect(x0 + c * cell, y0 + r * cell, cell, cell);
+    }
+    // λογότυπο: μόνο σε PDF (στο προεκτυπωμένο χαρτί δεν τυπώνεται)
+  }
+  const img = ctx.getImageData(0, 0, cw, ch).data;
+  const bits = new Uint8Array(cw * ch);
+  for (let i = 0; i < cw * ch; i++) {
+    const lum = 0.299 * img[i * 4] + 0.587 * img[i * 4 + 1] + 0.114 * img[i * 4 + 2];
+    bits[i] = lum < 150 ? 1 : 0;
+  }
+  return { width: cw, height: ch, bits };
+}
+
+/** ZPL με όλη την ετικέτα ως εικόνα (^GFA): ελληνικά χωρίς γραμματοσειρές στον εκτυπωτή. */
+export function bitmapToZpl(bmp: MonoBitmap, copies: number): string {
+  const bpr = Math.ceil(bmp.width / 8);
+  const total = bpr * bmp.height;
+  const hex = "0123456789ABCDEF";
+  let rows = "";
+  for (let y = 0; y < bmp.height; y++) {
+    let line = "";
+    for (let b = 0; b < bpr; b++) {
+      let v = 0;
+      for (let i = 0; i < 8; i++) {
+        const x = b * 8 + i;
+        if (x < bmp.width && bmp.bits[y * bmp.width + x]) v |= 0x80 >> i;
+      }
+      line += hex[v >> 4] + hex[v & 15];
+    }
+    rows += line;
+  }
+  const n = Math.max(1, Math.floor(copies));
+  return `^XA^PW${bmp.width}^LL${bmp.height}^LH0,0^FO0,0^GFA,${total},${total},${bpr},${rows}^FS^PQ${n},0,1,Y^XZ`;
 }
