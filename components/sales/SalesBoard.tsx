@@ -13,7 +13,7 @@ import type { OrderRow } from "@/lib/exports";
 type Status = "open" | "completed" | "all";
 type F = { status: Status; customer: string; item: string; doc: string; erp: string; list: string; from: string; to: string };
 const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-const EMPTY = (): F => ({ status: "open", customer: "", item: "", doc: "", erp: "", list: "", from: iso(new Date(Date.now() - 7 * 86400000)), to: iso(new Date()) });
+const EMPTY = (): F => ({ status: "open", customer: "", item: "", doc: "", erp: "", list: "", from: iso(new Date(Date.now() - 30 * 86400000)), to: iso(new Date()) });
 const LS = "sales.filters.v1";
 const LIMIT = 5000;
 const esc = (s: string) => s.trim().replace(/[\\%_]/g, (c) => `\\${c}`);
@@ -85,8 +85,8 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
       if (ff.list.trim()) {
         const lists = ff.list.split(/[\s,;]+/).filter(Boolean);
         q = lists.length > 1 ? q.in("list_no", lists) : q.eq("list_no", lists[0]);
-      } else if (ff.status !== "open") {
-        // οι ανοιχτές φαίνονται όλες· οι ολοκληρωμένες ανά ημερομηνία
+      } else {
+        // στο WMS μένουν ανοιχτές και πολύ παλιές λίστες -- προεπιλογή οι τελευταίες 30 ημέρες
         if (ff.from) q = q.gte("order_date", new Date(`${ff.from}T00:00:00`).toISOString());
         if (ff.to) q = q.lt("order_date", new Date(new Date(`${ff.to}T00:00:00`).getTime() + 86400000).toISOString());
       }
@@ -209,8 +209,8 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
           {field("list", "Αριθμός λίστας", "π.χ. 544424")}
           {field("doc", "Παραστατικό")}
           {field("erp", "Κωδικός ERP")}
-          {f.status !== "open" && field("from", "Από ημερομηνία", "", "date")}
-          {f.status !== "open" && field("to", "Έως ημερομηνία", "", "date")}
+          {field("from", "Από ημερομηνία", "", "date")}
+          {field("to", "Έως ημερομηνία", "", "date")}
           <div className="mv-buttons">
             <button type="submit" className="btn primary" disabled={loading}>
               {loading ? "Φόρτωση…" : "Αναζήτηση"}
