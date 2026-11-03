@@ -10,10 +10,11 @@
     .\sync-stock.cmd -DryRun    τρέχει το stock-query.sql, δείχνει τι θα ανέβει
     .\sync-stock.cmd            συγχρονισμός (αυτό τρέχει το Task Scheduler)
     .\sync-stock.cmd -Force     συγχρονισμός ακόμα κι αν το απόθεμα έπεσε απότομα
+    .\sync-stock.cmd -Describe Pos   όλες οι στήλες των πινάκων με «Pos» στο όνομα
 
   Ρυθμίσεις: rythmiseis.txt (ή .env) στον ίδιο φάκελο. Ο κωδικός μένει εκεί.
 #>
-param([switch]$Test, [switch]$DryRun, [switch]$Force)
+param([switch]$Test, [switch]$DryRun, [switch]$Force, [string]$Describe)
 
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
@@ -140,6 +141,35 @@ order by c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION
   Write-Host "Η λίστα αποθηκεύτηκε στο $report -- στείλε τη (δεν έχει κωδικούς)."
 }
 
+function Describe-Tables([string]$pattern) {
+  $safe = $pattern -replace "[^A-Za-z0-9_]", ''
+  if (-not $safe) { Fail 'Δώσε μέρος του ονόματος πίνακα, π.χ. -Describe Pos' }
+  $cols = Invoke-Sql @"
+select c.TABLE_SCHEMA s, c.TABLE_NAME t, t.TABLE_TYPE tt, c.COLUMN_NAME c, c.DATA_TYPE dt
+from INFORMATION_SCHEMA.COLUMNS c
+join INFORMATION_SCHEMA.TABLES t on t.TABLE_SCHEMA = c.TABLE_SCHEMA and t.TABLE_NAME = c.TABLE_NAME
+where c.TABLE_NAME like '%$safe%'
+order by c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION
+"@
+  $out = New-Object Collections.ArrayList
+  $last = ''
+  foreach ($r in $cols.Rows) {
+    $key = "$($r.s).$($r.t)"
+    if ($key -ne $last) {
+      $kind = if ($r.tt -eq 'VIEW') { 'view' } else { 'πίνακας' }
+      [void]$out.Add(''); [void]$out.Add("  $key ($kind)")
+      $last = $key
+    }
+    [void]$out.Add("    $($r.c)  [$($r.dt)]")
+  }
+  if (-not $out.Count) { Log "Κανένας πίνακας με «$safe» στο όνομα."; return }
+  $out | ForEach-Object { Write-Host $_ }
+  $report = Join-Path $Here 'wms-pinakes.txt'
+  [IO.File]::WriteAllLines($report, [string[]]$out, (New-Object Text.UTF8Encoding $true))
+  Write-Host ''
+  Write-Host "Αποθηκεύτηκε στο $report -- στείλε το (δεν έχει κωδικούς)."
+}
+
 # ------------------------------------------------------------------ Supabase
 $SbUrl = (Need 'SUPABASE_URL').TrimEnd('/')
 $SbKey = Need 'SUPABASE_ANON_KEY'
@@ -239,6 +269,7 @@ function Normalize-Rows($table) {
 
 # ------------------------------------------------------------------ main
 if ($Test) { Discover; exit 0 }
+if ($Describe) { Describe-Tables $Describe; exit 0 }
 
 $queryFile = Join-Path $Here 'stock-query.sql'
 if (-not (Test-Path $queryFile)) { Fail 'Δεν βρέθηκε το stock-query.sql.' }

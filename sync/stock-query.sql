@@ -1,29 +1,21 @@
--- Απόθεμα από το WMS. ΜΟΝΟ SELECT.
--- Οι στήλες πρέπει να βγαίνουν με ΑΥΤΑ τα ονόματα (as ...):
---   position     θέση               (υποχρεωτικό)
---   item         κωδικός είδους     (υποχρεωτικό)
---   qty          ποσότητα           (υποχρεωτικό)
---   area         περιγραφή θέσης / αποθήκη
---   description  περιγραφή είδους
---   unit         μονάδα μέτρησης
---   lot          παρτίδα
---   expiry       ημ. λήξης παρτίδας
+-- Απόθεμα από το WMS (192.168.1.22\SQLEXPRESS). ΜΟΝΟ SELECT.
+-- Οι στήλες βγαίνουν με τα ονόματα που περιμένει το script:
+--   position, item, qty (υποχρεωτικά) + area, description, unit, lot, expiry
 --
--- ΣΥΜΠΛΗΡΩΝΕΤΑΙ μετά το «node sync-stock.mjs --test», όταν δούμε ποιος
--- πίνακας/view έχει το απόθεμα. Παράδειγμα:
---
--- select
---   s.LocationCode   as position,
---   l.Description    as area,
---   s.ItemCode       as item,
---   i.Description    as description,
---   s.Qty            as qty,
---   s.Unit           as unit,
---   s.Lot            as lot,
---   s.ExpiryDate     as expiry
--- from dbo.StockByLocation s
--- join dbo.Locations l on l.Code = s.LocationCode
--- join dbo.Items i on i.Code = s.ItemCode
--- where s.Qty > 0
+-- dbo.ms_Stock: ένα υπόλοιπο ανά θέση/είδος/παρτίδα (Qty1 = «Ποσ1» του Excel)
+-- dbo.ms_Item : κωδικός/περιγραφή είδους
+-- dbo.ms_Pos  : κωδικός/περιγραφή θέσης  <-- αν βγει «Invalid object name»,
+--               τρέξε  .\sync-stock.cmd -Describe Pos  και στείλε το αποτέλεσμα
 
-select 1 as position, 'ΣΥΜΠΛΗΡΩΣΕ_ΤΟ_QUERY' as item, 0 as qty where 1 = 0
+select
+  p.code      as position,
+  p.Descr     as area,
+  i.code      as item,
+  i.Descr     as description,
+  s.Qty1      as qty,
+  s.Lot       as lot,
+  s.ExpDate   as expiry
+from dbo.ms_Stock s
+join dbo.ms_Item i on i.ID = s.ItemId
+join dbo.ms_Pos  p on p.ID = s.PosId
+where s.Qty1 > 0
