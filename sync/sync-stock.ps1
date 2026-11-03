@@ -329,7 +329,10 @@ function Get-ItemInfo($finals) {
   foreach ($r in $t.Rows) {
     $code = (To-Str $r['code']).ToUpperInvariant()
     if (-not $finals.Contains($code)) { continue }
-    $o = [ordered]@{ code = $code; description_en = (To-Str $r['description_en']) }
+    $en = To-Str $r['description_en']
+    # το AlterDescr έχει συχνά ξανά ελληνικά -- κρατάμε μόνο λατινικά (αλλιώς η εφαρμογή βγάζει αυτόματη μετάφραση)
+    if ($en -match '[\u0370-\u03FF\u1F00-\u1FFF]') { $en = '' }
+    $o = [ordered]@{ code = $code; description_en = $en }
     if ($hasUpp) { $u = To-Num $r['units_per_package']; if ($null -ne $u -and $u -gt 0) { $o['units_per_package'] = [int][math]::Round($u) } }
     [void]$out.Add([pscustomobject]$o)
   }

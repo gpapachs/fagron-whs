@@ -23,6 +23,10 @@ export type LabelOptions = {
   /** μετατόπιση όλου του περιεχομένου σε mm (ευθυγράμμιση με το χαρτί) */
   offsetXMm: number;
   offsetYMm: number;
+  /** περιστροφή περιεχομένου (μοίρες, δεξιόστροφα). 0 = οριζόντια 70×35.
+   *  90/270: η σελίδα γίνεται 35×70 και η ετικέτα τυπώνεται «γυρισμένη»
+   *  -- για οδηγούς Zebra που έχουν το χαρτί δηλωμένο κατακόρυφα. */
+  rotation?: 0 | 90 | 180 | 270;
 };
 
 export const DEFAULT_LABEL_OPTIONS: LabelOptions = {
@@ -34,7 +38,17 @@ export const DEFAULT_LABEL_OPTIONS: LabelOptions = {
   preprinted: true,
   offsetXMm: 0,
   offsetYMm: 0,
+  rotation: 0,
 };
+
+/** Πίνακας μετασχηματισμού PDF (cm) ώστε σχέδιο σε χώρο ετικέτας W×H να βγει περιστραμμένο. */
+function rotationCm(rot: number, W: number, H: number): number[] | null {
+  const k = 72 / 25.4; // mm -> pt
+  if (rot === 90) return [0, -1, 1, 0, (H - W) * k, W * k];
+  if (rot === 180) return [-1, 0, 0, -1, W * k, H * k];
+  if (rot === 270) return [0, 1, -1, 0, W * k, 0];
+  return null;
+}
 
 /** Ίδια μορφή με τις υπάρχουσες ετικέτες: κωδικός#παρτίδα#EN | QUANTITY: x BATCH NO.: παρτίδα */
 export function dataMatrixText(l: LabelData): string {
@@ -97,7 +111,13 @@ export function labelsPdf(
 ) {
   const W = opts.widthMm;
   const H = opts.heightMm;
-  const doc = new jsPDF({ orientation: W >= H ? "landscape" : "portrait", unit: "mm", format: [W, H], compress: true });
+  const rot = opts.rotation ?? 0;
+  const cm = rotationCm(rot, W, H);
+  // μέγεθος ΣΕΛΙΔΑΣ: στις 90/270 αντιμετατίθενται πλάτος/ύψος
+  const PW = rot === 90 || rot === 270 ? H : W;
+  const PH = rot === 90 || rot === 270 ? W : H;
+  // ΠΡΟΣΟΧΗ: format [PW, PH] με ρητό orientation, αλλιώς το jsPDF τα αντιστρέφει
+  const doc = new jsPDF({ orientation: PW >= PH ? "landscape" : "portrait", unit: "mm", format: [PW, PH], compress: true });
   doc.addFileToVFS("DejaVu.ttf", fonts.regular);
   doc.addFont("DejaVu.ttf", "DejaVu", "normal");
   doc.addFileToVFS("DejaVu-Bold.ttf", fonts.bold);
@@ -114,9 +134,13 @@ export function labelsPdf(
   for (const { data, copies } of labels) {
     const mat = matrix(bwip, dataMatrixText(data));
     for (let c = 0; c < copies; c++) {
-      if (!first) doc.addPage([W, H], W >= H ? "landscape" : "portrait");
+      if (!first) doc.addPage([PW, PH], PW >= PH ? "landscape" : "portrait");
       first = false;
       pages++;
+      if (cm) {
+        doc.internal.write("q");
+        doc.internal.write(`${cm.map((v) => +v.toFixed(4)).join(" ")} cm`);
+      }
       doc.setTextColor(0, 0, 0);
       // μετατόπιση: όλες οι συντεταγμένες παρακάτω περνούν από εδώ
       const T = (x: number, y: number) => [x + ox, y + oy] as const;
@@ -183,11 +207,13 @@ export function labelsPdf(
       drawMatrix(doc, mat, ...T(W - m - dmSize - 1.6 * k, extra ? m + 9.8 * k + extra : m + 8.6 * k), dmSize);
 
       // 6. υποσέλιδο (μόνο σε λευκό χαρτί)
-      if (opts.preprinted) continue;
-      doc.setFont("DejaVu", "normal");
-      doc.setTextColor(60, 60, 60);
-      fitText(doc, opts.footer, W - 2 * m, 4.6 * k, 3.6 * k);
-      doc.text(opts.footer, W / 2, H - m + 0.4 * k, { align: "center" });
+      if (!opts.preprinted) {
+        doc.setFont("DejaVu", "normal");
+        doc.setTextColor(60, 60, 60);
+        fitText(doc, opts.footer, W - 2 * m, 4.6 * k, 3.6 * k);
+        doc.text(opts.footer, W / 2, H - m + 0.4 * k, { align: "center" });
+      }
+      if (cm) doc.internal.write("Q");
     }
   }
   return { doc, pages };

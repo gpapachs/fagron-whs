@@ -14,6 +14,7 @@ import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkboo
 import * as jobsLib from "../lib/jobs.ts";
 import bwipjs from "bwip-js";
 import { DEFAULT_LABEL_OPTIONS, dataMatrixText, labelsPdf } from "../lib/labels.ts";
+import { autoEnglish } from "../lib/translate.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
 const outDir = path.join(root, "out", "_check");
@@ -170,6 +171,31 @@ if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) 
   if (pages !== 2) fail("λάθος πλήθος ετικετών");
   const white = labelsPdf(jsPDF, bwipjs, fonts, [{ data: label, copies: 1 }], { ...DEFAULT_LABEL_OPTIONS, preprinted: false, offsetXMm: 1 });
   fs.writeFileSync(path.join(outDir, "sample-label-blank-paper.pdf"), Buffer.from(white.doc.output("arraybuffer")));
+  // περιστροφή για οδηγούς με χαρτί δηλωμένο κάθετα: σελίδα 35×70
+  for (const rotation of [90, 180, 270]) {
+    const r = labelsPdf(jsPDF, bwipjs, fonts, [{ data: label, copies: 1 }], { ...DEFAULT_LABEL_OPTIONS, rotation });
+    const sz = r.doc.internal.pageSize;
+    const [w, h] = [Math.round(sz.getWidth()), Math.round(sz.getHeight())];
+    const want = rotation === 180 ? [70, 35] : [35, 70];
+    if (w !== want[0] || h !== want[1]) fail(`στροφή ${rotation}: σελίδα ${w}×${h}`);
+    fs.writeFileSync(path.join(outDir, `sample-label-rot${rotation}.pdf`), Buffer.from(r.doc.output("arraybuffer")));
+  }
+}
+
+// ---- αυτόματη αγγλική περιγραφή
+{
+  const cases = [
+    ["ΣΩΛΗΝΑΡΙΟ ΑΛΟΥΜΙΝΙΟΥ GALENPACK 30ML", "ALUMINIUM TUBE GALENPACK 30ML"],
+    ["Κάψουλες Galenpack Νο0 Μπλε-Λευκό (1000 τεμ.)", "CAPSULES GALENPACK NO0 BLUE-WHITE (1000 PCS)"],
+    ["PET ΚΑΦΕ ΦΙΑΛΗ 500 ML AMBER ΜΕ ΚΑΠΑΚΙ 25ΜΜ", "PET AMBER BOTTLE 500 ML WITH CAP 25MM"],
+    ["ΚΑΠΑΚΙ 18GL ΣΤΑΓΟΝΟΜΕΤΡΟ ΠΙΠΕΤΤΑ ΛΕΥΚΟ 5ml", "CAP 18GL DROPPER PIPETTE WHITE 5ML"],
+  ];
+  for (const [el, en] of cases) {
+    const got = autoEnglish(el);
+    if (got !== en) fail(`μετάφραση: «${el}» -> «${got}» αντί για «${en}»`);
+    if (!/^[\x20-\x7E]*$/.test(got)) fail(`μετάφραση με μη-λατινικούς χαρακτήρες: ${got}`);
+  }
+  console.log(`αυτόματα αγγλικά: ${cases.length} περιπτώσεις OK`);
 }
 
 console.log(process.exitCode ? "ΑΠΕΤΥΧΕ" : "OK: όλες οι εξαγωγές δουλεύουν");

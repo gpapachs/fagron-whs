@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import AppBar from "@/components/AppBar";
 import { createClient } from "@/lib/supabase/client";
 import { loadPdfFonts } from "@/lib/pdfFonts";
+import { autoEnglish } from "@/lib/translate";
 import { DEFAULT_LABEL_OPTIONS, dataMatrixText, isAscii, type LabelData, type LabelOptions } from "@/lib/labels";
 import type { ProductSettings } from "@/lib/repack";
 
@@ -16,7 +17,11 @@ const PRINTER_HINT = "Packaging Station 2";
 function loadOpts(): LabelOptions {
   try {
     const raw = window.localStorage.getItem(LS_OPTS);
-    if (raw) return { ...DEFAULT_LABEL_OPTIONS, ...JSON.parse(raw), preprinted: true };
+    if (raw) {
+      const o = { ...DEFAULT_LABEL_OPTIONS, ...JSON.parse(raw), preprinted: true };
+      if (![0, 90, 180, 270].includes(o.rotation)) o.rotation = 0;
+      return o;
+    }
   } catch {
     /* ιδιωτικό παράθυρο κ.λπ. */
   }
@@ -65,11 +70,11 @@ export default function LabelsBoard({
   useEffect(() => setOpts(loadOpts()), []);
   useEffect(() => {
     try {
-      window.localStorage.setItem(LS_OPTS, JSON.stringify({ offsetXMm: opts.offsetXMm, offsetYMm: opts.offsetYMm }));
+      window.localStorage.setItem(LS_OPTS, JSON.stringify({ offsetXMm: opts.offsetXMm, offsetYMm: opts.offsetYMm, rotation: opts.rotation ?? 0 }));
     } catch {
       /* τίποτα */
     }
-  }, [opts.offsetXMm, opts.offsetYMm]);
+  }, [opts.offsetXMm, opts.offsetYMm, opts.rotation]);
 
   // ?code=71-01-359&qty=75&batch=... (από την Ανασυσκευασία)
   useEffect(() => {
@@ -84,6 +89,14 @@ export default function LabelsBoard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** σειρά: δική μας (αποθηκευμένη) > WMS (μόνο αν είναι λατινικά) > αυτόματη μετάφραση */
+  function englishFor(c: string, el: string) {
+    const st = settings[c];
+    if (st?.description_en) return st.description_en;
+    if (st?.description_en_wms && isAscii(st.description_en_wms)) return st.description_en_wms;
+    return autoEnglish(el);
+  }
+
   function choose(c: string) {
     const p = byCode.get(c);
     if (!p) return;
@@ -91,7 +104,7 @@ export default function LabelsBoard({
     setCode(c);
     setQuery("");
     setDescEl(p.description);
-    setDescEn(st?.description_en || st?.description_en_wms || "");
+    setDescEn(englishFor(c, p.description));
     const upp = st?.units_per_package ?? st?.units_per_package_wms ?? null;
     setQty(upp ? String(upp) : "");
     setBatch("");
@@ -177,7 +190,7 @@ export default function LabelsBoard({
       clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code, descEl, descEn, qty, batch, opts.offsetXMm, opts.offsetYMm]);
+  }, [code, descEl, descEn, qty, batch, opts.offsetXMm, opts.offsetYMm, opts.rotation]);
 
   async function print() {
     setBusy(true);
@@ -213,9 +226,12 @@ export default function LabelsBoard({
   async function rememberEnglish() {
     if (!code) return;
     const st = settings[code];
-    const wmsEn = st?.description_en_wms ?? "";
+    const wmsEn = st?.description_en_wms && isAscii(st.description_en_wms) ? st.description_en_wms : "";
     const curEn = st?.description_en ?? "";
-    const wantEn = descEn.trim() === wmsEn ? "" : descEn.trim();
+    const auto = autoEnglish(byCode.get(code)?.description ?? "");
+    // αποθηκεύεται μόνο αν ο χρήστης την άλλαξε (όχι αν είναι η αυτόματη ή του WMS)
+    const t = descEn.trim();
+    const wantEn = t === wmsEn || (!wmsEn && t === auto) ? "" : t;
     const patch: Record<string, unknown> = {};
     if (wantEn !== curEn) patch.description_en = wantEn;
     const n = Number(qty);
@@ -282,7 +298,11 @@ export default function LabelsBoard({
                   <span>
                     Αγγλική περιγραφή{" "}
                     <span className="field-hint">
-                      {st?.description_en ? "· αποθηκευμένη" : st?.description_en_wms ? "· από το WMS" : "· δεν υπάρχει — γράψ' τη"}
+                      {st?.description_en
+                        ? "· αποθηκευμένη"
+                        : st?.description_en_wms && isAscii(st.description_en_wms)
+                          ? "· από το WMS"
+                          : "· αυτόματη μετάφραση — έλεγξέ τη (αν τη διορθώσεις, κρατιέται)"}
                     </span>
                   </span>
                   <input value={descEn} onChange={(e) => setDescEn(e.target.value)} placeholder="π.χ. ALUMINIUM TUBE GALENPACK 30 ml" />
@@ -378,7 +398,23 @@ export default function LabelsBoard({
               </details>
             )}
             <details className="lb-setup" open={showSetup} onToggle={(e) => setShowSetup((e.target as HTMLDetailsElement).open)}>
-              <summary>Ευθυγράμμιση με το χαρτί</summary>
+              <summary>Προσανατολισμός & ευθυγράμμιση</summary>
+              <label className="field">
+                Προσανατολισμός εκτύπωσης
+                <select
+                  value={opts.rotation ?? 0}
+                  onChange={(e) => setOpts((o) => ({ ...o, rotation: Number(e.target.value) as LabelOptions["rotation"] }))}
+                >
+                  <option value={0}>Οριζόντια 70×35 (κανονικά)</option>
+                  <option value={90}>Οριζόντια σε χαρτί δηλωμένο κάθετα 35×70 — στροφή 90°</option>
+                  <option value={270}>Οριζόντια σε χαρτί δηλωμένο κάθετα 35×70 — στροφή 270°</option>
+                  <option value={180}>Ανάποδα (180°)</option>
+                </select>
+              </label>
+              <p className="rp-hint">
+                Η ετικέτα σχεδιάζεται πάντα οριζόντια (70 πλάτος × 35 ύψος). Αν βγαίνει γυρισμένη, είτε στις <b>Προτιμήσεις εκτύπωσης</b> του {PRINTER_HINT}{" "}
+                δήλωσε χαρτί <b>Πλάτος 70 mm × Ύψος 35 mm, Προσανατολισμός: Οριζόντιος (Landscape)</b>, είτε διάλεξε εδώ στροφή 90° ή 270°.
+              </p>
               <p className="rp-hint">
                 Αν η εκτύπωση πέφτει μετατοπισμένη πάνω στο προεκτυπωμένο χαρτί, μετακίνησε όλο το περιεχόμενο (θετικό = δεξιά / κάτω). Αποθηκεύεται σε
                 αυτόν τον υπολογιστή.
