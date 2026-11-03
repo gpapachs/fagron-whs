@@ -8,6 +8,7 @@ const LINKS = [
   { href: "/repack", label: "Ανασυσκευασία" },
   { href: "/stock", label: "Απόθεμα" },
   { href: "/moves", label: "Κινήσεις" },
+  { href: "/orders", label: "Orders" },
   { href: "/labels", label: "Ετικέτες" },
 ];
 

@@ -866,3 +866,168 @@ export function movesPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFon
   footer(doc, "Κινήσεις · Fagron Hellas");
   return { doc, fileName: `kiniseis-${stamp(meta.generatedAt)}.pdf` };
 }
+
+// ============================================================ Orders (σελίδα «Orders»)
+
+export type OrderRow = {
+  id: string;
+  order_id: string;
+  list_no: string;
+  doc_type: string;
+  doc_no: string;
+  erp_code: string;
+  order_date: string | null;
+  customer: string;
+  item: string;
+  description: string;
+  lot: string;
+  sn: string;
+  qty: number | null;
+  init_qty: number | null;
+  from_pos: string;
+  to_pos: string;
+  wms_status: string;
+  line_no: number | null;
+  collected: boolean;
+  collected_at: string | null;
+  collected_by: string;
+};
+
+/** ομάδες ανά αριθμό λίστας (σειρά εμφάνισης) */
+export function groupOrdersByList(rows: OrderRow[]) {
+  const m = new Map<string, OrderRow[]>();
+  for (const r of rows) {
+    const k = r.list_no || r.order_id || "—";
+    const g = m.get(k);
+    if (g) g.push(r);
+    else m.set(k, [r]);
+  }
+  return [...m.entries()].map(([list, lines]) => ({ list, lines }));
+}
+
+export function ordersWorkbook(XLSX: XLSXLib, rows: OrderRow[], meta: StockExportMeta) {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    wb,
+    sheet(
+      XLSX,
+      rows.map((r) => ({
+        "Λίστα": r.list_no,
+        "Ημερομηνία": r.order_date ? new Date(r.order_date) : "",
+        "Πελάτης": r.customer,
+        "Παραστατικό": r.doc_no,
+        "Κωδ. ERP": r.erp_code,
+        "Κωδικός": r.item,
+        "Περιγραφή": r.description,
+        "Batch": r.lot,
+        "SN": r.sn,
+        "Ποσότητα": r.qty ?? r.init_qty ?? "",
+        "Από θέση": r.from_pos,
+        "Κατάσταση": r.collected ? "Collected" : "Non Collected",
+        "Collected από": r.collected_by,
+        "Collected στις": r.collected_at ? new Date(r.collected_at) : "",
+      })),
+      [10, 16, 34, 16, 14, 14, 44, 16, 16, 10, 16, 14, 24, 16]
+    ),
+    "Orders"
+  );
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.aoa_to_sheet([
+      ["Orders (πωλήσεις)"],
+      ["Δημιουργήθηκε", when(meta.generatedAt)],
+      ["Από", meta.userEmail ?? ""],
+      ["Φίλτρα", meta.filters.join(" · ") || "χωρίς"],
+      ["Γραμμές", rows.length],
+      ["Λίστες", groupOrdersByList(rows).length],
+    ]),
+    "Πληροφορίες"
+  );
+  return { wb, fileName: `orders-${stamp(meta.generatedAt)}.xlsx` };
+}
+
+/** PDF: κάθε λίστα σε δική της σελίδα (μία ή πολλές λίστες = μαζική εκτύπωση). */
+export function ordersPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFonts, rows: OrderRow[], meta: StockExportMeta) {
+  const doc = newDoc(jsPDF, fonts, "portrait");
+  const groups = groupOrdersByList(rows);
+  const W = doc.internal.pageSize.getWidth();
+  groups.forEach((g, gi) => {
+    if (gi > 0) doc.addPage();
+    const f = g.lines[0];
+    const done = g.lines.filter((l) => l.collected).length;
+    // κεφαλίδα λίστας
+    doc.setFillColor(...ACCENT);
+    doc.rect(14, 12, 3, 14, "F");
+    doc.setFont(FONT, "bold");
+    doc.setFontSize(18);
+    doc.setTextColor(...INK);
+    doc.text(`Λίστα ${g.list}`, 20, 19);
+    doc.setFont(FONT, "normal");
+    doc.setFontSize(8.5);
+    doc.setTextColor(...DIM);
+    doc.text(`Fagron Hellas · Orders · εκτύπωση ${when(meta.generatedAt)}${meta.userEmail ? ` · ${meta.userEmail}` : ""}`, 20, 24.5);
+    // κατάσταση πάνω δεξιά
+    const allDone = done === g.lines.length;
+    doc.setFont(FONT, "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(...(allDone ? ([18, 128, 92] as [number, number, number]) : RED));
+    doc.text(allDone ? "COLLECTED" : done ? `COLLECTED ${done}/${g.lines.length}` : "NON COLLECTED", W - 14, 19, { align: "right" });
+    let y = 32;
+    doc.setFont(FONT, "normal");
+    doc.setFontSize(9.5);
+    doc.setTextColor(...INK);
+    const info: [string, string][] = [
+      ["Πελάτης", f.customer || "—"],
+      ["Παραστατικό", f.doc_no || "—"],
+      ["Κωδικός ERP", f.erp_code || "—"],
+      ["Ημερομηνία", f.order_date ? when(new Date(f.order_date)) : "—"],
+    ];
+    for (const [k, v] of info) {
+      doc.setFont(FONT, "bold");
+      doc.text(`${k}:`, 14, y);
+      doc.setFont(FONT, "normal");
+      doc.text(v, 42, y, { maxWidth: W - 56 });
+      y += 5.2;
+    }
+    doc.setDrawColor(...LINE);
+    doc.line(14, y, W - 14, y);
+    autoTable(doc, {
+      ...baseTable,
+      startY: y + 3,
+      head: [["#", "Κωδικός", "Περιγραφή", "Batch", "SN", "Ποσ.", "Θέση", "Coll."]],
+      body: g.lines.map((l, i) => [String(l.line_no ?? i + 1), l.item, l.description, l.lot, l.sn, q(l.qty ?? l.init_qty ?? 0), l.from_pos, l.collected ? "ΝΑΙ" : ""]),
+      styles: { ...baseTable.styles, fontSize: 8.2 },
+      columnStyles: {
+        0: { cellWidth: 8, halign: "right" },
+        1: { cellWidth: 20, fontStyle: "bold" },
+        2: { cellWidth: "auto" },
+        3: { cellWidth: 26 },
+        4: { cellWidth: 22 },
+        5: { cellWidth: 13, halign: "right", fontStyle: "bold" },
+        6: { cellWidth: 22 },
+        7: { cellWidth: 11, halign: "center" },
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      didParseCell: (d: any) => {
+        if (d.section === "body" && d.column.index === 6 && d.cell.raw) {
+          d.cell.styles.fillColor = RACK;
+          d.cell.styles.fontStyle = "bold";
+        } else if (d.section === "body" && d.row.index % 2 === 1) d.cell.styles.fillColor = ZEBRA;
+      },
+    });
+    // σύνολο + υπογραφή
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const endY = (doc as any).lastAutoTable?.finalY ?? y + 20;
+    const total = g.lines.reduce((a, l) => a + (l.qty ?? l.init_qty ?? 0), 0);
+    doc.setFont(FONT, "bold");
+    doc.setFontSize(9.5);
+    doc.setTextColor(...INK);
+    doc.text(`${g.lines.length} γραμμές · σύνολο ${q(total)}`, 14, endY + 7);
+    doc.setFont(FONT, "normal");
+    doc.setTextColor(...DIM);
+    doc.text("Συλλογή: ____________________   Έλεγχος: ____________________", W - 14, endY + 7, { align: "right" });
+  });
+  footer(doc, `Orders · ${groups.length} λίστ${groups.length === 1 ? "α" : "ες"} · Fagron Hellas`);
+  const name = groups.length === 1 ? `lista-${groups[0].list}` : `listes-${groups.length}`;
+  return { doc, fileName: `${name}-${stamp(meta.generatedAt)}.pdf`, lists: groups.length };
+}

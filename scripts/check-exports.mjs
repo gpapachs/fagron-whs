@@ -10,7 +10,7 @@ import { jsPDF } from "jspdf";
 import { autoTable } from "jspdf-autotable";
 import * as XLSX from "xlsx";
 import { buildPlan, filterStockForRecipes, indexStock, picksByRecipe } from "../lib/repack.ts";
-import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkbook, stockPdf, stockWorkbook, movesPdf, movesWorkbook } from "../lib/exports.ts";
+import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkbook, stockPdf, stockWorkbook, movesPdf, movesWorkbook, ordersPdf, ordersWorkbook } from "../lib/exports.ts";
 import * as jobsLib from "../lib/jobs.ts";
 import bwipjs from "bwip-js";
 import { DEFAULT_LABEL_OPTIONS, bitmapToZpl, dataMatrixText, labelsPdf } from "../lib/labels.ts";
@@ -225,6 +225,23 @@ if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) 
   const { doc } = movesPdf(jsPDF, autoTable, fonts, mv, mm);
   fs.writeFileSync(path.join(outDir, "sample-moves.pdf"), Buffer.from(doc.output("arraybuffer")));
   console.log(`sample-moves: Excel ${n} · PDF ${doc.getNumberOfPages()} σελίδες`);
+}
+
+// ---- σελίδα «Orders»: λίστες, μία ανά σελίδα
+{
+  const ord = Array.from({ length: 30 }, (_, i) => ({
+    id: String(1000 + i), order_id: String(900 + (i % 3)), list_no: String(5428 + (i % 3)), doc_type: "salexportcl", doc_no: `ΔΑ-${77 + (i % 3)}`,
+    erp_code: `ERP-${i % 3}`, order_date: new Date().toISOString(), customer: "ΦΑΡΜΑΚΕΙΟ ΠΑΠΑΔΟΠΟΥΛΟΥ", item: "71-01-359",
+    description: "ΣΩΛΗΝΑΡΙΟ ΑΛΟΥΜΙΝΙΟΥ GALENPACK 30ML", lot: "1236095-01", sn: i % 5 ? "" : `SN-${i}`, qty: 5, init_qty: 5,
+    from_pos: "16.01.03.01", to_pos: "", wms_status: "", line_no: i, collected: i % 4 === 0, collected_at: null, collected_by: "",
+  }));
+  const om = { generatedAt: new Date(), userEmail: "test@fagron.gr", filters: [], syncedAt: null };
+  const { wb } = ordersWorkbook(XLSX, ord, om);
+  const n = XLSX.utils.sheet_to_json(XLSX.read(XLSX.write(wb, { type: "buffer", bookType: "xlsx" })).Sheets["Orders"]).length;
+  const { doc, lists } = ordersPdf(jsPDF, autoTable, fonts, ord, om);
+  if (n !== 30 || lists !== 3 || doc.getNumberOfPages() !== 3) fail(`Orders: Excel ${n}, λίστες ${lists}, σελίδες ${doc.getNumberOfPages()}`);
+  fs.writeFileSync(path.join(outDir, "sample-orders.pdf"), Buffer.from(doc.output("arraybuffer")));
+  console.log(`sample-orders: ${lists} λίστες σε ${doc.getNumberOfPages()} σελίδες`);
 }
 
 // ---- ZPL (απευθείας εκτύπωση Zebra): 10×2 κουκκίδες, 1η στήλη μαύρη
