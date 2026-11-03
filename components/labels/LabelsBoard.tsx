@@ -210,16 +210,20 @@ export default function LabelsBoard({
       return;
     }
     // ο πίνακας έχει μία γραμμή ανά θέση -> εδώ ανά παρτίδα/serial, με τις θέσεις μαζί
-    const agg = new Map<string, WmsRow>();
+    const agg = new Map<string, WmsRow & { byPos: Map<string, number> }>();
     for (const r of (rows ?? []) as (Omit<WmsRow, "positions"> & { position: string })[]) {
       const k = `${r.lot}|${r.serial}`;
-      const cur = agg.get(k);
-      if (!cur) agg.set(k, { item: r.item, lot: r.lot, serial: r.serial, expiry: r.expiry, qty: Number(r.qty), positions: r.position });
-      else {
-        cur.qty += Number(r.qty);
-        if (r.expiry && (!cur.expiry || r.expiry < cur.expiry)) cur.expiry = r.expiry;
-        if (r.position && !cur.positions.split(", ").includes(r.position)) cur.positions = cur.positions ? `${cur.positions}, ${r.position}` : r.position;
-      }
+      const q = Number(r.qty);
+      const cur = agg.get(k) ?? { item: r.item, lot: r.lot, serial: r.serial, expiry: r.expiry, qty: 0, positions: "", byPos: new Map<string, number>() };
+      cur.qty += q;
+      if (r.expiry && (!cur.expiry || r.expiry < cur.expiry)) cur.expiry = r.expiry;
+      if (r.position) cur.byPos.set(r.position, (cur.byPos.get(r.position) ?? 0) + q);
+      agg.set(k, cur);
+    }
+    // ίδια παρτίδα σε πολλές θέσεις: «θέση: ποσότητα» για καθεμία
+    for (const a of agg.values()) {
+      const ps = [...a.byPos.entries()].sort((x, y) => x[0].localeCompare(y[0], "el", { numeric: true }));
+      a.positions = ps.length > 1 ? ps.map(([p, q]) => `${p}: ${q.toLocaleString("el-GR")}`).join(" · ") : (ps[0]?.[0] ?? "");
     }
     const list = [...agg.values()];
     setItemStock(list);
@@ -599,8 +603,15 @@ export default function LabelsBoard({
                               <span className="meta">
                                 {l.qty.toLocaleString("el-GR")}
                                 {l.expiry ? ` · λ. ${fmtExp(l.expiry)}` : ""}
-                                {l.positions ? ` · ${l.positions}` : ""}
+                                {l.positions && !l.positions.includes(": ") ? ` · ${l.positions}` : ""}
                               </span>
+                              {l.positions.includes(": ") && (
+                                <span className="lb-poslines">
+                                  {l.positions.split(" · ").map((p) => (
+                                    <span key={p}>{p}</span>
+                                  ))}
+                                </span>
+                              )}
                             </button>
                           ))}
                           {ownLots.length > 30 && <span className="rp-hint">+{ownLots.length - 30} ακόμα (γράψε στο πεδίο)</span>}
