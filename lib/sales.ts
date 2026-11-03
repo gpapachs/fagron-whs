@@ -1,7 +1,7 @@
 // Παραγγελίες (λίστες πωλήσεων SALEXPORTLS): διαθεσιμότητα ανά γραμμή, χρώμα λίστας
 // και πιθανή ανασυσκευασία (κωδικοί 00-* / 71-*) από το απόθεμα των συστατικών.
 // Καθαρές συναρτήσεις -- τρέχουν ίδια στον browser και στο CI.
-import { buildPicks, maxUnits, type ComponentNeed, type PickLine, type Recipe, type StockIndex } from "./repack";
+import { buildPicks, maxUnits, type ComponentNeed, type PickLine, type Recipe, type StockIndex } from "./repack.ts";
 import type { OrderRow } from "./exports";
 
 export type LineState = "ok" | "repack" | "partial" | "none";
