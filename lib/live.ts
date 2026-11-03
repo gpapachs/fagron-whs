@@ -27,7 +27,9 @@ export function useWmsLive(onSignal: (s: LiveSignal) => void) {
         if (r) setLastAt(r.at);
       });
     const channel = supabase
-      .channel("wms_live")
+      // μοναδικό όνομα ανά χρήση: δύο οθόνες στην ίδια σελίδα (π.χ. λίστα + παράθυρο λίστας)
+      // με το ίδιο όνομα μοιράζονται κανάλι και το supabase-js πετάει σφάλμα
+      .channel(`wms_live:${Math.random().toString(36).slice(2)}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "wms_live" }, (payload) => {
         const row = payload.new as LiveSignal;
         if (!row?.key) return;
