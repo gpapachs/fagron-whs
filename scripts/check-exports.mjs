@@ -10,7 +10,9 @@ import { jsPDF } from "jspdf";
 import { autoTable } from "jspdf-autotable";
 import * as XLSX from "xlsx";
 import { buildPlan, filterStockForRecipes, indexStock, picksByRecipe } from "../lib/repack.ts";
-import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkbook, stockPdf, stockWorkbook, movesPdf, movesWorkbook, ordersPdf, ordersWorkbook } from "../lib/exports.ts";
+import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkbook, stockPdf, stockWorkbook, movesPdf, movesWorkbook, ordersPdf, ordersWorkbook, salesListPdf } from "../lib/exports.ts";
+import { evaluateOrders, orderColor } from "../lib/sales.ts";
+import { indexStock } from "../lib/repack.ts";
 import * as jobsLib from "../lib/jobs.ts";
 import bwipjs from "bwip-js";
 import { DEFAULT_LABEL_OPTIONS, bitmapToZpl, dataMatrixText, labelsPdf } from "../lib/labels.ts";
@@ -242,6 +244,29 @@ if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) 
   if (n !== 30 || lists !== 3 || doc.getNumberOfPages() !== 3) fail(`Orders: Excel ${n}, λίστες ${lists}, σελίδες ${doc.getNumberOfPages()}`);
   fs.writeFileSync(path.join(outDir, "sample-orders.pdf"), Buffer.from(doc.output("arraybuffer")));
   console.log(`sample-orders: ${lists} λίστες σε ${doc.getNumberOfPages()} σελίδες`);
+}
+
+// ---- σελίδα «Παραγγελίες»: χρώματα + ανασυσκευασία
+{
+  if (orderColor([{ state: "ok" }, { state: "ok" }], true) !== "green") fail("χρώμα: όλα διαθέσιμα");
+  if (orderColor([{ state: "ok" }, { state: "none" }], true) !== "red") fail("χρώμα: αυστηρή με έλλειψη");
+  if (orderColor([{ state: "ok" }, { state: "none" }], false) !== "yellow") fail("χρώμα: μερική με απόθεμα");
+  if (orderColor([{ state: "none" }, { state: "none" }], false) !== "red") fail("χρώμα: μερική χωρίς απόθεμα");
+  const st = (item, position, qty) => ({ item, position, area: "", description: "", qty, unit: "", lot: "L1", expiry: null });
+  const idx = indexStock([st("71-01-359", "16.01.03.01", 3), st("40-01-359", "99.38", 500), st("12-00-001", "1.1", 10)]);
+  const recipe = { id: "71-01-359", product_code: "71-01-359", description: "ΣΩΛΗΝΑΡΙΟ", components: [{ code: "40-01-359", description: "ΣΩΛ.", qty: 1, unit: "" }] };
+  const base = { order_id: "1", list_no: "544424", doc_type: "SALEXPORTLS", doc_no: "00WOR7768", erp_code: "1113281", order_date: new Date().toISOString(), customer: "ΦΑΡΜΑΚΕΙΟ", lot: "", sn: "", from_pos: "", to_pos: "", wms_status: "", collected: false, collected_at: null, collected_by: "", picker: "", is_completed: false, is_strict: true, description: "Δ" };
+  const rows = [
+    { ...base, id: "a", item: "71-01-359", qty: 10, init_qty: 10, line_no: 1 },
+    { ...base, id: "b", item: "12-00-001", qty: 5, init_qty: 5, line_no: 2 },
+  ];
+  const [o] = evaluateOrders(rows, idx, new Map([["71-01-359", [recipe]]]));
+  if (o.lines[0].state !== "repack" || o.lines[0].repack?.units !== 7 || !o.needsRepack || o.color !== "green") fail(`ανασυσκευασία: ${o.lines[0].state} ${o.lines[0].repack?.units} ${o.color}`);
+  const [o2] = evaluateOrders(rows, idx, new Map());
+  if (o2.color !== "red" || o2.lines[0].state !== "partial") fail(`χωρίς προδιαγραφή: ${o2.color} ${o2.lines[0].state}`);
+  const { doc } = salesListPdf(jsPDF, autoTable, fonts, [o, o2], { generatedAt: new Date(), userEmail: "t@f.gr", filters: [], syncedAt: null });
+  fs.writeFileSync(path.join(outDir, "sample-sales.pdf"), Buffer.from(doc.output("arraybuffer")));
+  console.log(`sample-sales: ${doc.getNumberOfPages()} σελίδες · χρώματα/ανασυσκευασία OK`);
 }
 
 // ---- ZPL (απευθείας εκτύπωση Zebra): 10×2 κουκκίδες, 1η στήλη μαύρη

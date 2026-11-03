@@ -7,6 +7,7 @@
 
 import type { ComponentNeed, PickLine, ProductSettings, RecipeAnalysis, RecipePick, StockIndex } from "./repack";
 import type { Job, JobStats } from "./jobs";
+import type { OrderEval } from "./sales";
 
 const q = (n: number) => n.toLocaleString("el-GR", { maximumFractionDigits: 3 });
 const exp = (iso?: string | null) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(2, 4)}` : "");
@@ -892,6 +893,8 @@ export type OrderRow = {
   collected_at: string | null;
   collected_by: string;
   picker: string; // χρήστης WMS που έκανε τη συλλογή
+  is_completed?: boolean; // λίστες πωλήσεων: ολοκληρωμένη στο WMS
+  is_strict?: boolean; // αυστηρή συλλογή
 };
 
 /** ομάδες ανά αριθμό λίστας (σειρά εμφάνισης) */
@@ -1033,4 +1036,139 @@ export function ordersPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFo
   footer(doc, `Orders · ${groups.length} λίστ${groups.length === 1 ? "α" : "ες"} · Fagron Hellas`);
   const name = groups.length === 1 ? `lista-${groups[0].list}` : `listes-${groups.length}`;
   return { doc, fileName: `${name}-${stamp(meta.generatedAt)}.pdf`, lists: groups.length };
+}
+
+// ============================================================ Παραγγελίες (λίστες πωλήσεων)
+
+const COLOR_TXT: Record<string, string> = { green: "ΟΛΑ ΔΙΑΘΕΣΙΜΑ", yellow: "ΜΕΡΙΚΗ ΣΥΛΛΟΓΗ", red: "ΧΩΡΙΣ ΑΠΟΘΕΜΑ" };
+const COLOR_RGB: Record<string, [number, number, number]> = { green: [18, 128, 92], yellow: [180, 120, 0], red: [185, 28, 28] };
+const STATE_TXT: Record<string, string> = { ok: "OK", repack: "ΑΝΑΣΥΣΚ.", partial: "ΜΕΡΙΚΟ", none: "ΔΕΝ ΥΠΑΡΧΕΙ" };
+
+/** PDF λίστας συλλογής: μία λίστα ανά σελίδα, με θέσεις και πιθανή ανασυσκευασία. */
+export function salesListPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFonts, orders: OrderEval[], meta: StockExportMeta) {
+  const doc = newDoc(jsPDF, fonts, "portrait");
+  const W = doc.internal.pageSize.getWidth();
+  const posTxt = (picks: { position: string; take: number; lot: string }[]) =>
+    picks.map((p) => `${p.position}: ${q(p.take)}${p.lot ? ` · Π. ${p.lot}` : ""}`).join("\n");
+  orders.forEach((o, oi) => {
+    if (oi > 0) doc.addPage();
+    const h = o.head;
+    doc.setFillColor(...(o.completed ? DIM : COLOR_RGB[o.color]));
+    doc.rect(14, 12, 3, 14, "F");
+    doc.setFont(FONT, "bold");
+    doc.setFontSize(18);
+    doc.setTextColor(...INK);
+    doc.text(`Λίστα ${o.key}`, 20, 19);
+    doc.setFont(FONT, "normal");
+    doc.setFontSize(8.5);
+    doc.setTextColor(...DIM);
+    doc.text(`Fagron Hellas · Λίστα πωλήσεων · εκτύπωση ${when(meta.generatedAt)}${meta.userEmail ? ` · ${meta.userEmail}` : ""}`, 20, 24.5);
+    doc.setFont(FONT, "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(...(o.completed ? DIM : COLOR_RGB[o.color]));
+    doc.text(o.completed ? "ΟΛΟΚΛΗΡΩΜΕΝΗ" : COLOR_TXT[o.color], W - 14, 19, { align: "right" });
+    if (o.needsRepack) {
+      doc.setFontSize(8.5);
+      doc.setTextColor(37, 84, 199);
+      doc.text("ΧΡΕΙΑΖΕΤΑΙ ΑΝΑΣΥΣΚΕΥΑΣΙΑ", W - 14, 24.5, { align: "right" });
+    }
+    let y = 32;
+    doc.setFontSize(9.5);
+    doc.setTextColor(...INK);
+    const info: [string, string][] = [
+      ["Πελάτης", h.customer || "—"],
+      ["Παραστατικό", h.doc_no || "—"],
+      ["Κωδικός ERP", h.erp_code || "—"],
+      ["Ημερομηνία", h.order_date ? when(new Date(h.order_date)) : "—"],
+      ["Συλλογή", o.strict ? "Αυστηρή" : "Μερική"],
+    ];
+    for (const [k, v] of info) {
+      doc.setFont(FONT, "bold");
+      doc.text(`${k}:`, 14, y);
+      doc.setFont(FONT, "normal");
+      doc.text(v, 42, y, { maxWidth: W - 56 });
+      y += 5;
+    }
+    doc.setDrawColor(...LINE);
+    doc.line(14, y, W - 14, y);
+    autoTable(doc, {
+      ...baseTable,
+      startY: y + 3,
+      head: [["#", "Κωδικός", "Περιγραφή", "Ζητ.", "Απόθ.", "Θέσεις (ποσότητα · παρτίδα)", "Κατάσταση", ""]],
+      body: o.lines.map((l, i) => [
+        String(l.line.line_no ?? i + 1),
+        l.line.item,
+        l.line.description,
+        q(l.need),
+        q(l.stock),
+        posTxt(l.picks) || "—",
+        STATE_TXT[l.state],
+        "",
+      ]),
+      styles: { ...baseTable.styles, fontSize: 8 },
+      columnStyles: {
+        0: { cellWidth: 7, halign: "right" },
+        1: { cellWidth: 19, fontStyle: "bold" },
+        2: { cellWidth: "auto" },
+        3: { cellWidth: 11, halign: "right", fontStyle: "bold" },
+        4: { cellWidth: 12, halign: "right" },
+        5: { cellWidth: 52 },
+        6: { cellWidth: 19 },
+        7: { cellWidth: 7 },
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      didParseCell: (d: any) => {
+        if (d.section !== "body") return;
+        const st = o.lines[d.row.index]?.state;
+        if (d.column.index === 6) {
+          d.cell.styles.fontStyle = "bold";
+          d.cell.styles.textColor = st === "ok" ? COLOR_RGB.green : st === "repack" ? ([37, 84, 199] as [number, number, number]) : st === "partial" ? COLOR_RGB.yellow : COLOR_RGB.red;
+        } else if (d.column.index === 5 && d.cell.raw !== "—") d.cell.styles.fillColor = [255, 246, 204];
+        else if (d.row.index % 2 === 1) d.cell.styles.fillColor = ZEBRA;
+      },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let endY = (doc as any).lastAutoTable?.finalY ?? y + 20;
+    // ανασυσκευασία
+    for (const l of o.lines.filter((x) => x.repack)) {
+      const r = l.repack!;
+      if (endY > doc.internal.pageSize.getHeight() - 50) {
+        doc.addPage();
+        endY = 16;
+      }
+      doc.setFont(FONT, "bold");
+      doc.setFontSize(10.5);
+      doc.setTextColor(37, 84, 199);
+      doc.text(`Ανασυσκευασία: ${l.line.item} × ${q(r.units)}  (λείπουν ${q(l.need - l.covered)} · βγαίνουν έως ${q(r.max)})`, 14, endY + 8);
+      doc.setFont(FONT, "normal");
+      doc.setFontSize(8.5);
+      doc.setTextColor(...DIM);
+      doc.text(`Προδιαγραφή ${r.recipe.id} · ${r.recipe.description}`, 14, endY + 12.5, { maxWidth: W - 28 });
+      autoTable(doc, {
+        ...baseTable,
+        startY: endY + 15,
+        head: [["Συστατικό", "Περιγραφή", "Ανά τεμ.", "Σύνολο", "Θέσεις (ποσότητα · παρτίδα)", ""]],
+        body: r.recipe.components.map((c) => [
+          c.code,
+          c.description,
+          q(c.qty),
+          q(c.qty * r.units),
+          posTxt(r.picks.filter((p) => p.item === c.code)) || "—",
+          "",
+        ]),
+        styles: { ...baseTable.styles, fontSize: 8 },
+        headStyles: { ...baseTable.headStyles, fillColor: [231, 238, 251] },
+        columnStyles: { 0: { cellWidth: 20, fontStyle: "bold" }, 1: { cellWidth: "auto" }, 2: { cellWidth: 14, halign: "right" }, 3: { cellWidth: 14, halign: "right", fontStyle: "bold" }, 4: { cellWidth: 56 }, 5: { cellWidth: 7 } },
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      endY = (doc as any).lastAutoTable?.finalY ?? endY + 20;
+    }
+    doc.setFont(FONT, "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(...DIM);
+    doc.text("Συλλογή: ____________________   Έλεγχος: ____________________", W - 14, Math.min(endY + 9, doc.internal.pageSize.getHeight() - 14), { align: "right" });
+  });
+  footer(doc, `Λίστες πωλήσεων · ${orders.length} · Fagron Hellas`);
+  const name = orders.length === 1 ? `lista-polisis-${orders[0].key}` : `listes-polisis-${orders.length}`;
+  return { doc, fileName: `${name}-${stamp(meta.generatedAt)}.pdf` };
 }
