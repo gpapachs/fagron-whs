@@ -53,6 +53,8 @@ function fail(msg) {
 }
 
 // ------------------------------------------------------------------ SQL
+const instance = () => env.WMS_SQL_INSTANCE || need("WMS_SQL_SERVER").split("\\")[1] || "";
+
 async function sqlConnect() {
   let sql;
   try {
@@ -61,13 +63,14 @@ async function sqlConnect() {
     fail("Λείπει το πακέτο mssql. Τρέξε μία φορά: npm install (μέσα στον φάκελο sync).");
   }
   const pool = new sql.ConnectionPool({
-    server: need("WMS_SQL_SERVER"),
-    port: Number(env.WMS_SQL_PORT || 1433),
+    // «192.168.1.22\SQLEXPRESS» -> server + instance· με instance η θύρα βρίσκεται αυτόματα (SQL Browser)
+    server: need("WMS_SQL_SERVER").split("\\")[0],
+    ...(instance() ? {} : { port: Number(env.WMS_SQL_PORT || 1433) }),
     database: need("WMS_SQL_DATABASE"),
     user: need("WMS_SQL_USER"),
     password: need("WMS_SQL_PASSWORD"),
     options: {
-      ...(env.WMS_SQL_INSTANCE ? { instanceName: env.WMS_SQL_INSTANCE } : {}),
+      ...(instance() ? { instanceName: instance() } : {}),
       encrypt: env.WMS_SQL_ENCRYPT === "true",
       trustServerCertificate: env.WMS_SQL_TRUST_CERT !== "false",
       readOnlyIntent: true,
@@ -78,7 +81,10 @@ async function sqlConnect() {
   try {
     await pool.connect();
   } catch (e) {
-    fail(`Σύνδεση στη SQL απέτυχε: ${e.message}`);
+    const hint = instance()
+      ? " (named instance: χρειάζεται να τρέχει η υπηρεσία «SQL Server Browser» στον server και να επιτρέπεται η UDP 1434 στο firewall -- ή ζήτα από το IT σταθερή θύρα και βάλ' την στο WMS_SQL_PORT, αφήνοντας κενό το WMS_SQL_INSTANCE)"
+      : "";
+    fail(`Σύνδεση στη SQL απέτυχε: ${e.message}${hint}`);
   }
   return pool;
 }
