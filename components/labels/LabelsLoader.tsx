@@ -2,21 +2,22 @@
 
 import { useEffect, useState } from "react";
 import AuthGate, { PageLoading, type SessionInfo } from "@/components/auth/AuthGate";
-import LabelsBoard, { type LabelProduct, type LotRow } from "@/components/labels/LabelsBoard";
+import LabelsBoard, { type CatalogItem, type LabelProduct, type LotRow } from "@/components/labels/LabelsBoard";
 import { createClient } from "@/lib/supabase/client";
 import { fetchAll } from "@/lib/supabase/fetchAll";
 import type { ProductSettings } from "@/lib/repack";
 
-type Data = { products: LabelProduct[]; settings: ProductSettings[]; lots: LotRow[] };
+type Data = { products: LabelProduct[]; settings: ProductSettings[]; lots: LotRow[]; catalog: CatalogItem[] };
 type Comp = { recipe_id: string; code: string; description: string };
 
 async function load(): Promise<Data> {
   const supabase = createClient();
-  const [recipes, comps, settings, stock] = await Promise.all([
+  const [recipes, comps, settings, stock, catalog] = await Promise.all([
     fetchAll<{ id: string; product_code: string; description: string }>(supabase, "repack_recipes", "id, product_code, description", ["sort", "id"]),
     fetchAll<Comp>(supabase, "repack_components", "recipe_id, code, description", ["recipe_id", "sort"]),
     fetchAll<ProductSettings>(supabase, "repack_product_settings", "*", ["product_code"]).catch(() => [] as ProductSettings[]),
     fetchAll<LotRow & { qty: number | string }>(supabase, "repack_stock", "item, lot, expiry, position, qty", ["item", "lot"]).catch(() => [] as LotRow[]),
+    fetchAll<CatalogItem>(supabase, "wms_items", "code, description, description_en", ["code"]).catch(() => [] as CatalogItem[]),
   ]);
   // ένας τελικός κωδικός μία φορά (η κύρια προδιαγραφή δίνει περιγραφή + συστατικά)
   const compsByRecipe = new Map<string, { code: string; description: string }[]>();
@@ -34,6 +35,7 @@ async function load(): Promise<Data> {
     products: [...products.values()].sort((a, b) => a.code.localeCompare(b.code, "el", { numeric: true })),
     settings,
     lots: stock.map((s) => ({ ...s, qty: Number(s.qty) })),
+    catalog: catalog.sort((a, b) => a.code.localeCompare(b.code, "el", { numeric: true })),
   };
 }
 
@@ -47,7 +49,7 @@ function Loaded({ session }: { session: SessionInfo }) {
   }, []);
   if (error) return <PageLoading text={`Σφάλμα φόρτωσης: ${error}`} />;
   if (!data) return <PageLoading text="Φόρτωση κωδικών…" />;
-  return <LabelsBoard products={data.products} initialSettings={data.settings} lots={data.lots} userEmail={session.email} role={session.role} />;
+  return <LabelsBoard products={data.products} initialSettings={data.settings} lots={data.lots} catalog={data.catalog} userEmail={session.email} role={session.role} />;
 }
 
 export default function LabelsLoader() {

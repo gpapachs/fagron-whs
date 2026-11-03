@@ -8,8 +8,10 @@ export type LabelData = {
   code: string; // κωδικός τελικού, π.χ. 71-01-359
   descEl: string; // ελληνική περιγραφή
   descEn: string; // αγγλική περιγραφή
-  quantity: number | null; // τεμάχια στη συσκευασία
-  batch: string;
+  quantity: number | string | null; // τεμάχια στη συσκευασία (ή κείμενο, π.χ. «1 KG»)
+  batch: string; // παρτίδα ή serial number
+  /** τι είναι το `batch`: παρτίδα (προεπιλογή) ή serial number */
+  kind?: "batch" | "serial";
 };
 
 export type LabelOptions = {
@@ -54,7 +56,8 @@ function rotationCm(rot: number, W: number, H: number): number[] | null {
 export function dataMatrixText(l: LabelData): string {
   const en = (l.descEn || l.descEl).trim();
   const qty = l.quantity ?? "";
-  return `${l.code}#${l.batch}#${en} | QUANTITY: ${qty} BATCH NO.: ${l.batch}`;
+  const tag = l.kind === "serial" ? "SERIAL NO." : "BATCH NO.";
+  return `${l.code}#${l.batch}#${en} | QUANTITY: ${qty} ${tag}: ${l.batch}`;
 }
 
 /** μόνο ASCII μπαίνει καθαρά στο DataMatrix (οι σαρωτές δεν διαβάζουν σωστά ελληνικά) */
@@ -141,7 +144,7 @@ export function layoutLabel(data: LabelData, mat: Raw, opts: LabelOptions, measu
   const rows: [string, string][] = [
     ["Item Code", data.code],
     ["Quantity", data.quantity != null ? String(data.quantity) : ""],
-    ["Batch.", data.batch],
+    [data.kind === "serial" ? "Serial No." : "Batch.", data.batch],
   ];
   const y0 = m + 12.6 * k + extra * 0.6;
   const lh = 3.6 * k;

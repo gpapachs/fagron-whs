@@ -163,6 +163,8 @@ if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) 
   const txt = dataMatrixText(label);
   const want = "71-01-359#1236095-01#ALUMINIUM TUBE GALENPACK 30 ml | QUANTITY: 75 BATCH NO.: 1236095-01";
   if (txt !== want) fail(`DataMatrix: «${txt}» αντί για «${want}»`);
+  const sn = dataMatrixText({ ...label, code: "12-12-309", batch: "SN-0001", kind: "serial", quantity: 1 });
+  if (sn !== "12-12-309#SN-0001#ALUMINIUM TUBE GALENPACK 30 ml | QUANTITY: 1 SERIAL NO.: SN-0001") fail(`DataMatrix serial: ${sn}`);
   const { doc, pages } = labelsPdf(jsPDF, bwipjs, fonts, [{ data: label, copies: 2 }], DEFAULT_LABEL_OPTIONS);
   const buf = Buffer.from(doc.output("arraybuffer"));
   fs.writeFileSync(path.join(outDir, "sample-label.pdf"), buf);

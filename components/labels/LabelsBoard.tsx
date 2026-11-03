@@ -11,6 +11,11 @@ import type { ProductSettings } from "@/lib/repack";
 
 export type LabelProduct = { code: string; description: string; components: { code: string; description: string }[] };
 export type LotRow = { item: string; lot: string; expiry: string | null; position: string; qty: number };
+export type CatalogItem = { code: string; description: string; description_en: string };
+type WmsRow = { item: string; lot: string; serial: string; expiry: string | null; qty: number; positions: string };
+type Mode = "repack" | "all";
+const LS_MODE = "labels.mode.v1";
+const fmtExp = (e: string | null) => (e ? `${e.slice(8, 10)}/${e.slice(5, 7)}/${e.slice(2, 4)}` : "");
 
 const LS_OPTS = "labels.options.v1";
 const PRINTER_HINT = "Packaging Station 2";
@@ -51,12 +56,14 @@ export default function LabelsBoard({
   products,
   initialSettings,
   lots,
+  catalog,
   userEmail,
   role,
 }: {
   products: LabelProduct[];
   initialSettings: ProductSettings[];
   lots: LotRow[];
+  catalog: CatalogItem[];
   userEmail: string | null;
   role: "admin" | "staff";
 }) {
@@ -80,6 +87,26 @@ export default function LabelsBoard({
   const [printCfg, setPrintCfg] = useState<PrintCfg>(DEFAULT_PRINT);
   const [zebraList, setZebraList] = useState<ZebraDevice[] | null>(null); // null = άγνωστο / δεν τρέχει
   const [zebraErr, setZebraErr] = useState<string | null>(null);
+  const [mode, setModeState] = useState<Mode>("repack");
+  const [kind, setKind] = useState<"batch" | "serial">("batch");
+  const [serials, setSerials] = useState<string[]>([]); // πολλαπλή επιλογή serial -> μία ετικέτα το καθένα
+  const [itemStock, setItemStock] = useState<WmsRow[] | null>(null);
+  const [stockErr, setStockErr] = useState<string | null>(null);
+  const byCatalog = useMemo(() => new Map(catalog.map((c) => [c.code, c])), [catalog]);
+
+  function setMode(m: Mode) {
+    setModeState(m);
+    setCode("");
+    setQuery("");
+    setItemStock(null);
+    setSerials([]);
+    setKind("batch");
+    try {
+      window.localStorage.setItem(LS_MODE, m);
+    } catch {
+      /* τίποτα */
+    }
+  }
 
   const byCode = useMemo(() => new Map(products.map((p) => [p.code, p])), [products]);
 
@@ -121,8 +148,17 @@ export default function LabelsBoard({
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
     const c = p.get("code");
-    if (c && byCode.has(c)) {
-      choose(c);
+    let m: Mode = "repack";
+    try {
+      m = (p.get("mode") as Mode) || (window.localStorage.getItem(LS_MODE) as Mode) || "repack";
+    } catch {
+      /* τίποτα */
+    }
+    if (c && byCode.has(c) && p.get("mode") !== "all") m = "repack";
+    if (m !== "all" && m !== "repack") m = "repack";
+    setModeState(m);
+    if (c && (m === "all" ? byCatalog.has(c.toUpperCase()) : byCode.has(c))) {
+      choose(c.toUpperCase(), m);
       if (p.get("qty")) setQty(p.get("qty") as string);
       if (p.get("batch")) setBatch(p.get("batch") as string);
       if (p.get("copies")) setCopies(p.get("copies") as string);
@@ -131,40 +167,88 @@ export default function LabelsBoard({
   }, []);
 
   /** σειρά: δική μας (αποθηκευμένη) > WMS (μόνο αν είναι λατινικά) > αυτόματη μετάφραση */
+  /** αγγλικά από το WMS: ανασυσκευασίες -> settings, όλα -> κατάλογος (μόνο αν είναι λατινικά) */
+  function wmsEnglish(c: string) {
+    const w = settings[c]?.description_en_wms || byCatalog.get(c)?.description_en || "";
+    return w && isAscii(w) ? w : "";
+  }
   function englishFor(c: string, el: string) {
-    const st = settings[c];
-    if (st?.description_en) return st.description_en;
-    if (st?.description_en_wms && isAscii(st.description_en_wms)) return st.description_en_wms;
-    return autoEnglish(el);
+    return settings[c]?.description_en || wmsEnglish(c) || autoEnglish(el);
   }
 
-  function choose(c: string) {
-    const p = byCode.get(c);
-    if (!p) return;
+  function choose(c: string, m: Mode = mode) {
+    const desc = m === "all" ? byCatalog.get(c)?.description : byCode.get(c)?.description;
+    if (desc === undefined) return;
     const st = settings[c];
     setCode(c);
     setQuery("");
-    setDescEl(p.description);
-    setDescEn(englishFor(c, p.description));
+    setDescEl(desc);
+    setDescEn(englishFor(c, desc));
     const upp = st?.units_per_package ?? st?.units_per_package_wms ?? null;
-    setQty(upp ? String(upp) : "");
+    setQty(upp ? String(upp) : m === "all" ? "1" : "");
     setBatch("");
+    setSerials([]);
+    setKind("batch");
     setCopies("1");
     setError(null);
     setSaved(null);
+    setItemStock(null);
+    setStockErr(null);
+    if (m === "all") loadItemStock(c);
+  }
+
+  async function loadItemStock(c: string) {
+    const { data: rows, error: err } = await createClient()
+      .from("wms_stock")
+      .select("item, lot, serial, expiry, qty, positions")
+      .eq("item", c)
+      .order("expiry", { ascending: true, nullsFirst: false })
+      .limit(2000);
+    if (err) {
+      setStockErr(err.message);
+      setItemStock([]);
+      return;
+    }
+    const list = ((rows ?? []) as WmsRow[]).map((r) => ({ ...r, qty: Number(r.qty) }));
+    setItemStock(list);
+    const lotsOnly = [...new Set(list.filter((r) => r.lot).map((r) => r.lot))];
+    const serialsOnly = list.filter((r) => r.serial);
+    // κωδικός με serial (π.χ. εξοπλισμός) -> λειτουργία serial
+    if (serialsOnly.length && !lotsOnly.length) setKind("serial");
+    else if (lotsOnly.length === 1) setBatch(lotsOnly[0]);
+  }
+
+  // παρτίδες / serial του ίδιου του κωδικού (λειτουργία «Όλα τα προϊόντα»)
+  const ownLots = useMemo(() => {
+    const m = new Map<string, { lot: string; qty: number; expiry: string | null; positions: string }>();
+    for (const r of itemStock ?? []) {
+      if (!r.lot) continue;
+      const p = m.get(r.lot);
+      if (p) m.set(r.lot, { ...p, qty: p.qty + r.qty, expiry: p.expiry && r.expiry ? (p.expiry < r.expiry ? p.expiry : r.expiry) : p.expiry || r.expiry });
+      else m.set(r.lot, { lot: r.lot, qty: r.qty, expiry: r.expiry, positions: r.positions });
+    }
+    return [...m.values()].sort((a, b) => (a.expiry ?? "9999").localeCompare(b.expiry ?? "9999") || a.lot.localeCompare(b.lot));
+  }, [itemStock]);
+  const ownSerials = useMemo(
+    () => (itemStock ?? []).filter((r) => r.serial).sort((a, b) => a.serial.localeCompare(b.serial, "el", { numeric: true })),
+    [itemStock]
+  );
+  function toggleSerial(sn: string) {
+    setSerials((cur) => (cur.includes(sn) ? cur.filter((x) => x !== sn) : [...cur, sn]));
   }
 
   const matches = useMemo(() => {
     const q = searchKey(query.trim());
     if (!q) return [];
-    return products.filter((p) => searchKey(`${p.code} ${p.description}`).includes(q)).slice(0, 12);
-  }, [query, products]);
+    const src: { code: string; description: string }[] = mode === "all" ? catalog : products;
+    return src.filter((p) => searchKey(`${p.code} ${p.description}`).includes(q)).slice(0, 15);
+  }, [query, products, catalog, mode]);
 
   // παρτίδες των ΣΥΣΤΑΤΙΚΩΝ στο απόθεμα (η ετικέτα παίρνει την παρτίδα του συστατικού
   // που ανασυσκευάζεται). Κύριο συστατικό πρώτο: ίδιος αριθμός με τον τελικό
   // (71-01-359 -> 40-01-359), αλλιώς το πρώτο της προδιαγραφής. Νωρίτερη λήξη πρώτη.
   const compLots = useMemo(() => {
-    const p = byCode.get(code);
+    const p = mode === "repack" ? byCode.get(code) : undefined;
     if (!p) return [] as { code: string; description: string; main: boolean; lots: LotRow[] }[];
     const suffix = code.slice(code.indexOf("-") + 1);
     const mainIdx = Math.max(0, p.components.findIndex((c) => c.code.slice(c.code.indexOf("-") + 1) === suffix));
@@ -180,7 +264,7 @@ export default function LabelsBoard({
       const list = [...m.values()].sort((a, b) => (a.expiry ?? "9999").localeCompare(b.expiry ?? "9999") || a.lot.localeCompare(b.lot));
       return { ...c, lots: list };
     });
-  }, [byCode, code, lots]);
+  }, [byCode, code, lots, mode]);
   const lotOptions = compLots.flatMap((c) => c.lots);
 
   // μία μόνο παρτίδα στο κύριο συστατικό -> μπαίνει αυτόματα
@@ -190,20 +274,26 @@ export default function LabelsBoard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compLots]);
 
-  const data: LabelData | null = code
-    ? { code, descEl: descEl.trim(), descEn: descEn.trim(), quantity: qty ? Number(qty) : null, batch: batch.trim() }
-    : null;
+  const qtyValue: number | string | null = !qty.trim() ? null : /^\d+$/.test(qty.trim()) ? Number(qty.trim()) : qty.trim();
+  const effKind = mode === "all" ? kind : "batch";
+  // όλες οι ετικέτες που θα τυπωθούν: μία ανά επιλεγμένο serial, αλλιώς μία με το Batch/Serial του πεδίου
+  const ids = effKind === "serial" && serials.length ? serials : batch.trim() ? [batch.trim()] : [];
+  const labelList: LabelData[] = code
+    ? (ids.length ? ids : [""]).map((id) => ({ code, descEl: descEl.trim(), descEn: descEn.trim(), quantity: qtyValue, batch: id, kind: effKind }))
+    : [];
+  const data: LabelData | null = labelList[0] ?? null;
   const dmText = data ? dataMatrixText(data) : "";
   const asciiOk = isAscii(dmText);
   const nCopies = Math.max(1, Math.min(500, Math.floor(Number(copies) || 1)));
-  const ready = !!data && !!data.batch && data.quantity !== null && data.quantity > 0;
+  const total = ids.length * nCopies;
+  const ready = !!data && ids.length > 0 && qtyValue !== null && qtyValue !== 0;
 
-  async function build(count: number) {
-    if (!data) throw new Error("Διάλεξε κωδικό");
+  async function build(count: number, list: LabelData[] = labelList) {
+    if (!list.length) throw new Error("Διάλεξε κωδικό");
     const [{ jsPDF }, bwip, fonts, L] = await Promise.all([import("jspdf"), import("bwip-js"), loadPdfFonts(), import("@/lib/labels")]);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const engine = (bwip as any).default ?? bwip;
-    return L.labelsPdf(jsPDF, engine, fonts, [{ data, copies: count }], { ...opts, preprinted: true });
+    return L.labelsPdf(jsPDF, engine, fonts, list.map((d) => ({ data: d, copies: count })), { ...opts, preprinted: true });
   }
 
   // ζωντανή προεπισκόπηση (1 ετικέτα)
@@ -215,7 +305,7 @@ export default function LabelsBoard({
     let cancelled = false;
     const t = setTimeout(async () => {
       try {
-        const { doc } = await build(1);
+        const { doc } = await build(1, data ? [data] : []);
         if (cancelled) return;
         const url = URL.createObjectURL(doc.output("blob"));
         if (previewUrl.current) URL.revokeObjectURL(previewUrl.current);
@@ -231,7 +321,7 @@ export default function LabelsBoard({
       clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code, descEl, descEn, qty, batch, opts.offsetXMm, opts.offsetYMm, opts.rotation]);
+  }, [code, descEl, descEn, qty, batch, kind, serials[0], opts.offsetXMm, opts.offsetYMm, opts.rotation]);
 
   /** Απευθείας εκτύπωση: Zebra Browser Print (ZPL, χωρίς παράθυρο). Αν δεν υπάρχει,
    *  εκτύπωση από τον browser χωρίς PDF (ανοίγει μόνο το παράθυρο επιλογής εκτυπωτή). */
@@ -254,9 +344,10 @@ export default function LabelsBoard({
           const got = dpi;
           setPrintCfg((c) => ({ ...c, detected: { ...c.detected, [dev.name]: got } }));
         }
-        const bmp = L.labelBitmap(document.createElement("canvas"), engine, data, o, dpi, family);
-        await zebraSend(dev, L.bitmapToZpl(bmp, nCopies));
-        setSaved(`✓ Στάλθηκ${nCopies > 1 ? `αν ${nCopies} ετικέτες` : "ε 1 ετικέτα"} στον ${dev.name} (${dpi} dpi).`);
+        const canvas = document.createElement("canvas");
+        const zpl = labelList.map((d) => L.bitmapToZpl(L.labelBitmap(canvas, engine, d, o, dpi as number, family), nCopies)).join("\n");
+        await zebraSend(dev, zpl);
+        setSaved(`✓ Στάλθηκ${total > 1 ? `αν ${total} ετικέτες` : "ε 1 ετικέτα"} στον ${dev.name} (${dpi} dpi).`);
       } else {
         await browserPrint(L, engine, family, o);
       }
@@ -276,12 +367,14 @@ export default function LabelsBoard({
     family: string,
     o: LabelOptions
   ) {
-    if (!data) return;
+    if (!labelList.length) return;
     const canvas = document.createElement("canvas");
-    L.labelBitmap(canvas, engine, data, o, 300, family);
-    const url = canvas.toDataURL("image/png");
+    const urls = labelList.map((d) => {
+      L.labelBitmap(canvas, engine, d, o, 300, family);
+      return canvas.toDataURL("image/png");
+    });
     const { PW, PH } = pageSize(o);
-    const imgs = Array.from({ length: nCopies }, () => `<img src="${url}">`).join("");
+    const imgs = urls.map((url) => Array.from({ length: nCopies }, () => `<img src="${url}">`).join("")).join("");
     const frame = document.createElement("iframe");
     frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
     frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><style>@page{size:${PW}mm ${PH}mm;margin:0}html,body{margin:0;padding:0}img{display:block;width:${PW}mm;height:${PH}mm;break-after:page;page-break-after:always}img:last-child{break-after:auto;page-break-after:auto}</style></head><body>${imgs}</body></html>`;
@@ -321,9 +414,9 @@ export default function LabelsBoard({
   async function rememberEnglish() {
     if (!code) return;
     const st = settings[code];
-    const wmsEn = st?.description_en_wms && isAscii(st.description_en_wms) ? st.description_en_wms : "";
+    const wmsEn = wmsEnglish(code);
     const curEn = st?.description_en ?? "";
-    const auto = autoEnglish(byCode.get(code)?.description ?? "");
+    const auto = autoEnglish((mode === "all" ? byCatalog.get(code)?.description : byCode.get(code)?.description) ?? "");
     // αποθηκεύεται μόνο αν ο χρήστης την άλλαξε (όχι αν είναι η αυτόματη ή του WMS)
     const t = descEn.trim();
     const wantEn = t === wmsEn || (!wmsEn && t === auto) ? "" : t;
@@ -331,7 +424,7 @@ export default function LabelsBoard({
     if (wantEn !== curEn) patch.description_en = wantEn;
     const n = Number(qty);
     const curUpp = st?.units_per_package ?? st?.units_per_package_wms ?? null;
-    if (n > 0 && n !== curUpp && Number.isInteger(n)) patch.units_per_package = n;
+    if (n > 0 && n !== curUpp && Number.isInteger(n) && !(mode === "all" && n === 1 && curUpp == null)) patch.units_per_package = n;
     if (!Object.keys(patch).length) return;
     const { data: row, error: err } = await createClient()
       .from("repack_product_settings")
@@ -359,15 +452,24 @@ export default function LabelsBoard({
           </div>
         </div>
 
+        <div className="lb-modes" role="tablist">
+          <button type="button" role="tab" aria-selected={mode === "repack"} className={mode === "repack" ? "on" : ""} onClick={() => setMode("repack")}>
+            Ανασυσκευασίες
+          </button>
+          <button type="button" role="tab" aria-selected={mode === "all"} className={mode === "all" ? "on" : ""} onClick={() => setMode("all")}>
+            Όλα τα προϊόντα <span className="n">{catalog.length.toLocaleString("el-GR")}</span>
+          </button>
+        </div>
+
         <div className="lb-layout">
           <section className="lb-form">
             <label className="field lb-search">
-              Τελικός κωδικός
+              {mode === "all" ? "Κωδικός προϊόντος" : "Τελικός κωδικός"}
               <input
                 value={query || (code ? `${code} · ${descEl}` : "")}
                 onChange={(e) => setQuery(e.target.value)}
                 onFocus={(e) => code && !query && e.target.select()}
-                placeholder="Κωδικός ή περιγραφή, π.χ. 71-01-359 ή σωληνάριο"
+                placeholder={mode === "all" ? "Οποιοσδήποτε κωδικός ή περιγραφή του WMS" : "Κωδικός ή περιγραφή, π.χ. 71-01-359 ή σωληνάριο"}
                 autoFocus
               />
               {matches.length > 0 && (
@@ -380,6 +482,9 @@ export default function LabelsBoard({
                     </li>
                   ))}
                 </ul>
+              )}
+              {mode === "all" && catalog.length === 0 && (
+                <span className="rp-hint">Ο κατάλογος γεμίζει με τον επόμενο συγχρονισμό του WMS (νέο sync-stock.ps1).</span>
               )}
             </label>
 
@@ -404,14 +509,43 @@ export default function LabelsBoard({
                 </label>
                 <div className="lb-row">
                   <label className="field">
-                    Quantity (τεμ.)
-                    <input inputMode="numeric" value={qty} onChange={(e) => setQty(e.target.value.replace(/\D/g, ""))} placeholder="π.χ. 75" />
+                    Quantity{mode === "repack" ? " (τεμ.)" : ""}
+                    {mode === "repack" ? (
+                      <input inputMode="numeric" value={qty} onChange={(e) => setQty(e.target.value.replace(/\D/g, ""))} placeholder="π.χ. 75" />
+                    ) : (
+                      <input value={qty} onChange={(e) => setQty(e.target.value)} placeholder="π.χ. 1 ή 500 G" />
+                    )}
                   </label>
                   <label className="field">
-                    Batch
-                    <input value={batch} onChange={(e) => setBatch(e.target.value.trim())} list="lb-lots" placeholder="π.χ. 1236095-01" />
+                    {mode === "all" ? (
+                      <span className="lb-kind">
+                        <button type="button" className={kind === "batch" ? "on" : ""} onClick={() => setKind("batch")}>
+                          Batch
+                        </button>
+                        <button type="button" className={kind === "serial" ? "on" : ""} onClick={() => setKind("serial")}>
+                          Serial
+                        </button>
+                      </span>
+                    ) : (
+                      "Batch"
+                    )}
+                    {effKind === "serial" && serials.length > 0 ? (
+                      <input value={`${serials.length} επιλεγμένα serial`} readOnly onClick={() => setSerials([])} title="Κλικ για καθάρισμα" />
+                    ) : (
+                      <input
+                        value={batch}
+                        onChange={(e) => setBatch(e.target.value.trim())}
+                        list="lb-lots"
+                        placeholder={effKind === "serial" ? "π.χ. SN123456" : "π.χ. 1236095-01"}
+                      />
+                    )}
                     <datalist id="lb-lots">
-                      {lotOptions.map((l) => (
+                      {(mode === "all"
+                        ? effKind === "serial"
+                          ? ownSerials.map((r) => ({ item: r.item, lot: r.serial, position: r.positions, qty: r.qty, expiry: r.expiry }))
+                          : ownLots.map((l) => ({ item: code, lot: l.lot, position: l.positions, qty: l.qty, expiry: l.expiry }))
+                        : lotOptions
+                      ).map((l) => (
                         <option key={`${l.item}|${l.lot}`} value={l.lot}>
                           {`${l.item} · ${l.position} · ${l.qty}${l.expiry ? ` · λ. ${l.expiry}` : ""}`}
                         </option>
@@ -423,6 +557,71 @@ export default function LabelsBoard({
                     <input inputMode="numeric" value={copies} onChange={(e) => setCopies(e.target.value.replace(/\D/g, ""))} />
                   </label>
                 </div>
+                {mode === "all" && (
+                  <div className="lb-comps">
+                    <span className="l">{effKind === "serial" ? "Serial στο απόθεμα" : "Παρτίδες στο απόθεμα"}</span>
+                    {itemStock === null && <span className="rp-hint">Φόρτωση αποθέματος…</span>}
+                    {stockErr && <span className="rp-notice error">{stockErr}</span>}
+                    {itemStock !== null && effKind === "batch" && (
+                      ownLots.length ? (
+                        <div className="lb-lots">
+                          {ownLots.slice(0, 30).map((l) => (
+                            <button key={l.lot} type="button" className={`lb-lotbtn ${batch === l.lot ? "on" : ""}`} onClick={() => setBatch(l.lot)} title={`Θέση ${l.positions}`}>
+                              <span className="lot">{l.lot}</span>
+                              <span className="meta">
+                                {l.qty.toLocaleString("el-GR")}
+                                {l.expiry ? ` · λ. ${fmtExp(l.expiry)}` : ""}
+                                {l.positions ? ` · ${l.positions}` : ""}
+                              </span>
+                            </button>
+                          ))}
+                          {ownLots.length > 30 && <span className="rp-hint">+{ownLots.length - 30} ακόμα (γράψε στο πεδίο)</span>}
+                        </div>
+                      ) : (
+                        <span className="rp-hint">
+                          Χωρίς παρτίδα στο απόθεμα{ownSerials.length ? ` — έχει ${ownSerials.length} serial (πάτα «Serial»)` : ""}. Μπορείς να τη γράψεις.
+                        </span>
+                      )
+                    )}
+                    {itemStock !== null && effKind === "serial" && (
+                      ownSerials.length ? (
+                        <>
+                          <div className="lb-serial-tools">
+                            <span className="rp-hint">Διάλεξε ένα ή περισσότερα — μία ετικέτα ανά serial.</span>
+                            <button type="button" className="btn ghost sm" onClick={() => setSerials(ownSerials.map((r) => r.serial))}>
+                              Όλα ({ownSerials.length})
+                            </button>
+                            {serials.length > 0 && (
+                              <button type="button" className="btn ghost sm" onClick={() => setSerials([])}>
+                                Καθάρισμα
+                              </button>
+                            )}
+                          </div>
+                          <div className="lb-lots">
+                            {ownSerials.slice(0, 200).map((r) => (
+                              <button
+                                key={`${r.lot}|${r.serial}`}
+                                type="button"
+                                className={`lb-lotbtn ${serials.includes(r.serial) ? "on" : ""}`}
+                                onClick={() => toggleSerial(r.serial)}
+                                title={`Θέση ${r.positions}`}
+                              >
+                                <span className="lot">{r.serial}</span>
+                                <span className="meta">
+                                  {r.lot ? `παρτ. ${r.lot}` : ""}
+                                  {r.positions ? ` · ${r.positions}` : ""}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      ) : (
+                        <span className="rp-hint">Δεν υπάρχουν serial στο απόθεμα για αυτόν τον κωδικό — γράψε το serial στο πεδίο.</span>
+                      )
+                    )}
+                  </div>
+                )}
+                {mode === "repack" && (
                 <div className="lb-comps">
                   <span className="l">Παρτίδες συστατικών στο απόθεμα</span>
                   {compLots.length === 0 && <span className="rp-hint">Ο κωδικός δεν έχει συστατικά στις προδιαγραφές.</span>}
@@ -456,6 +655,7 @@ export default function LabelsBoard({
                     </div>
                   ))}
                 </div>
+                )}
 
                 {!asciiOk && (
                   <p className="rp-notice warn">
@@ -468,13 +668,13 @@ export default function LabelsBoard({
 
                 <div className="lb-actions">
                   <button type="button" className="btn primary" onClick={print} disabled={!ready || busy}>
-                    {busy ? "Δημιουργία…" : `Εκτύπωση ${nCopies > 1 ? `${nCopies} ετικετών` : "ετικέτας"}`}
+                    {busy ? "Εκτύπωση…" : `Εκτύπωση ${total > 1 ? `${total} ετικετών` : "ετικέτας"}`}
                   </button>
                   <button type="button" className="btn ghost" onClick={openPdf} disabled={!ready || busy} title="Άνοιγμα ως PDF (αποθήκευση / αρχείο)">
                     PDF
                   </button>
                 </div>
-                {!ready && <p className="rp-hint">Συμπλήρωσε Quantity και Batch για εκτύπωση.</p>}
+                {!ready && <p className="rp-hint">Συμπλήρωσε Quantity και {effKind === "serial" ? "Serial" : "Batch"} για εκτύπωση.</p>}
                 {ready && (
                   <p className="rp-hint">
                     {zebraList?.length

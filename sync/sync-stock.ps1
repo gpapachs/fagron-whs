@@ -339,6 +339,84 @@ function Get-ItemInfo($finals) {
   return ,([object[]]$out.ToArray())
 }
 
+# ------------------------------------------------------------------ γενικές ετικέτες (όλοι οι κωδικοί)
+# Κατάλογος κωδικών + απόθεμα ανά παρτίδα / serial για τη σελίδα Ετικέτες -> «Όλα τα προϊόντα».
+function Find-SerialColumns {
+  try {
+    $t = Invoke-Sql "select TABLE_NAME as t, COLUMN_NAME as c from INFORMATION_SCHEMA.COLUMNS where COLUMN_NAME like '%serial%' or COLUMN_NAME like '%SerNo%' order by TABLE_NAME, COLUMN_NAME"
+    return ,([object[]]@($t.Rows | ForEach-Object { [pscustomobject]@{ table = To-Str $_['t']; column = To-Str $_['c'] } }))
+  } catch { return ,([object[]]@()) }
+}
+
+function Get-GeneralStock($result) {
+  $names = @($result.Columns | ForEach-Object { $_.ColumnName.ToLowerInvariant() })
+  if ($names -contains 'serial') { return ,$result }
+  $cols = Find-SerialColumns
+  if ($cols.Count) { Log ("Στήλες serial στο WMS: " + (($cols | ForEach-Object { "$($_.table).$($_.column)" }) -join ', ')) }
+  $sc = @($cols | Where-Object { $_.table -eq 'ms_Stock' -and $_.column -match '^[A-Za-z0-9_]+$' } | Select-Object -First 1)
+  if (-not $sc.Count) { return ,$result }
+  $col = $sc[0].column
+  $q = "select p.code as position, i.code as item, i.Descr as description, s.Qty1 as qty, s.Lot as lot, s.ExpDate as expiry, s.[$col] as serial from dbo.ms_Stock s join dbo.ms_Item i on i.ID = s.ItemId join dbo.ms_Pos p on p.ID = s.PosId where s.Qty1 > 0"
+  try { $t = Invoke-Sql $q; Log ("Serial: από ms_Stock.$col"); return ,$t } catch { Log ("Serial: το query απέτυχε (" + $_.Exception.Message + ") -- χωρίς serial"); return ,$result }
+}
+
+function Build-General($table) {
+  $names = @($table.Columns | ForEach-Object { $_.ColumnName.ToLowerInvariant() })
+  $has = @{}; foreach ($n in $names) { $has[$n] = $true }
+  $stock = [ordered]@{}
+  $desc = @{}
+  foreach ($r in $table.Rows) {
+    $item = (To-Str $r['item']).ToUpperInvariant()
+    $qty = To-Num $r['qty']
+    if (-not $item -or $null -eq $qty -or $qty -le 0) { continue }
+    $lot = if ($has['lot']) { To-Str $r['lot'] } else { '' }
+    $serial = if ($has['serial']) { To-Str $r['serial'] } else { '' }
+    $pos = if ($has['position']) { To-Str $r['position'] } else { '' }
+    $exp = if ($has['expiry']) { To-Date $r['expiry'] } else { $null }
+    if ($has['description'] -and -not $desc.ContainsKey($item)) { $desc[$item] = To-Str $r['description'] }
+    $key = "$item|$lot|$serial"
+    if ($stock.Contains($key)) {
+      $o = $stock[$key]
+      $o.qty = [math]::Round($o.qty + $qty, 6)
+      if ($exp -and (-not $o.expiry -or $exp -lt $o.expiry)) { $o.expiry = $exp }
+      if ($pos -and -not $o._pos.Contains($pos)) { [void]$o._pos.Add($pos) }
+      continue
+    }
+    $set = New-Object 'Collections.Generic.List[string]'
+    if ($pos) { $set.Add($pos) }
+    $stock[$key] = [pscustomobject]@{ item = $item; lot = $lot; serial = $serial; expiry = $exp; qty = $qty; _pos = $set }
+  }
+  $rows = foreach ($o in $stock.Values) {
+    [pscustomobject][ordered]@{ item = $o.item; lot = $o.lot; serial = $o.serial; expiry = $o.expiry; qty = $o.qty; positions = (($o._pos | Select-Object -First 6) -join ', ') }
+  }
+  # κατάλογος: όλοι οι κωδικοί του ms_Item (αν διαβάζεται), αλλιώς όσοι έχουν απόθεμα
+  $items = New-Object Collections.ArrayList
+  try {
+    $t = Invoke-Sql "select i.code as code, i.Descr as description, i.AlterDescr as description_en from dbo.ms_Item i where i.code is not null"
+    foreach ($r in $t.Rows) {
+      $code = (To-Str $r['code']).ToUpperInvariant(); if (-not $code) { continue }
+      $en = To-Str $r['description_en']; if ($en -match '[Ͱ-Ͽἀ-῿]') { $en = '' }
+      [void]$items.Add([pscustomobject]@{ code = $code; description = (To-Str $r['description']); description_en = $en })
+    }
+  } catch {
+    Log ("Κατάλογος ms_Item: απέτυχε (" + $_.Exception.Message + ") -- μόνο κωδικοί με απόθεμα")
+    foreach ($k in $desc.Keys) { [void]$items.Add([pscustomobject]@{ code = $k; description = $desc[$k]; description_en = '' }) }
+  }
+  return @{ stock = [object[]]@($rows); items = [object[]]$items.ToArray() }
+}
+
+function Upload-General($g) {
+  $size = 2000
+  $stock = $g.stock; $items = $g.items
+  $chunks = [math]::Max([math]::Ceiling($stock.Count / $size), [math]::Ceiling($items.Count / $size))
+  for ($i = 0; $i -lt [math]::Max(1, $chunks); $i++) {
+    $s = @(); $it = @()
+    if ($i * $size -lt $stock.Count) { $s = $stock[($i * $size)..([math]::Min($stock.Count, ($i + 1) * $size) - 1)] }
+    if ($i * $size -lt $items.Count) { $it = $items[($i * $size)..([math]::Min($items.Count, ($i + 1) * $size) - 1)] }
+    [void](Sb-Request 'POST' '/rest/v1/rpc/wms_upload' @{ p_items = [object[]]@($it); p_stock = [object[]]@($s); p_first = ($i -eq 0) })
+  }
+}
+
 # ------------------------------------------------------------------ main
 if ($Test) { Discover; exit 0 }
 if ($Describe) { Describe-Tables $Describe; exit 0 }
@@ -374,7 +452,12 @@ Log ("Φιλτράρισμα: {0} γραμμές ({1} κωδικοί) από {2}
 $itemInfo = Get-ItemInfo $finals
 Log ("Αγγλικές περιγραφές τελικών κωδικών από το WMS: {0}" -f $itemInfo.Count)
 
+$general = Build-General (Get-GeneralStock $result)
+$withSerial = @($general.stock | Where-Object { $_.serial }).Count
+Log ("Γενικές ετικέτες: {0} κωδικοί καταλόγου · {1} γραμμές αποθέματος (παρτίδα/serial) · με serial: {2}" -f $general.items.Count, $general.stock.Count, $withSerial)
+
 if ($DryRun) {
+  $general.stock | Select-Object -First 8 | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
   $kept | Select-Object -First 15 | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
   $itemInfo | Select-Object -First 5 | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
   Log 'Δοκιμή (-DryRun): δεν ανέβηκε τίποτα.'
@@ -396,4 +479,11 @@ if ($itemInfo.Count) {
     $n = Sb-Request 'POST' '/rest/v1/rpc/repack_update_item_info' @{ items = $itemInfo }
     Log ("Στοιχεία ετικέτας: ενημερώθηκαν {0} κωδικοί." -f $n)
   } catch { Log ("Στοιχεία ετικέτας: η ενημέρωση απέτυχε (" + $_ + ") -- το απόθεμα ανέβηκε κανονικά") }
+}
+
+if ($general.stock.Count -gt 0) {
+  try {
+    Upload-General $general
+    Log ("Γενικές ετικέτες: ανέβηκαν {0} γραμμές αποθέματος, {1} κωδικοί." -f $general.stock.Count, $general.items.Count)
+  } catch { Log ("Γενικές ετικέτες: το ανέβασμα απέτυχε (" + $_ + ") -- η ανασυσκευασία ενημερώθηκε κανονικά") }
 }
