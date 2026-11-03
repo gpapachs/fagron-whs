@@ -768,3 +768,101 @@ export function stockPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFon
   footer(doc, "Απόθεμα · Fagron Hellas");
   return { doc, fileName: `apothema-${stamp(meta.generatedAt)}.pdf` };
 }
+
+// ============================================================ Κινήσεις (σελίδα «Κινήσεις»)
+
+export type MoveRow = {
+  id: string;
+  moved_at: string | null;
+  type: string;
+  doc: string;
+  item: string;
+  description: string;
+  lot: string;
+  serial: string;
+  qty: number | null;
+  from_pos: string;
+  to_pos: string;
+  customer: string;
+  username: string;
+};
+
+const dt = (iso: string | null) => (iso ? when(new Date(iso)) : "");
+
+export function movesWorkbook(XLSX: XLSXLib, rows: MoveRow[], meta: StockExportMeta) {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    wb,
+    sheet(
+      XLSX,
+      rows.map((r) => ({
+        "Ημερομηνία": r.moved_at ? new Date(r.moved_at) : "",
+        "Κίνηση": r.type,
+        "Παραστατικό": r.doc,
+        "Κωδικός": r.item,
+        "Περιγραφή": r.description,
+        "Παρτίδα": r.lot,
+        "Serial": r.serial,
+        "Ποσότητα": r.qty ?? "",
+        "Από θέση": r.from_pos,
+        "Προς θέση": r.to_pos,
+        "Πελάτης": r.customer,
+        "Χρήστης": r.username,
+      })),
+      [17, 16, 16, 14, 44, 16, 16, 10, 16, 16, 34, 14]
+    ),
+    "Κινήσεις"
+  );
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.aoa_to_sheet([
+      ["Κινήσεις WMS"],
+      ["Δημιουργήθηκε", when(meta.generatedAt)],
+      ["Από", meta.userEmail ?? ""],
+      ["Φίλτρα", meta.filters.join(" · ") || "χωρίς"],
+      ["Γραμμές", rows.length],
+    ]),
+    "Πληροφορίες"
+  );
+  return { wb, fileName: `kiniseis-${stamp(meta.generatedAt)}.xlsx` };
+}
+
+export function movesPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFonts, rows: MoveRow[], meta: StockExportMeta) {
+  const doc = newDoc(jsPDF, fonts, "landscape");
+  const y = header(
+    doc,
+    "Κινήσεις",
+    [
+      `Δημιουργήθηκε: ${when(meta.generatedAt)}${meta.userEmail ? ` · ${meta.userEmail}` : ""}`,
+      `Φίλτρα: ${meta.filters.join(" · ") || "χωρίς"}`,
+      `${rows.length.toLocaleString("el-GR")} κινήσεις`,
+    ],
+    "Fagron Hellas · Αποθήκη"
+  );
+  autoTable(doc, {
+    ...baseTable,
+    startY: y,
+    head: [["Ημερομηνία", "Κίνηση", "Παραστατικό", "Κωδικός", "Περιγραφή", "Παρτίδα", "Serial", "Ποσ.", "Από", "Προς", "Πελάτης"]],
+    body: rows.map((r) => [dt(r.moved_at), r.type, r.doc, r.item, r.description, r.lot, r.serial, r.qty != null ? q(r.qty) : "", r.from_pos, r.to_pos, r.customer]),
+    styles: { ...baseTable.styles, fontSize: 7.2, cellPadding: 1.2 },
+    columnStyles: {
+      0: { cellWidth: 22 },
+      1: { cellWidth: 18 },
+      2: { cellWidth: 20 },
+      3: { cellWidth: 17 },
+      4: { cellWidth: "auto" },
+      5: { cellWidth: 24 },
+      6: { cellWidth: 20 },
+      7: { cellWidth: 12, halign: "right" },
+      8: { cellWidth: 19 },
+      9: { cellWidth: 19 },
+      10: { cellWidth: 36 },
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    didParseCell: (d: any) => {
+      if (d.section === "body" && d.row.index % 2 === 1) d.cell.styles.fillColor = ZEBRA;
+    },
+  });
+  footer(doc, "Κινήσεις · Fagron Hellas");
+  return { doc, fileName: `kiniseis-${stamp(meta.generatedAt)}.pdf` };
+}

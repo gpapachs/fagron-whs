@@ -12,10 +12,14 @@
     .\sync-stock.cmd -Force     συγχρονισμός ακόμα κι αν το απόθεμα έπεσε απότομα
     .\sync-stock.cmd -Describe Pos   όλες οι στήλες των πινάκων με «Pos» στο όνομα
     .\sync-stock.cmd -Probe 71-01-359 -Find 75   όλες οι τιμές ενός είδους στους πίνακες του WMS
+    .\sync-stock.cmd -Moves     εύρεση πινάκων κινήσεων (-> wms-kiniseis.txt)
+
+  Κινήσεις: αν υπάρχει το movements-query.sql, κάθε συγχρονισμός ανεβάζει και τις
+  ΝΕΕΣ κινήσεις (από την τελευταία που υπάρχει στην εφαρμογή, αρχικά MOVES_DAYS ημέρες).
 
   Ρυθμίσεις: rythmiseis.txt (ή .env) στον ίδιο φάκελο. Ο κωδικός μένει εκεί.
 #>
-param([switch]$Test, [switch]$DryRun, [switch]$Force, [string]$Describe, [string]$Probe, [string]$Find)
+param([switch]$Test, [switch]$DryRun, [switch]$Force, [string]$Describe, [string]$Probe, [string]$Find, [switch]$Moves)
 
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
@@ -416,10 +420,93 @@ function Upload-General($g) {
   }
 }
 
+# ------------------------------------------------------------------ κινήσεις
+# Εύρεση: πίνακες με όνομα σαν κινήσεις/παραστατικά, στήλες + 3 πρόσφατες γραμμές.
+function Discover-Moves {
+  $tabs = Invoke-Sql @"
+select t.TABLE_SCHEMA s, t.TABLE_NAME t,
+       (select sum(p.rows) from sys.partitions p where p.object_id = object_id(quotename(t.TABLE_SCHEMA) + '.' + quotename(t.TABLE_NAME)) and p.index_id in (0, 1)) n
+from INFORMATION_SCHEMA.TABLES t
+where t.TABLE_TYPE = 'BASE TABLE'
+  and (t.TABLE_NAME like '%Trans%' or t.TABLE_NAME like '%Mov%' or t.TABLE_NAME like '%Kin%' or t.TABLE_NAME like '%Hist%'
+    or t.TABLE_NAME like '%Order%' or t.TABLE_NAME like '%Doc%' or t.TABLE_NAME like '%Pick%' or t.TABLE_NAME like '%Recei%'
+    or t.TABLE_NAME like '%Ship%' or t.TABLE_NAME like '%Disp%' or t.TABLE_NAME like '%Cust%' or t.TABLE_NAME like '%Trader%'
+    or t.TABLE_NAME like '%Partner%' or t.TABLE_NAME like '%Client%' or t.TABLE_NAME like '%Task%' or t.TABLE_NAME like '%Log%')
+order by n desc
+"@
+  $out = New-Object Collections.ArrayList
+  [void]$out.Add("Πίνακες που μοιάζουν με κινήσεις / παραστατικά / πελάτες (γραμμές):")
+  foreach ($t in $tabs.Rows) { [void]$out.Add(("  {0}.{1}  ({2})" -f $t.s, $t.t, $t.n)) }
+  $i = 0
+  foreach ($t in $tabs.Rows) {
+    if ($i -ge 25) { break }
+    if (-not ($t.n -gt 0)) { continue }
+    $i++
+    $tn = "[$($t.s)].[$($t.t)]"
+    $cols = Invoke-Sql "select COLUMN_NAME c, DATA_TYPE dt from INFORMATION_SCHEMA.COLUMNS where TABLE_SCHEMA = @s and TABLE_NAME = @t order by ORDINAL_POSITION" @{ s = [string]$t.s; t = [string]$t.t }
+    [void]$out.Add(''); [void]$out.Add("== $($t.s).$($t.t)  ($($t.n) γραμμές)")
+    [void]$out.Add('   στήλες: ' + (($cols.Rows | ForEach-Object { "$($_.c) [$($_.dt)]" }) -join ', '))
+    $dcol = @($cols.Rows | Where-Object { $_.dt -match 'date|time' } | Select-Object -First 1)
+    $order = if ($dcol.Count) { " order by [$($dcol[0].c)] desc" } else { '' }
+    try { $rows = Invoke-Sql "select top 3 * from $tn$order" } catch { [void]$out.Add('   (δεν διαβάζεται)'); continue }
+    foreach ($r in $rows.Rows) {
+      $vals = foreach ($c in $rows.Columns) {
+        $v = $r[$c.ColumnName]
+        if ($null -eq $v -or $v -is [DBNull]) { continue }
+        $sv = if ($v -is [DateTime]) { $v.ToString('yyyy-MM-dd HH:mm', $Inv) } elseif ($v -is [double] -or $v -is [decimal]) { ([double]$v).ToString($Inv) } else { [string]$v }
+        if ($sv -eq '' -or $sv.Length -gt 60) { continue }
+        "$($c.ColumnName)=$sv"
+      }
+      [void]$out.Add('   · ' + ($vals -join ' | '))
+    }
+  }
+  $out | ForEach-Object { Write-Host $_ }
+  $report = Join-Path $Here 'wms-kiniseis.txt'
+  [IO.File]::WriteAllLines($report, [string[]]$out, (New-Object Text.UTF8Encoding $true))
+  Write-Host ''
+  Write-Host "Αποθηκεύτηκε στο $report -- στείλε το (δεν έχει κωδικούς πρόσβασης)."
+}
+
+# Συγχρονισμός κινήσεων: movements-query.sql με παράμετρο @since, στήλες
+# id, moved_at, type, doc, item, lot, serial, qty, from_pos, to_pos, customer, username
+function Sync-Moves {
+  $file = Join-Path $Here 'movements-query.sql'
+  if (-not (Test-Path $file)) { return }
+  $q = [IO.File]::ReadAllText($file, [Text.Encoding]::UTF8)
+  if ([regex]::Replace($q, '--.*$', '', 'Multiline') -match '\b(insert|update|delete|merge|drop|alter|create|truncate|exec|execute)\b') { Log 'movements-query.sql: επιτρέπεται μόνο SELECT -- παραλείπεται'; return }
+  $last = $null
+  try { $last = Sb-Request 'POST' '/rest/v1/rpc/wms_moves_last' @{} } catch { Log ("Κινήσεις: " + $_); return }
+  $days = 365; $o = Opt 'MOVES_DAYS'; if ($o -match '^\d+$') { $days = [int]$o }
+  $since = if ($last) { ([DateTime]::Parse([string]$last, $Inv)).ToLocalTime().AddDays(-2) } else { (Get-Date).Date.AddDays(-$days) }
+  try { $t = Invoke-Sql $q @{ since = $since } } catch { Log ("Κινήσεις: το query απέτυχε (" + $_.Exception.Message + ")"); return }
+  $names = @($t.Columns | ForEach-Object { $_.ColumnName.ToLowerInvariant() })
+  if ($names -notcontains 'id' -or $names -notcontains 'moved_at') { Log 'Κινήσεις: το movements-query.sql πρέπει να επιστρέφει τουλάχιστον id και moved_at'; return }
+  $has = @{}; foreach ($n in $names) { $has[$n] = $true }
+  $col = { param($r, $n) if ($has[$n]) { To-Str $r[$n] } else { '' } }
+  $rows = New-Object Collections.ArrayList
+  foreach ($r in $t.Rows) {
+    $at = $r['moved_at']
+    $atS = if ($at -is [DateTime]) { $at.ToString('yyyy-MM-ddTHH:mm:ss', $Inv) + ([DateTimeOffset]::new($at)).ToString('zzz') } else { To-Str $at }
+    [void]$rows.Add([pscustomobject][ordered]@{
+      id = (& $col $r 'id'); moved_at = $atS; type = (& $col $r 'type'); doc = (& $col $r 'doc')
+      item = (& $col $r 'item').ToUpperInvariant(); lot = (& $col $r 'lot'); serial = (& $col $r 'serial')
+      qty = $(if ($has['qty']) { To-Num $r['qty'] } else { $null })
+      from_pos = (& $col $r 'from_pos'); to_pos = (& $col $r 'to_pos'); customer = (& $col $r 'customer'); username = (& $col $r 'username')
+    })
+  }
+  $size = 2000
+  for ($i = 0; $i -lt $rows.Count; $i += $size) {
+    $chunk = $rows.GetRange($i, [math]::Min($size, $rows.Count - $i)).ToArray()
+    try { [void](Sb-Request 'POST' '/rest/v1/rpc/wms_moves_upsert' @{ p_rows = [object[]]$chunk }) } catch { Log ("Κινήσεις: ανέβασμα απέτυχε (" + $_ + ")"); return }
+  }
+  Log ("Κινήσεις: {0} από {1:dd/MM/yyyy HH:mm} και μετά." -f $rows.Count, $since)
+}
+
 # ------------------------------------------------------------------ main
 if ($Test) { Discover; exit 0 }
 if ($Describe) { Describe-Tables $Describe; exit 0 }
 if ($Probe) { Probe-Item $Probe $Find; exit 0 }
+if ($Moves) { Discover-Moves; exit 0 }
 
 $queryFile = Join-Path $Here 'stock-query.sql'
 if (-not (Test-Path $queryFile)) { Fail 'Δεν βρέθηκε το stock-query.sql.' }
@@ -486,3 +573,5 @@ if ($general.stock.Count -gt 0) {
     Log ("Γενικές ετικέτες: ανέβηκαν {0} γραμμές αποθέματος, {1} κωδικοί." -f $general.stock.Count, $general.items.Count)
   } catch { Log ("Γενικές ετικέτες: το ανέβασμα απέτυχε (" + $_ + ") -- η ανασυσκευασία ενημερώθηκε κανονικά") }
 }
+
+Sync-Moves

@@ -7,6 +7,7 @@ const LINKS = [
   { href: "/", label: "Πλάνο Αποθήκης" },
   { href: "/repack", label: "Ανασυσκευασία" },
   { href: "/stock", label: "Απόθεμα" },
+  { href: "/moves", label: "Κινήσεις" },
   { href: "/labels", label: "Ετικέτες" },
 ];
 
