@@ -233,7 +233,7 @@ if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) 
     id: String(1000 + i), order_id: String(900 + (i % 3)), list_no: String(5428 + (i % 3)), doc_type: "salexportcl", doc_no: `ΔΑ-${77 + (i % 3)}`,
     erp_code: `ERP-${i % 3}`, order_date: new Date().toISOString(), customer: "ΦΑΡΜΑΚΕΙΟ ΠΑΠΑΔΟΠΟΥΛΟΥ", item: "71-01-359",
     description: "ΣΩΛΗΝΑΡΙΟ ΑΛΟΥΜΙΝΙΟΥ GALENPACK 30ML", lot: "1236095-01", sn: i % 5 ? "" : `SN-${i}`, qty: 5, init_qty: 5,
-    from_pos: "16.01.03.01", to_pos: "", wms_status: "", line_no: i, collected: i % 4 === 0, collected_at: null, collected_by: "",
+    from_pos: "16.01.03.01", to_pos: "", wms_status: "", line_no: i, collected: i % 4 === 0, collected_at: null, collected_by: "", picker: "Nikolaos Stefanou",
   }));
   const om = { generatedAt: new Date(), userEmail: "test@fagron.gr", filters: [], syncedAt: null };
   const { wb } = ordersWorkbook(XLSX, ord, om);

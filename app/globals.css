@@ -1097,3 +1097,4 @@ label.field select {
 .st-label, .or-print { font-size: 11.5px; }
 .st-filters label.field input, .st-filters label.field select { height: 34px; font-size: 13px; }
 .st-filters { gap: 10px; padding: 12px 14px; }
+.or-picker { margin-left: 10px; font-size: 11.5px; font-weight: 600; color: var(--reserved); white-space: nowrap; }

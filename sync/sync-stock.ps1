@@ -724,7 +724,8 @@ select cast(d.ID as varchar(30)) as id, cast(m.ID as varchar(30)) as order_id, c
        pe.Descr as customer, i.code as item, d.Lot as lot, d.sn as sn, d.Qty1 as qty, d.InitQty1 as init_qty,
        pf.code as from_pos, pt.code as to_pos,
        case when m.isChecked = 1 then 'checked' when m.isCompleted = 1 then 'completed' else '' end as wms_status,
-       d.LineOrder as line_no
+       d.LineOrder as line_no,
+       coalesce(nullif(ltrim(rtrim(m.zprocessedby)), ''), us.Descr) as picker
 from dbo.ms_Invoicem m
 join dbo.ms_InvType t on t.ID = m.InvTypeId and t.Code = 'SALEXPORTCL'
 join dbo.ms_Invoiced d on d.InvoicemId = m.ID
@@ -732,6 +733,7 @@ left join dbo.ms_Item i on i.ID = d.ItemId
 left join dbo.ms_Person pe on pe.ID = m.PersonId
 left join dbo.ms_Pos pf on pf.ID = d.FromPosId
 left join dbo.ms_Pos pt on pt.ID = d.ToPosId
+left join dbo.ms_User us on us.ID = m.UserId
 where $where
 "@
 }
@@ -746,7 +748,7 @@ function Convert-Orders($t) {
       doc_no = To-Str $r['doc_no']; erp_code = To-Str $r['erp_code']; order_date = $atS; customer = To-Str $r['customer']
       item = (To-Str $r['item']).ToUpperInvariant(); lot = To-Str $r['lot']; sn = To-Str $r['sn']
       qty = To-Num $r['qty']; init_qty = To-Num $r['init_qty']; from_pos = To-Str $r['from_pos']; to_pos = To-Str $r['to_pos']
-      wms_status = To-Str $r['wms_status']; line_no = To-Num $r['line_no']
+      wms_status = To-Str $r['wms_status']; line_no = To-Num $r['line_no']; picker = To-Str $r['picker']
     })
   }
   return ,$rows
@@ -765,10 +767,14 @@ function Sync-Orders {
   $days = 60; $o = Opt 'ORDERS_DAYS'; if ($o -match '^\d+$') { $days = [int]$o }
   # ξαναδιαβάζει τις τελευταίες 3 ημέρες (αλλαγές σε λίστες που ήδη υπάρχουν)
   $since = if ($last) { ([DateTime]::Parse([string]$last, $Inv)).ToLocalTime().Date.AddDays(-3) } else { (Get-Date).Date.AddDays(-$days) }
+  # μία φορά: ξαναδιαβάζει όλο το διάστημα για να συμπληρωθεί ο χρήστης συλλογής
+  $mark = Join-Path $Here 'orders-picker.done'
+  if (-not (Test-Path $mark)) { $since = (Get-Date).Date.AddDays(-$days) }
   try { $t = Invoke-Sql (Orders-Query 'm.RecDate >= cast(@since as date)') @{ since = $since } } catch { Log ("Orders: το query απέτυχε (" + $_.Exception.Message + ")"); return }
   $rows = Convert-Orders $t
   try { Upload-Orders $rows } catch { Log ("Orders: ανέβασμα απέτυχε (" + $_ + ")"); return }
   Log ("Orders: {0} γραμμές από {1:dd/MM/yyyy} και μετά." -f $rows.Count, $since)
+  if (-not (Test-Path $mark)) { [IO.File]::WriteAllText($mark, (Get-Date).ToString('o')) }
   if ($rows.Count) { try { [void](Sb-Request 'POST' '/rest/v1/rpc/wms_signal' @{ p_key = 'orders_sync'; p_n = $rows.Count }) } catch {} }
 }
 

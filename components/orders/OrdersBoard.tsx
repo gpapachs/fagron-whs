@@ -9,16 +9,16 @@ import { useWmsLive } from "@/lib/live";
 import { groupOrdersByList, type OrderRow } from "@/lib/exports";
 
 type Status = "all" | "open" | "collected";
-type F = { customer: string; item: string; lot: string; sn: string; doc: string; erp: string; list: string; from: string; to: string; status: Status };
+type F = { customer: string; item: string; lot: string; sn: string; doc: string; erp: string; list: string; picker: string; from: string; to: string; status: Status };
 const LIMIT = 3000;
 const LS = "orders.filters.v1";
 const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-const EMPTY = (): F => ({ customer: "", item: "", lot: "", sn: "", doc: "", erp: "", list: "", from: iso(new Date(Date.now() - 2 * 86400000)), to: iso(new Date()), status: "all" });
+const EMPTY = (): F => ({ customer: "", item: "", lot: "", sn: "", doc: "", erp: "", list: "", picker: "", from: iso(new Date(Date.now() - 2 * 86400000)), to: iso(new Date()), status: "all" });
 const fmtDt = (s: string | null) => (s ? new Date(s).toLocaleString("el-GR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }) : "");
 const fmtQty = (n: number | null) => (n == null ? "" : n.toLocaleString("el-GR", { maximumFractionDigits: 3 }));
 const esc = (s: string) => s.trim().replace(/[\\%_]/g, (c) => `\\${c}`);
 const COLS =
-  "id, order_id, list_no, doc_type, doc_no, erp_code, order_date, customer, item, description, lot, sn, qty, init_qty, from_pos, to_pos, wms_status, line_no, collected, collected_at, collected_by";
+  "id, order_id, list_no, doc_type, doc_no, erp_code, order_date, customer, item, description, lot, sn, qty, init_qty, from_pos, to_pos, wms_status, line_no, collected, collected_at, collected_by, picker";
 
 export default function OrdersBoard({ userEmail, role }: { userEmail: string | null; role: "admin" | "staff" }) {
   const [f, setF] = useState<F>(EMPTY);
@@ -59,6 +59,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
     if (f.doc) out.push(`παραστατικό ${f.doc}`);
     if (f.erp) out.push(`ERP ${f.erp}`);
     if (f.list) out.push(`λίστα ${f.list}`);
+    if (f.picker) out.push(`συλλογή από «${f.picker}»`);
     if (f.status !== "all") out.push(f.status === "collected" ? "Collected" : "Non Collected");
     return out;
   }
@@ -80,6 +81,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
       if (f.sn.trim()) q = q.ilike("sn", `%${esc(f.sn)}%`);
       if (f.doc.trim()) q = q.ilike("doc_no", `%${esc(f.doc)}%`);
       if (f.erp.trim()) q = q.ilike("erp_code", `%${esc(f.erp)}%`);
+      if (f.picker.trim()) q = q.ilike("picker", `%${esc(f.picker)}%`);
       if (f.list.trim()) {
         // λίστα: ακριβής αριθμός ή πολλοί χωρισμένοι με κόμμα/κενό
         const lists = f.list.split(/[\s,;]+/).filter(Boolean);
@@ -113,6 +115,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
     }
   }
 
+  const pickers = (lines: OrderRow[]) => [...new Set(lines.map((l) => l.picker).filter(Boolean))].join(", ");
   const groups = useMemo(() => groupOrdersByList(rows ?? []), [rows]);
   const toggle = (ids: string[], on: boolean) =>
     setSel((cur) => {
@@ -218,6 +221,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
           {field("doc", "Παραστατικό")}
           {field("erp", "Κωδικός ERP")}
           {field("list", "Αριθμός λίστας", "π.χ. 5428 ή 5428, 5431")}
+          {field("picker", "Χρήστης συλλογής", "όνομα")}
           {field("from", "Από ημερομηνία", "", "date")}
           {field("to", "Έως ημερομηνία", "", "date")}
           <label className="field">
@@ -316,6 +320,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
                         <span className="or-meta">
                           {[h.doc_no && `Παρ. ${h.doc_no}`, h.erp_code && `ERP ${h.erp_code}`, fmtDt(h.order_date), `${g.lines.length} γρ.`].filter(Boolean).join(" · ")}
                         </span>
+                        {pickers(g.lines) && <span className="or-picker">Συλλογή: {pickers(g.lines)}</span>}
                       </td>
                       <td className="or-head-end">
                         <span className={`or-status ${done === g.lines.length ? "on" : done ? "part" : ""}`}>

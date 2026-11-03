@@ -891,6 +891,7 @@ export type OrderRow = {
   collected: boolean;
   collected_at: string | null;
   collected_by: string;
+  picker: string; // χρήστης WMS που έκανε τη συλλογή
 };
 
 /** ομάδες ανά αριθμό λίστας (σειρά εμφάνισης) */
@@ -923,11 +924,12 @@ export function ordersWorkbook(XLSX: XLSXLib, rows: OrderRow[], meta: StockExpor
         "SN": r.sn,
         "Ποσότητα": r.qty ?? r.init_qty ?? "",
         "Από θέση": r.from_pos,
+        "Συλλογή (WMS)": r.picker,
         "Κατάσταση": r.collected ? "Collected" : "Non Collected",
         "Collected από": r.collected_by,
         "Collected στις": r.collected_at ? new Date(r.collected_at) : "",
       })),
-      [10, 16, 34, 16, 14, 14, 44, 16, 16, 10, 16, 14, 24, 16]
+      [10, 16, 34, 16, 14, 14, 44, 16, 16, 10, 16, 22, 14, 24, 16]
     ),
     "Orders"
   );
@@ -981,6 +983,7 @@ export function ordersPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFo
       ["Παραστατικό", f.doc_no || "—"],
       ["Κωδικός ERP", f.erp_code || "—"],
       ["Ημερομηνία", f.order_date ? when(new Date(f.order_date)) : "—"],
+      ["Συλλογή από", [...new Set(g.lines.map((l) => l.picker).filter(Boolean))].join(", ") || "—"],
     ];
     for (const [k, v] of info) {
       doc.setFont(FONT, "bold");
