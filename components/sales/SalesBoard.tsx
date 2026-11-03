@@ -40,6 +40,8 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
   const [busy, setBusy] = useState<string | null>(null);
   const [colorF, setColorF] = useState<OrderColor | "all">("all");
   const [repackOnly, setRepackOnly] = useState(false);
+  const [stockF, setStockF] = useState<"all" | "some" | "none">("all");
+  const [modeF, setModeF] = useState<"all" | "strict" | "partial">("all");
   const [repackCounts, setRepackCounts] = useState(true);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [sel, setSel] = useState<Set<string>>(new Set());
@@ -116,7 +118,17 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
     }
     return c;
   }, [evals]);
-  const shown = evals.filter((o) => (colorF === "all" || (!o.completed && o.color === colorF)) && (!repackOnly || o.needsRepack));
+  // «με απόθεμα» = τουλάχιστον ένα είδος μπορεί να συλλεχθεί τώρα· «χωρίς» = κανένα
+  const hasStock = (o: OrderEval) => o.lines.some((l) => l.covered > 0);
+  const shown = evals.filter(
+    (o) =>
+      (colorF === "all" || (!o.completed && o.color === colorF)) &&
+      (!repackOnly || o.needsRepack) &&
+      (stockF === "all" || (stockF === "some" ? hasStock(o) : !hasStock(o))) &&
+      (modeF === "all" || (modeF === "strict" ? o.strict : !o.strict))
+  );
+  const nSome = evals.filter(hasStock).length;
+  const nStrict = evals.filter((o) => o.strict).length;
 
   const meta = () => ({ generatedAt: new Date(), userEmail, filters: [], syncedAt: null });
   async function print(list: OrderEval[], id: string) {
@@ -250,6 +262,22 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
               ))}
               <button type="button" className={`sl-chip blue ${repackOnly ? "on" : ""}`} onClick={() => setRepackOnly(!repackOnly)}>
                 Χρειάζονται ανασυσκευασία <b>{counts.repack}</b>
+              </button>
+            </div>
+            <div className="sl-chips">
+              <span className="rp-hint">Απόθεμα:</span>
+              <button type="button" className={`sl-chip ${stockF === "some" ? "on" : ""}`} onClick={() => setStockF(stockF === "some" ? "all" : "some")} title="Τουλάχιστον ένα είδος υπάρχει στο απόθεμα">
+                Με απόθεμα <b>{nSome}</b>
+              </button>
+              <button type="button" className={`sl-chip ${stockF === "none" ? "on" : ""}`} onClick={() => setStockF(stockF === "none" ? "all" : "none")} title="Κανένα είδος στο απόθεμα">
+                Χωρίς απόθεμα <b>{evals.length - nSome}</b>
+              </button>
+              <span className="rp-hint">Συλλογή:</span>
+              <button type="button" className={`sl-chip ${modeF === "strict" ? "on" : ""}`} onClick={() => setModeF(modeF === "strict" ? "all" : "strict")}>
+                Αυστηρή <b>{nStrict}</b>
+              </button>
+              <button type="button" className={`sl-chip ${modeF === "partial" ? "on" : ""}`} onClick={() => setModeF(modeF === "partial" ? "all" : "partial")}>
+                Μερική <b>{evals.length - nStrict}</b>
               </button>
             </div>
             <label className="st-check" title="Αν η ανασυσκευασία καλύπτει την έλλειψη, η γραμμή μετρά ως διαθέσιμη για το χρώμα">
