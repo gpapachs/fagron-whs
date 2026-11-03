@@ -103,11 +103,11 @@ async function discover(pool) {
     join INFORMATION_SCHEMA.TABLES t on t.TABLE_SCHEMA = c.TABLE_SCHEMA and t.TABLE_NAME = c.TABLE_NAME`);
   // βαθμολογία: πόσες «έννοιες» αποθέματος καλύπτει κάθε πίνακας
   const concepts = {
-    θέση: /(^|_)(θεση|thesi|location|loc|bin|position|pos|slot)/i,
-    είδος: /(ειδος|item|sku|product|material|kwd|code)/i,
-    παρτίδα: /(παρτιδα|lot|batch|partida)/i,
-    ποσότητα: /(ποσ|qty|quant|stock|amount)/i,
-    λήξη: /(ληξη|expir|exp_?date|bestbefore)/i,
+    θέση: /(θεσ|thesi|location|^loc|_loc|bin|position|^pos|slot)/i,
+    είδος: /(ειδ|κωδ|item|sku|product|material|kwd|code)/i,
+    παρτίδα: /(παρτιδ|lot|batch|partid)/i,
+    ποσότητα: /(ποσ|υπολοιπ|qty|quant|stock|amount|balance)/i,
+    λήξη: /(ληξ|expir|exp_?date|bestbefore)/i,
   };
   const strip = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   const byTable = new Map();
