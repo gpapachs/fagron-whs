@@ -644,6 +644,7 @@ function Run-Live {
         Log ("Live: {0} νέες γραμμές Orders" -f $orows.Count)
       }
     } catch { Log ("Live (Orders): " + $_) }
+    try { Sync-Collecting 'SALEXPORTLS' } catch { Log ("Live (σε συλλογή): " + $_) }
     if ($mins -gt 0 -and ((Get-Date) - $start).TotalMinutes -ge $mins) { Log 'Live: τέλος χρόνου'; break }
     Start-Sleep -Seconds $secs
   }
@@ -731,6 +732,7 @@ select cast(d.ID as varchar(30)) as id, cast(m.ID as varchar(30)) as order_id, c
        d.LineOrder as line_no,
        coalesce(nullif(ltrim(rtrim(m.zprocessedby)), ''), us.Descr) as picker,
        ltrim(rtrim(isnull(m.Comments, '') + case when ltrim(rtrim(isnull(m.Comments2, ''))) <> '' then ' · ' + ltrim(rtrim(m.Comments2)) else '' end)) as comments,
+       cast(isnull(m.isNowCollecting, 0) as int) as is_collecting,
        cast(isnull(m.isCompleted, 0) as int) as is_completed, cast(isnull(m.isStrictOrderCollection, 0) as int) as is_strict
 from dbo.ms_Invoicem m
 join dbo.ms_InvType t on t.ID = m.InvTypeId and t.Code = '$code'
@@ -768,6 +770,7 @@ function Convert-Orders($t) {
       is_completed = ((To-Num $r['is_completed']) -eq 1); is_strict = ((To-Num $r['is_strict']) -eq 1)
       customer_city = To-Str $r['customer_city']; customer_zip = To-Str $r['customer_zip']; customer_vat = To-Str $r['customer_vat']
       is_abroad = (Test-Abroad (To-Str $r['customer_vat']) (To-Str $r['customer_zip'])); comments = To-Str $r['comments']
+      is_collecting = ((To-Num $r['is_collecting']) -eq 1)
     })
   }
   return ,$rows
@@ -779,6 +782,25 @@ function Upload-Orders($rows) {
     [void](Sb-Request 'POST' '/rest/v1/rpc/wms_orders_upsert' @{ p_rows = [object[]]$chunk })
   }
 }
+
+# «Σε συλλογή»: ελαφρύ query μόνο στις κεφαλίδες (κάθε κύκλο του -Live και μετά το sync)
+function Sync-Collecting([string]$code = 'SALEXPORTLS') {
+  $code = $code -replace '[^A-Za-z]', ''
+  $t = Invoke-Sql @"
+select cast(m.ID as varchar(30)) as id, coalesce(nullif(ltrim(rtrim(m.zprocessedby)), ''), us.Descr) as usr
+from dbo.ms_Invoicem m
+join dbo.ms_InvType t on t.ID = m.InvTypeId and t.Code = '$code'
+left join dbo.ms_User us on us.ID = m.UserId
+where isnull(m.isNowCollecting, 0) = 1 and isnull(m.isCompleted, 0) = 0 and m.RecDate >= dateadd(day, -365, getdate())
+"@
+  $ids = New-Object Collections.ArrayList; $users = @{}
+  foreach ($r in $t.Rows) { $id = To-Str $r['id']; [void]$ids.Add($id); $u = To-Str $r['usr']; if ($u) { $users[$id] = $u } }
+  $sig = ($ids | Sort-Object) -join ','
+  if ($sig -eq $script:LastCollecting) { return }
+  [void](Sb-Request 'POST' '/rest/v1/rpc/wms_orders_set_collecting' @{ p_doc_type = $code; p_ids = [string[]]$ids.ToArray(); p_users = $users })
+  $script:LastCollecting = $sig
+}
+$script:LastCollecting = $null
 
 function Sync-Orders([string]$code = 'SALEXPORTCL') {
   $last = $null
@@ -890,5 +912,6 @@ if ($general.stock.Count -gt 0) {
 
 Sync-Moves
 foreach ($oc in 'SALEXPORTCL', 'SALEXPORTLS') { try { Sync-Orders $oc } catch { Log ("Orders $($oc): " + $_) } }
+try { Sync-Collecting 'SALEXPORTLS' } catch { Log ("Σε συλλογή: " + $_) }
 
 if (-not (Test-Path (Join-Path $Here 'wms-orders.txt'))) { try { Discover-Orders } catch { Log ("Παραγγελίες (εύρεση): " + $_) } }

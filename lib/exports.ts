@@ -900,6 +900,7 @@ export type OrderRow = {
   customer_vat?: string;
   is_abroad?: boolean;
   comments?: string; // σχόλια παραγγελίας (WMS)
+  is_collecting?: boolean; // «σε συλλογή» τώρα στο WMS
 };
 
 /** ομάδες ανά αριθμό λίστας (σειρά εμφάνισης) */
@@ -1074,6 +1075,11 @@ export function salesListPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: Pd
     doc.setFontSize(10);
     doc.setTextColor(...(o.completed ? DIM : COLOR_RGB[o.color]));
     doc.text(o.completed ? "ΟΛΟΚΛΗΡΩΜΕΝΗ" : COLOR_TXT[o.color], W - 14, 19, { align: "right" });
+    if (o.collecting && !o.completed) {
+      doc.setFontSize(8.5);
+      doc.setTextColor(217, 119, 6);
+      doc.text(`ΣΕ ΣΥΛΛΟΓΗ${o.picker ? ` · ${o.picker}` : ""}`, W - 14, o.needsRepack ? 29 : 24.5, { align: "right" });
+    }
     if (o.needsRepack) {
       doc.setFontSize(8.5);
       doc.setTextColor(37, 84, 199);

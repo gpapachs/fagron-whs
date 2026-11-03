@@ -33,6 +33,7 @@ export type OrderEval = {
   strict: boolean;
   needsRepack: boolean;
   picker: string;
+  collecting: boolean; // «σε συλλογή» τώρα στο WMS
 };
 
 const EPS = 1e-9;
@@ -166,6 +167,7 @@ export function evaluateOrders(
       completed: sorted.every((l) => l.is_completed),
       strict: sorted.some((l) => l.is_strict),
       needsRepack: evals.some((e) => e.repack !== null),
+      collecting: sorted.some((l) => l.is_collecting),
       picker: [...new Set(sorted.map((l) => l.picker).filter(Boolean))].join(", "),
       color: orderColor(evals, sorted.some((l) => l.is_strict), repackCounts),
     });

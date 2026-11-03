@@ -8,7 +8,7 @@ import { buildReservations, isRepackCode, type Reservations } from "@/lib/sales"
 import type { OrderRow } from "@/lib/exports";
 
 export const SALES_COLS =
-  "id, order_id, list_no, doc_type, doc_no, erp_code, order_date, customer, item, description, lot, sn, qty, init_qty, from_pos, to_pos, wms_status, line_no, collected, collected_at, collected_by, picker, is_completed, is_strict, customer_city, customer_zip, customer_vat, is_abroad, comments";
+  "id, order_id, list_no, doc_type, doc_no, erp_code, order_date, customer, item, description, lot, sn, qty, init_qty, from_pos, to_pos, wms_status, line_no, collected, collected_at, collected_by, picker, is_completed, is_strict, customer_city, customer_zip, customer_vat, is_abroad, comments, is_collecting";
 
 export async function inChunks<T>(values: string[], size: number, fn: (part: string[]) => Promise<T[]>): Promise<T[]> {
   const out: T[] = [];

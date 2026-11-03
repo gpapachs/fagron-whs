@@ -42,6 +42,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
   const [repackOnly, setRepackOnly] = useState(false);
   const [stockF, setStockF] = useState<"all" | "some" | "none">("all");
   const [modeF, setModeF] = useState<"all" | "strict" | "partial">("all");
+  const [collectingOnly, setCollectingOnly] = useState(false);
   const [repackCounts, setRepackCounts] = useState(true);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [sel, setSel] = useState<Set<string>>(new Set());
@@ -125,8 +126,10 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
       (colorF === "all" || (!o.completed && o.color === colorF)) &&
       (!repackOnly || o.needsRepack) &&
       (stockF === "all" || (stockF === "some" ? hasStock(o) : !hasStock(o))) &&
-      (modeF === "all" || (modeF === "strict" ? o.strict : !o.strict))
+      (modeF === "all" || (modeF === "strict" ? o.strict : !o.strict)) &&
+      (!collectingOnly || o.collecting)
   );
+  const nCollecting = evals.filter((o) => o.collecting && !o.completed).length;
   const nSome = evals.filter(hasStock).length;
   const nStrict = evals.filter((o) => o.strict).length;
 
@@ -272,6 +275,9 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
               <button type="button" className={`sl-chip ${stockF === "none" ? "on" : ""}`} onClick={() => setStockF(stockF === "none" ? "all" : "none")} title="Κανένα είδος στο απόθεμα">
                 Χωρίς απόθεμα <b>{evals.length - nSome}</b>
               </button>
+              <button type="button" className={`sl-chip orange ${collectingOnly ? "on" : ""}`} onClick={() => setCollectingOnly(!collectingOnly)} title="Λίστες που συλλέγονται αυτή τη στιγμή στο WMS">
+                <span className="sl-live" /> Σε συλλογή <b>{nCollecting}</b>
+              </button>
               <span className="rp-hint">Συλλογή:</span>
               <button type="button" className={`sl-chip ${modeF === "strict" ? "on" : ""}`} onClick={() => setModeF(modeF === "strict" ? "all" : "strict")}>
                 Αυστηρή <b>{nStrict}</b>
@@ -364,6 +370,11 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
                           <span className={`sl-status ${o.color}`}>
                             <span className="sl-dot" />
                             {COLOR_LABEL[o.color]}
+                          </span>
+                        )}
+                        {o.collecting && !o.completed && (
+                          <span className="sl-tag orange" title="Η λίστα είναι ανοιχτή σε τερματικό συλλογής">
+                            <span className="sl-live" /> Σε συλλογή{o.picker ? ` · ${o.picker}` : ""}
                           </span>
                         )}
                         {o.needsRepack && <span className="sl-tag blue">Ανασυσκευασία</span>}

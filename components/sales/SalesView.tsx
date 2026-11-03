@@ -68,8 +68,9 @@ export default function SalesView({ userEmail }: { userEmail: string | null; rol
 
   // ---- σύνδεση με το πλάνο ανασυσκευασίας
   const planFor = (lineId: string) => planOrders.filter((p) => p.order_line_id === lineId);
-  async function addToPlan(l: LineEval) {
+  async function addToPlan(l: LineEval, ask = true) {
     if (!l.repack || !o) return;
+    if (ask && o.collecting && !o.completed && !window.confirm(`Η λίστα ${o.key} είναι σε συλλογή${o.picker ? ` από ${o.picker}` : ""}. Να μπει στο πλάνο ανασυσκευασίας;`)) return;
     setPlanBusy(l.line.id);
     try {
       await addPlanOrder({
@@ -101,7 +102,8 @@ export default function SalesView({ userEmail }: { userEmail: string | null; rol
   }
   async function addAllToPlan() {
     if (!o) return;
-    for (const l of o.lines) if (l.repack && !planFor(l.line.id).length) await addToPlan(l);
+    if (o.collecting && !o.completed && !window.confirm(`Η λίστα ${o.key} είναι σε συλλογή${o.picker ? ` από ${o.picker}` : ""}. Να μπουν οι ανασυσκευασίες στο πλάνο;`)) return;
+    for (const l of o.lines) if (l.repack && !planFor(l.line.id).length) await addToPlan(l, false);
   }
   const repackLines = o?.lines.filter((l) => l.repack) ?? [];
   const notPlanned = repackLines.filter((l) => !planFor(l.line.id).length);
@@ -172,6 +174,12 @@ export default function SalesView({ userEmail }: { userEmail: string | null; rol
             </button>
           </div>
         </div>
+        {o?.collecting && !o.completed && (
+          <p className="sv-collecting">
+            <span className="sl-live" /> Η λίστα είναι <b>σε συλλογή</b> αυτή τη στιγμή{o.picker ? ` από ${o.picker}` : ""}. Συνεννοηθείτε με τον
+            χρήστη πριν από αλλαγές ή ανασυσκευασία για αυτή τη λίστα.
+          </p>
+        )}
         {error && <p className="rp-notice error">{error}</p>}
         {rows === null && !error && <p className="rp-hint">Φόρτωση…</p>}
         {rows !== null && !rows.length && <p className="rp-notice warn">Δεν βρέθηκε η λίστα {list}.</p>}
