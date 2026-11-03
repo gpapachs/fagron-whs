@@ -11,10 +11,11 @@
     .\sync-stock.cmd            συγχρονισμός (αυτό τρέχει το Task Scheduler)
     .\sync-stock.cmd -Force     συγχρονισμός ακόμα κι αν το απόθεμα έπεσε απότομα
     .\sync-stock.cmd -Describe Pos   όλες οι στήλες των πινάκων με «Pos» στο όνομα
+    .\sync-stock.cmd -Probe 71-01-359 -Find 75   όλες οι τιμές ενός είδους στους πίνακες του WMS
 
   Ρυθμίσεις: rythmiseis.txt (ή .env) στον ίδιο φάκελο. Ο κωδικός μένει εκεί.
 #>
-param([switch]$Test, [switch]$DryRun, [switch]$Force, [string]$Describe)
+param([switch]$Test, [switch]$DryRun, [switch]$Force, [string]$Describe, [string]$Probe, [string]$Find)
 
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
@@ -68,7 +69,7 @@ function Get-ConnectionString {
   return $b.ConnectionString
 }
 
-function Invoke-Sql([string]$query) {
+function Invoke-Sql([string]$query, [hashtable]$params = @{}) {
   $conn = New-Object System.Data.SqlClient.SqlConnection (Get-ConnectionString)
   try {
     try { $conn.Open() } catch {
@@ -81,6 +82,7 @@ function Invoke-Sql([string]$query) {
     $cmd = $conn.CreateCommand()
     $cmd.CommandText = $query
     $cmd.CommandTimeout = 120
+    foreach ($k in $params.Keys) { [void]$cmd.Parameters.AddWithValue("@$k", $params[$k]) }
     $table = New-Object System.Data.DataTable
     $adapter = New-Object System.Data.SqlClient.SqlDataAdapter $cmd
     [void]$adapter.Fill($table)
@@ -168,6 +170,47 @@ order by c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION
   [IO.File]::WriteAllLines($report, [string[]]$out, (New-Object Text.UTF8Encoding $true))
   Write-Host ''
   Write-Host "Αποθηκεύτηκε στο $report -- στείλε το (δεν έχει κωδικούς)."
+}
+
+function Probe-Item([string]$code, [string]$find) {
+  $it = Invoke-Sql "select top 1 ID from dbo.ms_Item where code = @code" @{ code = $code }
+  if (-not $it.Rows.Count) { Fail "Δεν βρέθηκε ο κωδικός $code στο dbo.ms_Item" }
+  $id = $it.Rows[0].ID
+  Log "Είδος $code -> ID $id"
+  # όλοι οι πίνακες με στήλη είδους (ItemId / ID στον ms_Item*), εκτός από κινήσεις/ιστορικό
+  $tabs = Invoke-Sql @"
+select c.TABLE_SCHEMA s, c.TABLE_NAME t, c.COLUMN_NAME c
+from INFORMATION_SCHEMA.COLUMNS c
+join INFORMATION_SCHEMA.TABLES t on t.TABLE_SCHEMA = c.TABLE_SCHEMA and t.TABLE_NAME = c.TABLE_NAME and t.TABLE_TYPE = 'BASE TABLE'
+where (c.COLUMN_NAME in ('ItemId', 'ItemID') or (c.TABLE_NAME in ('ms_Item', 'ms_ItemZ') and c.COLUMN_NAME = 'ID'))
+  and c.TABLE_NAME not like '%Trans%' and c.TABLE_NAME not like '%backup%' and c.TABLE_NAME not like '%Inventory%'
+  and c.TABLE_NAME not like '%Log%' and c.TABLE_NAME not like '%Stock%' and c.TABLE_NAME not like '%Order%'
+order by c.TABLE_NAME
+"@
+  $out = New-Object Collections.ArrayList
+  foreach ($t in $tabs.Rows) {
+    $tn = "[$($t.s)].[$($t.t)]"; $cn = "[$($t.c)]"
+    try { $rows = Invoke-Sql "select top 5 * from $tn where $cn = @id" @{ id = $id } } catch { continue }
+    if (-not $rows.Rows.Count) { continue }
+    [void]$out.Add(''); [void]$out.Add("  $($t.s).$($t.t)  ($($rows.Rows.Count) γραμμές)")
+    foreach ($r in $rows.Rows) {
+      foreach ($col in $rows.Columns) {
+        $v = $r[$col.ColumnName]
+        if ($null -eq $v -or $v -is [DBNull]) { continue }
+        $sv = if ($v -is [double] -or $v -is [decimal] -or $v -is [single]) { ([double]$v).ToString($Inv) } else { [string]$v }
+        if ($sv -eq '' -or $sv -eq '0' -or $sv -eq 'False') { continue }
+        if ($sv.Length -gt 120) { $sv = $sv.Substring(0, 120) + ' …' }
+        $mark = if ($find -and ($sv -eq $find -or $sv -eq "$find.0")) { '   <<<<<< ' + $find } else { '' }
+        [void]$out.Add("    $($col.ColumnName) = $sv$mark")
+      }
+      [void]$out.Add('    ---')
+    }
+  }
+  $out | ForEach-Object { Write-Host $_ }
+  $report = Join-Path $Here 'wms-pinakes.txt'
+  [IO.File]::WriteAllLines($report, [string[]]$out, (New-Object Text.UTF8Encoding $true))
+  Write-Host ''
+  Write-Host "Αποθηκεύτηκε στο $report -- στείλε το (έχει μόνο στοιχεία του είδους, όχι κωδικούς πρόσβασης)."
 }
 
 # ------------------------------------------------------------------ Supabase
@@ -273,6 +316,7 @@ function Normalize-Rows($table) {
 # ------------------------------------------------------------------ main
 if ($Test) { Discover; exit 0 }
 if ($Describe) { Describe-Tables $Describe; exit 0 }
+if ($Probe) { Probe-Item $Probe $Find; exit 0 }
 
 $queryFile = Join-Path $Here 'stock-query.sql'
 if (-not (Test-Path $queryFile)) { Fail 'Δεν βρέθηκε το stock-query.sql.' }
