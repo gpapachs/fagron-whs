@@ -99,3 +99,10 @@ returns timestamptz language sql stable security definer set search_path = publi
 $$;
 revoke all on function public.wms_orders_last() from public, anon;
 grant execute on function public.wms_orders_last() to authenticated;
+
+create or replace function public.wms_orders_last_id()
+returns bigint language sql stable security definer set search_path = public as $$
+  select max(order_id::bigint) from public.wms_orders where order_id ~ '^\d+$'
+$$;
+revoke all on function public.wms_orders_last_id() from public, anon;
+grant execute on function public.wms_orders_last_id() to authenticated;

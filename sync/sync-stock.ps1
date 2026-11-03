@@ -602,6 +602,11 @@ function Run-Live {
     Log "Live: η εφαρμογή δεν έχει κινήσεις ακόμα -- ξεκινά από τώρα (το πλήρες sync φέρνει τις παλιές)"
   }
   $lastId = [int64]$lastId
+  $lastOrd = $null
+  try { $lastOrd = Sb-Request 'POST' '/rest/v1/rpc/wms_orders_last_id' @{} } catch {}
+  if (-not $lastOrd) { $lastOrd = [int64](Invoke-Sql "select max(ID) as m from dbo.ms_Invoicem").Rows[0].m }
+  $lastOrd = [int64]$lastOrd
+  $oq = Orders-Query 'm.ID > @lastOrd'
   Log ("Live: ξεκίνησε (κάθε {0} δευτ., από κίνηση {1})" -f $secs, $lastId)
   while ($true) {
     try {
@@ -629,6 +634,16 @@ function Run-Live {
         }
       }
     } catch { Log ("Live: " + $_) }
+    try {
+      $t = Invoke-Sql $oq @{ lastOrd = $lastOrd }
+      if ($t.Rows.Count) {
+        $orows = Convert-Orders $t
+        Upload-Orders $orows
+        $lastOrd = [int64](($orows | ForEach-Object { [int64]$_.order_id } | Measure-Object -Maximum).Maximum)
+        [void](Sb-Request 'POST' '/rest/v1/rpc/wms_signal' @{ p_key = 'orders_sync'; p_n = $orows.Count })
+        Log ("Live: {0} νέες γραμμές Orders" -f $orows.Count)
+      }
+    } catch { Log ("Live (Orders): " + $_) }
     if ($mins -gt 0 -and ((Get-Date) - $start).TotalMinutes -ge $mins) { Log 'Live: τέλος χρόνου'; break }
     Start-Sleep -Seconds $secs
   }
@@ -696,6 +711,65 @@ order by c.TABLE_NAME, c.ORDINAL_POSITION
   $report = Join-Path $Here 'wms-orders.txt'
   [IO.File]::WriteAllLines($report, [string[]]$out, (New-Object Text.UTF8Encoding $true))
   Log "Παραγγελίες: η εύρεση γράφτηκε στο wms-orders.txt"
+}
+
+# ------------------------------------------------------------------ παραγγελίες (Orders)
+# Λίστες ελέγχου πωλήσεων (ms_InvType.Code = SALEXPORTCL) -> wms_orders, μία γραμμή
+# ανά ms_Invoiced. Η κατάσταση Collected της εφαρμογής ΔΕΝ πειράζεται ποτέ.
+function Orders-Query([string]$where) {
+  return @"
+select cast(d.ID as varchar(30)) as id, cast(m.ID as varchar(30)) as order_id, cast(m.Num as varchar(30)) as list_no,
+       t.Code as doc_type, m.ErpDocCode as doc_no, m.ErpKey as erp_code,
+       cast(cast(m.RecDate as date) as datetime) + cast(cast(m.RecTime as time) as datetime) as order_date,
+       pe.Descr as customer, i.code as item, d.Lot as lot, d.sn as sn, d.Qty1 as qty, d.InitQty1 as init_qty,
+       pf.code as from_pos, pt.code as to_pos,
+       case when m.isChecked = 1 then 'checked' when m.isCompleted = 1 then 'completed' else '' end as wms_status,
+       d.LineOrder as line_no
+from dbo.ms_Invoicem m
+join dbo.ms_InvType t on t.ID = m.InvTypeId and t.Code = 'SALEXPORTCL'
+join dbo.ms_Invoiced d on d.InvoicemId = m.ID
+left join dbo.ms_Item i on i.ID = d.ItemId
+left join dbo.ms_Person pe on pe.ID = m.PersonId
+left join dbo.ms_Pos pf on pf.ID = d.FromPosId
+left join dbo.ms_Pos pt on pt.ID = d.ToPosId
+where $where
+"@
+}
+
+function Convert-Orders($t) {
+  $rows = New-Object Collections.ArrayList
+  foreach ($r in $t.Rows) {
+    $at = $r['order_date']
+    $atS = if ($at -is [DateTime]) { $at.ToString('yyyy-MM-ddTHH:mm:ss', $Inv) + ([DateTimeOffset]::new($at)).ToString('zzz') } else { '' }
+    [void]$rows.Add([pscustomobject][ordered]@{
+      id = To-Str $r['id']; order_id = To-Str $r['order_id']; list_no = To-Str $r['list_no']; doc_type = To-Str $r['doc_type']
+      doc_no = To-Str $r['doc_no']; erp_code = To-Str $r['erp_code']; order_date = $atS; customer = To-Str $r['customer']
+      item = (To-Str $r['item']).ToUpperInvariant(); lot = To-Str $r['lot']; sn = To-Str $r['sn']
+      qty = To-Num $r['qty']; init_qty = To-Num $r['init_qty']; from_pos = To-Str $r['from_pos']; to_pos = To-Str $r['to_pos']
+      wms_status = To-Str $r['wms_status']; line_no = To-Num $r['line_no']
+    })
+  }
+  return ,$rows
+}
+
+function Upload-Orders($rows) {
+  for ($i = 0; $i -lt $rows.Count; $i += 2000) {
+    $chunk = $rows.GetRange($i, [math]::Min(2000, $rows.Count - $i)).ToArray()
+    [void](Sb-Request 'POST' '/rest/v1/rpc/wms_orders_upsert' @{ p_rows = [object[]]$chunk })
+  }
+}
+
+function Sync-Orders {
+  $last = $null
+  try { $last = Sb-Request 'POST' '/rest/v1/rpc/wms_orders_last' @{} } catch { Log ("Orders: " + $_); return }
+  $days = 60; $o = Opt 'ORDERS_DAYS'; if ($o -match '^\d+$') { $days = [int]$o }
+  # ξαναδιαβάζει τις τελευταίες 3 ημέρες (αλλαγές σε λίστες που ήδη υπάρχουν)
+  $since = if ($last) { ([DateTime]::Parse([string]$last, $Inv)).ToLocalTime().Date.AddDays(-3) } else { (Get-Date).Date.AddDays(-$days) }
+  try { $t = Invoke-Sql (Orders-Query 'm.RecDate >= cast(@since as date)') @{ since = $since } } catch { Log ("Orders: το query απέτυχε (" + $_.Exception.Message + ")"); return }
+  $rows = Convert-Orders $t
+  try { Upload-Orders $rows } catch { Log ("Orders: ανέβασμα απέτυχε (" + $_ + ")"); return }
+  Log ("Orders: {0} γραμμές από {1:dd/MM/yyyy} και μετά." -f $rows.Count, $since)
+  if ($rows.Count) { try { [void](Sb-Request 'POST' '/rest/v1/rpc/wms_signal' @{ p_key = 'orders_sync'; p_n = $rows.Count }) } catch {} }
 }
 
 # ------------------------------------------------------------------ main
@@ -775,5 +849,6 @@ if ($general.stock.Count -gt 0) {
 }
 
 Sync-Moves
+Sync-Orders
 
 if (-not (Test-Path (Join-Path $Here 'wms-orders.txt'))) { try { Discover-Orders } catch { Log ("Παραγγελίες (εύρεση): " + $_) } }
