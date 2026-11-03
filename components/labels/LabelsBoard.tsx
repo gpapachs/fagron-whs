@@ -5,6 +5,7 @@ import AppBar from "@/components/AppBar";
 import { createClient } from "@/lib/supabase/client";
 import { loadPdfFonts } from "@/lib/pdfFonts";
 import { autoEnglish } from "@/lib/translate";
+import { useWmsLive } from "@/lib/live";
 import { DEFAULT_LABEL_OPTIONS, dataMatrixText, isAscii, pageSize, type LabelData, type LabelOptions } from "@/lib/labels";
 import { loadCanvasFonts, pickPrinter, zebraDpi, zebraPrinters, zebraSend, type ZebraDevice } from "@/lib/zebra";
 import type { ProductSettings } from "@/lib/repack";
@@ -93,6 +94,10 @@ export default function LabelsBoard({
   const [itemStock, setItemStock] = useState<WmsRow[] | null>(null);
   const [stockErr, setStockErr] = useState<string | null>(null);
   const byCatalog = useMemo(() => new Map(catalog.map((c) => [c.code, c])), [catalog]);
+  // live: αν κινήθηκε ο κωδικός που είναι ανοιχτός, ξαναφέρνει τις παρτίδες/serial του
+  useWmsLive((sig) => {
+    if (mode === "all" && code && (sig.key === "stock_full" || (sig.key === "stock" && sig.items.includes(code)))) loadItemStock(code, true);
+  });
 
   function setMode(m: Mode) {
     setModeState(m);
@@ -197,7 +202,7 @@ export default function LabelsBoard({
     if (m === "all") loadItemStock(c);
   }
 
-  async function loadItemStock(c: string) {
+  async function loadItemStock(c: string, refresh = false) {
     const { data: rows, error: err } = await createClient()
       .from("wms_stock")
       .select("item, position, lot, serial, expiry, qty")
@@ -227,6 +232,7 @@ export default function LabelsBoard({
     }
     const list = [...agg.values()];
     setItemStock(list);
+    if (refresh) return; // live ανανέωση: δεν αλλάζει τις επιλογές του χρήστη
     const lotsOnly = [...new Set(list.filter((r) => r.lot).map((r) => r.lot))];
     const serialsOnly = list.filter((r) => r.serial);
     // κωδικός με serial (π.χ. εξοπλισμός) -> λειτουργία serial

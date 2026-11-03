@@ -4,6 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import AppBar from "@/components/AppBar";
 import { loadPdfFonts } from "@/lib/pdfFonts";
+import LivePill from "@/components/LivePill";
+import { useWmsLive } from "@/lib/live";
+import { loadStock, loadStockItems } from "@/lib/stockData";
 import type { StockRow } from "@/lib/exports";
 
 type SortKey = "position" | "area" | "item" | "description" | "lot" | "serial" | "expiry" | "qty";
@@ -27,8 +30,8 @@ const today = () => new Date().toISOString().slice(0, 10);
 const plusDays = (d: number) => new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
 
 export default function StockBoard({
-  rows,
-  syncedAt,
+  rows: initialRows,
+  syncedAt: initialSyncedAt,
   userEmail,
   role,
 }: {
@@ -37,6 +40,29 @@ export default function StockBoard({
   userEmail: string | null;
   role: "admin" | "staff";
 }) {
+  const [rows, setRows] = useState<StockRow[]>(initialRows);
+  const [syncedAt, setSyncedAt] = useState<string | null>(initialSyncedAt);
+  const [fresh, setFresh] = useState<Set<string>>(new Set()); // κωδικοί που άλλαξαν τώρα (φωτίζονται)
+  const [flash, setFlash] = useState(0);
+  // live: αλλαγές από το sync -Live (μόνο οι κωδικοί που κινήθηκαν) ή πλήρης συγχρονισμός
+  const live = useWmsLive(async (sig) => {
+    try {
+      if (sig.key === "stock" && sig.items.length) {
+        const changed = await loadStockItems(sig.items);
+        const set = new Set(sig.items);
+        setRows((cur) => [...cur.filter((r) => !set.has(r.item)), ...changed]);
+        setFresh(set);
+        setFlash((x) => x + 1);
+      } else if (sig.key === "stock_full") {
+        const d = await loadStock();
+        setRows(d.rows);
+        setSyncedAt(d.syncedAt);
+        setFlash((x) => x + 1);
+      }
+    } catch {
+      /* επόμενο σήμα */
+    }
+  });
   const [f, setF] = useState<Filters>(EMPTY);
   const [sort, setSort] = useState<{ k: SortKey; dir: 1 | -1 }>({ k: "position", dir: 1 });
   const [page, setPage] = useState(0);
@@ -166,7 +192,7 @@ export default function StockBoard({
           <div className="titleblock">
             <h1>Απόθεμα</h1>
             <p>
-              Όλο το απόθεμα του WMS ανά θέση, παρτίδα και serial.{" "}
+              <LivePill connected={live.connected} lastAt={live.lastAt ?? syncedAt} flash={flash} /> Όλο το απόθεμα του WMS ανά θέση, παρτίδα και serial.{" "}
               {syncedAt ? `Συγχρονισμός: ${new Date(syncedAt).toLocaleString("el-GR", { dateStyle: "short", timeStyle: "short" })}.` : ""}
             </p>
           </div>
@@ -256,7 +282,7 @@ export default function StockBoard({
             </thead>
             <tbody>
               {shown.map((r) => (
-                <tr key={`${r.item}|${r.position}|${r.lot}|${r.serial}`}>
+                <tr key={`${r.item}|${r.position}|${r.lot}|${r.serial}|${fresh.has(r.item) ? flash : 0}`} className={fresh.has(r.item) ? "st-new" : ""}>
                   <td>
                     {r.position ? (
                       <div className="st-poslist">

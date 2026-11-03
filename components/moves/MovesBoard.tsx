@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import AppBar from "@/components/AppBar";
 import { createClient } from "@/lib/supabase/client";
 import { loadPdfFonts } from "@/lib/pdfFonts";
+import LivePill from "@/components/LivePill";
+import { useWmsLive } from "@/lib/live";
 import type { MoveRow } from "@/lib/exports";
 
 type F = { item: string; lot: string; serial: string; customer: string; from: string; to: string; fromPos: string; toPos: string; type: string; doc: string };
@@ -25,6 +27,14 @@ export default function MovesBoard({ userEmail, role }: { userEmail: string | nu
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [last, setLast] = useState<string | null | undefined>(undefined);
+  const [auto, setAuto] = useState(true); // live: ξανατρέχει την αναζήτηση όταν έρθουν νέες κινήσεις
+  const [newIds, setNewIds] = useState<Set<string>>(new Set());
+  const searched = rows !== null;
+  const live = useWmsLive((sig) => {
+    if (sig.key !== "moves") return;
+    setLast(sig.at);
+    if (auto && searched) search(undefined, true);
+  });
 
   useEffect(() => {
     try {
@@ -54,9 +64,9 @@ export default function MovesBoard({ userEmail, role }: { userEmail: string | nu
     return out;
   }
 
-  async function search(e?: React.FormEvent) {
+  async function search(e?: React.FormEvent, silent = false) {
     e?.preventDefault();
-    setLoading(true);
+    if (!silent) setLoading(true);
     setError(null);
     try {
       window.localStorage.setItem(LS, JSON.stringify({ ...f, from: undefined, to: undefined }));
@@ -79,7 +89,13 @@ export default function MovesBoard({ userEmail, role }: { userEmail: string | nu
       if (f.to) q = q.lt("moved_at", new Date(new Date(`${f.to}T00:00:00`).getTime() + 86400000).toISOString());
       const { data, error: err, count } = await q.order("moved_at", { ascending: false }).order("id").limit(LIMIT);
       if (err) throw new Error(err.message);
-      setRows(((data ?? []) as MoveRow[]).map((r) => ({ ...r, qty: r.qty == null ? null : Number(r.qty) })));
+      const list = ((data ?? []) as MoveRow[]).map((r) => ({ ...r, qty: r.qty == null ? null : Number(r.qty) }));
+      // live: φωτίζει όσες κινήσεις δεν υπήρχαν στην προηγούμενη λίστα
+      setRows((prev) => {
+        const old = new Set((prev ?? []).map((r) => r.id));
+        setNewIds(silent && prev ? new Set(list.filter((r) => !old.has(r.id)).map((r) => r.id)) : new Set());
+        return list;
+      });
       setTotal(count ?? null);
     } catch (e) {
       setError((e as Error).message);
@@ -128,12 +144,16 @@ export default function MovesBoard({ userEmail, role }: { userEmail: string | nu
           <div className="titleblock">
             <h1>Κινήσεις</h1>
             <p>
-              Κινήσεις του WMS. Δεν φορτώνεται τίποτα μέχρι να πατήσεις <b>Αναζήτηση</b>.{" "}
+              <LivePill connected={live.connected} lastAt={live.lastAt ?? last ?? null} /> Κινήσεις του WMS. Δεν φορτώνεται τίποτα μέχρι να πατήσεις <b>Αναζήτηση</b>.{" "}
               {last === null && "Δεν έχουν συγχρονιστεί ακόμα κινήσεις."}
               {last && `Τελευταία κίνηση: ${fmtDt(last)}.`}
             </p>
           </div>
           <div className="st-actions">
+            <label className="st-check" title="Όταν έρθουν νέες κινήσεις, η αναζήτηση ξανατρέχει μόνη της">
+              <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
+              Αυτόματη ανανέωση
+            </label>
             <button type="button" className="btn ghost" onClick={excel} disabled={!!busy || !rows?.length}>
               {busy === "xlsx" ? "Excel…" : "Excel"}
             </button>
@@ -196,7 +216,7 @@ export default function MovesBoard({ userEmail, role }: { userEmail: string | nu
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.id}>
+                  <tr key={r.id} className={newIds.has(r.id) ? "st-new" : ""}>
                     <td className="mono">{fmtDt(r.moved_at)}</td>
                     <td>{r.type}</td>
                     <td className="mono">{r.doc}</td>

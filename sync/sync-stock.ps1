@@ -13,13 +13,14 @@
     .\sync-stock.cmd -Describe Pos   όλες οι στήλες των πινάκων με «Pos» στο όνομα
     .\sync-stock.cmd -Probe 71-01-359 -Find 75   όλες οι τιμές ενός είδους στους πίνακες του WMS
     .\sync-stock.cmd -Moves     εύρεση πινάκων κινήσεων (-> wms-kiniseis.txt)
+    .\sync-stock.cmd -Live      τρέχει συνέχεια: νέες κινήσεις + απόθεμα όσων κινήθηκαν, κάθε 30"
 
   Κινήσεις: αν υπάρχει το movements-query.sql, κάθε συγχρονισμός ανεβάζει και τις
   ΝΕΕΣ κινήσεις (από την τελευταία που υπάρχει στην εφαρμογή, αρχικά MOVES_DAYS ημέρες).
 
   Ρυθμίσεις: rythmiseis.txt (ή .env) στον ίδιο φάκελο. Ο κωδικός μένει εκεί.
 #>
-param([switch]$Test, [switch]$DryRun, [switch]$Force, [string]$Describe, [string]$Probe, [string]$Find, [switch]$Moves)
+param([switch]$Test, [switch]$DryRun, [switch]$Force, [string]$Describe, [string]$Probe, [string]$Find, [switch]$Moves, [switch]$Live)
 
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
@@ -366,7 +367,7 @@ function Get-GeneralStock($result) {
   try { $t = Invoke-Sql $q; Log ("Serial: από ms_Stock.$col"); return ,$t } catch { Log ("Serial: το query απέτυχε (" + $_.Exception.Message + ") -- χωρίς serial"); return ,$result }
 }
 
-function Build-General($table) {
+function Aggregate-Stock($table) {
   $names = @($table.Columns | ForEach-Object { $_.ColumnName.ToLowerInvariant() })
   $has = @{}; foreach ($n in $names) { $has[$n] = $true }
   $stock = [ordered]@{}
@@ -391,7 +392,12 @@ function Build-General($table) {
     }
     $stock[$key] = [pscustomobject][ordered]@{ item = $item; position = $pos; area = $area; lot = $lot; serial = $serial; expiry = $exp; qty = $qty }
   }
-  $rows = @($stock.Values)
+  return @{ rows = [object[]]@($stock.Values); desc = $desc }
+}
+
+function Build-General($table) {
+  $agg = Aggregate-Stock $table
+  $rows = $agg.rows; $desc = $agg.desc
   # κατάλογος: όλοι οι κωδικοί του ms_Item (αν διαβάζεται), αλλιώς όσοι έχουν απόθεμα
   $items = New-Object Collections.ArrayList
   try {
@@ -471,7 +477,7 @@ order by n desc
 # id, moved_at, type, doc, item, lot, serial, qty, from_pos, to_pos, customer, username
 # Αυτόματο query για το ms_StockTrans του WMS (EnterLab): συνδέει μόνο όσους
 # πίνακες υπάρχουν (πελάτης: ms_Person, χρήστης: ms_User/ms_Users), για να μη σπάει.
-function Build-MovesQuery {
+function Build-MovesQuery([string]$where = 's.RecDate >= cast(@since as date)') {
   $cols = Invoke-Sql "select TABLE_NAME t, COLUMN_NAME c from INFORMATION_SCHEMA.COLUMNS where TABLE_SCHEMA = 'dbo' and TABLE_NAME in ('ms_StockTrans','ms_TransCode','ms_Person','ms_Persons','ms_User','ms_Users')"
   $has = @{}
   foreach ($r in $cols.Rows) { $t = [string]$r.t; if (-not $has.ContainsKey($t)) { $has[$t] = New-Object 'Collections.Generic.List[string]' }; $has[$t].Add([string]$r.c) }
@@ -496,7 +502,7 @@ function Build-MovesQuery {
     $nc = & $pick $ut @('UserName', 'Name', 'Descr', 'Code', 'Login')
     if ($nc) { [void]$sel.Add("us.[$nc] as username"); [void]$join.Add("left join dbo.$ut us on us.ID = s.UserId"); break }
   }
-  return "select " + ($sel -join ",`r`n       ") + "`r`nfrom dbo.ms_StockTrans s`r`n" + ($join -join "`r`n") + "`r`nwhere s.RecDate >= cast(@since as date)"
+  return "select " + ($sel -join ",`r`n       ") + "`r`nfrom dbo.ms_StockTrans s`r`n" + ($join -join "`r`n") + "`r`nwhere $where"
 }
 
 function Sync-Moves {
@@ -528,6 +534,15 @@ function Sync-Moves {
     for ($k = 0; $k -lt $max; $k++) { [void]$t.ImportRow($sorted.Rows[$k]) }
     $more = $true
   }
+  $rows = Convert-Moves $t
+  if (-not (Upload-Moves $rows)) { return }
+  Log ("Κινήσεις: {0} από {1:dd/MM/yyyy HH:mm} και μετά{2}." -f $rows.Count, $since, $(if ($more) { ' -- υπάρχουν κι άλλες, συνεχίζει στον επόμενο συγχρονισμό' } else { '' }))
+  if ($rows.Count) { try { [void](Sb-Request 'POST' '/rest/v1/rpc/wms_signal' @{ p_key = 'moves'; p_n = $rows.Count }) } catch {} }
+}
+
+function Convert-Moves($t) {
+  $names = @($t.Columns | ForEach-Object { $_.ColumnName.ToLowerInvariant() })
+  $has = @{}; foreach ($n in $names) { $has[$n] = $true }
   $col = { param($r, $n) if ($has[$n]) { To-Str $r[$n] } else { '' } }
   $rows = New-Object Collections.ArrayList
   foreach ($r in $t.Rows) {
@@ -540,12 +555,81 @@ function Sync-Moves {
       from_pos = (& $col $r 'from_pos'); to_pos = (& $col $r 'to_pos'); customer = (& $col $r 'customer'); username = (& $col $r 'username')
     })
   }
+  return ,$rows
+}
+
+function Upload-Moves($rows) {
   $size = 2000
   for ($i = 0; $i -lt $rows.Count; $i += $size) {
     $chunk = $rows.GetRange($i, [math]::Min($size, $rows.Count - $i)).ToArray()
-    try { [void](Sb-Request 'POST' '/rest/v1/rpc/wms_moves_upsert' @{ p_rows = [object[]]$chunk }) } catch { Log ("Κινήσεις: ανέβασμα απέτυχε (" + $_ + ")"); return }
+    try { [void](Sb-Request 'POST' '/rest/v1/rpc/wms_moves_upsert' @{ p_rows = [object[]]$chunk }) } catch { Log ("Κινήσεις: ανέβασμα απέτυχε (" + $_ + ")"); return $false }
   }
-  Log ("Κινήσεις: {0} από {1:dd/MM/yyyy HH:mm} και μετά{2}." -f $rows.Count, $since, $(if ($more) { ' -- υπάρχουν κι άλλες, συνεχίζει στον επόμενο συγχρονισμό' } else { '' }))
+  return $true
+}
+
+# ------------------------------------------------------------------ live
+# Ένα κλείδωμα για όλα τα ανεβάσματα αποθέματος (πλήρες sync και -Live να μη μπλέκονται).
+$script:Mutex = New-Object Threading.Mutex($false, 'Global\FagronWhsSync')
+function Lock-Sync { try { return $script:Mutex.WaitOne(600000) } catch [Threading.AbandonedMutexException] { return $true } }
+function Unlock-Sync { try { $script:Mutex.ReleaseMutex() } catch {} }
+
+function Stock-ForItems([string[]]$codes, [string]$serialCol) {
+  $p = @{}; $names = @()
+  for ($i = 0; $i -lt $codes.Count; $i++) { $p["c$i"] = $codes[$i]; $names += "@c$i" }
+  $ser = if ($serialCol) { ", s.[$serialCol] as serial" } else { '' }
+  $q = "select p.code as position, p.Descr as area, i.code as item, i.Descr as description, s.Qty1 as qty, s.Lot as lot, s.ExpDate as expiry$ser from dbo.ms_Stock s join dbo.ms_Item i on i.ID = s.ItemId join dbo.ms_Pos p on p.ID = s.PosId where s.Qty1 > 0 and i.code in (" + ($names -join ',') + ")"
+  return ,(Invoke-Sql $q $p)
+}
+
+# Τρέχει συνέχεια: κάθε LIVE_SECONDS (30) νέες κινήσεις (ID > τελευταίο) + απόθεμα
+# μόνο των κωδικών που κινήθηκαν. Τερματίζει μετά από LIVE_MINUTES (0 = ποτέ).
+function Run-Live {
+  $secs = 30; $o = Opt 'LIVE_SECONDS'; if ($o -match '^\d+$' -and [int]$o -ge 5) { $secs = [int]$o }
+  $mins = 0; $o = Opt 'LIVE_MINUTES'; if ($o -match '^\d+$') { $mins = [int]$o }
+  $start = Get-Date
+  Sb-Login; $loginAt = Get-Date
+  $sc = @(Find-SerialColumns | Where-Object { $_.table -eq 'ms_Stock' -and $_.column -match '^[A-Za-z0-9_]+$' } | Select-Object -First 1)
+  $serialCol = if ($sc.Count) { $sc[0].column } else { '' }
+  $q = Build-MovesQuery 's.ID > @lastId'
+  if (-not $q) { Fail 'Live: δεν βρέθηκε το ms_StockTrans' }
+  $lastId = $null
+  try { $lastId = Sb-Request 'POST' '/rest/v1/rpc/wms_moves_last_id' @{} } catch {}
+  if (-not $lastId) {
+    $t = Invoke-Sql "select max(ID) as m from dbo.ms_StockTrans"
+    $lastId = [int64]$t.Rows[0].m
+    Log "Live: η εφαρμογή δεν έχει κινήσεις ακόμα -- ξεκινά από τώρα (το πλήρες sync φέρνει τις παλιές)"
+  }
+  $lastId = [int64]$lastId
+  Log ("Live: ξεκίνησε (κάθε {0} δευτ., από κίνηση {1})" -f $secs, $lastId)
+  while ($true) {
+    try {
+      if (((Get-Date) - $loginAt).TotalMinutes -gt 40) { Sb-Login; $loginAt = Get-Date }
+      $t = Invoke-Sql $q @{ lastId = $lastId }
+      if ($t.Rows.Count) {
+        $rows = Convert-Moves $t
+        if (Upload-Moves $rows) {
+          $lastId = [int64](($rows | ForEach-Object { [int64]$_.id } | Measure-Object -Maximum).Maximum)
+          $codes = [string[]]@($rows | ForEach-Object { $_.item } | Where-Object { $_ } | Select-Object -Unique)
+          $nStock = 0
+          if ($codes.Count) {
+            for ($i = 0; $i -lt $codes.Count; $i += 200) {
+              $part = [string[]]$codes[$i..([math]::Min($codes.Count, $i + 200) - 1)]
+              $st = (Aggregate-Stock (Stock-ForItems $part $serialCol)).rows
+              if (Lock-Sync) {
+                try { [void](Sb-Request 'POST' '/rest/v1/rpc/wms_replace_items' @{ p_items = $part; p_stock = [object[]]@($st) }) } finally { Unlock-Sync }
+              }
+              $nStock += $st.Count
+            }
+            [void](Sb-Request 'POST' '/rest/v1/rpc/wms_signal' @{ p_key = 'stock'; p_items = $codes; p_n = $nStock })
+          }
+          [void](Sb-Request 'POST' '/rest/v1/rpc/wms_signal' @{ p_key = 'moves'; p_n = $rows.Count })
+          Log ("Live: {0} νέες κινήσεις · απόθεμα {1} κωδικών ενημερώθηκε" -f $rows.Count, $codes.Count)
+        }
+      }
+    } catch { Log ("Live: " + $_) }
+    if ($mins -gt 0 -and ((Get-Date) - $start).TotalMinutes -ge $mins) { Log 'Live: τέλος χρόνου'; break }
+    Start-Sleep -Seconds $secs
+  }
 }
 
 # ------------------------------------------------------------------ main
@@ -553,6 +637,7 @@ if ($Test) { Discover; exit 0 }
 if ($Describe) { Describe-Tables $Describe; exit 0 }
 if ($Probe) { Probe-Item $Probe $Find; exit 0 }
 if ($Moves) { Discover-Moves; exit 0 }
+if ($Live) { Run-Live; exit 0 }
 
 $queryFile = Join-Path $Here 'stock-query.sql'
 if (-not (Test-Path $queryFile)) { Fail 'Δεν βρέθηκε το stock-query.sql.' }
@@ -615,7 +700,9 @@ if ($itemInfo.Count) {
 
 if ($general.stock.Count -gt 0) {
   try {
-    Upload-General $general
+    if (-not (Lock-Sync)) { throw 'κλείδωμα: το -Live κρατά το ανέβασμα πάνω από 10 λεπτά' }
+    try { Upload-General $general } finally { Unlock-Sync }
+    try { [void](Sb-Request 'POST' '/rest/v1/rpc/wms_signal' @{ p_key = 'stock_full'; p_n = $general.stock.Count }) } catch {}
     Log ("Γενικές ετικέτες: ανέβηκαν {0} γραμμές αποθέματος, {1} κωδικοί." -f $general.stock.Count, $general.items.Count)
   } catch { Log ("Γενικές ετικέτες: το ανέβασμα απέτυχε (" + $_ + ") -- η ανασυσκευασία ενημερώθηκε κανονικά") }
 }
