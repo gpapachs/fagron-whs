@@ -469,19 +469,65 @@ order by n desc
 
 # Συγχρονισμός κινήσεων: movements-query.sql με παράμετρο @since, στήλες
 # id, moved_at, type, doc, item, lot, serial, qty, from_pos, to_pos, customer, username
+# Αυτόματο query για το ms_StockTrans του WMS (EnterLab): συνδέει μόνο όσους
+# πίνακες υπάρχουν (πελάτης: ms_Person, χρήστης: ms_User/ms_Users), για να μη σπάει.
+function Build-MovesQuery {
+  $cols = Invoke-Sql "select TABLE_NAME t, COLUMN_NAME c from INFORMATION_SCHEMA.COLUMNS where TABLE_SCHEMA = 'dbo' and TABLE_NAME in ('ms_StockTrans','ms_TransCode','ms_Person','ms_Persons','ms_User','ms_Users')"
+  $has = @{}
+  foreach ($r in $cols.Rows) { $t = [string]$r.t; if (-not $has.ContainsKey($t)) { $has[$t] = New-Object 'Collections.Generic.List[string]' }; $has[$t].Add([string]$r.c) }
+  if (-not $has.ContainsKey('ms_StockTrans')) { return $null }
+  $pick = { param($t, $names) if (-not $has.ContainsKey($t)) { return $null }; foreach ($n in $names) { $m = @($has[$t] | Where-Object { $_ -ieq $n }); if ($m.Count) { return $m[0] } }; return $null }
+  $sel = New-Object Collections.ArrayList
+  $join = New-Object Collections.ArrayList
+  [void]$sel.Add("cast(s.ID as varchar(30)) as id")
+  [void]$sel.Add("cast(cast(s.RecDate as date) as datetime) + cast(cast(s.RecTime as time) as datetime) as moved_at")
+  if ($has.ContainsKey('ms_TransCode')) { [void]$sel.Add("coalesce(tc.Descr, s.TransCode) as type"); [void]$join.Add("left join dbo.ms_TransCode tc on tc.code = s.TransCode") }
+  else { [void]$sel.Add("s.TransCode as type") }
+  [void]$sel.Add("coalesce(nullif(s.ErpKey, ''), case when s.RelListId > 0 then cast(s.RelListId as varchar(20)) end) as doc")
+  [void]$sel.Add("i.code as item"); [void]$join.Add("left join dbo.ms_Item i on i.ID = s.ItemId")
+  [void]$sel.Add("s.Lot as lot"); [void]$sel.Add("s.sn as serial"); [void]$sel.Add("s.Qty1 as qty")
+  [void]$sel.Add("pf.code as from_pos"); [void]$join.Add("left join dbo.ms_Pos pf on pf.ID = s.FromPosId")
+  [void]$sel.Add("pt.code as to_pos"); [void]$join.Add("left join dbo.ms_Pos pt on pt.ID = s.ToPosId")
+  foreach ($pt in 'ms_Person', 'ms_Persons') {
+    $nc = & $pick $pt @('Descr', 'Name', 'Title', 'Eponymia', 'FullName', 'Code')
+    if ($nc) { [void]$sel.Add("pe.[$nc] as customer"); [void]$join.Add("left join dbo.$pt pe on pe.ID = s.PersonId"); break }
+  }
+  foreach ($ut in 'ms_User', 'ms_Users') {
+    $nc = & $pick $ut @('UserName', 'Name', 'Descr', 'Code', 'Login')
+    if ($nc) { [void]$sel.Add("us.[$nc] as username"); [void]$join.Add("left join dbo.$ut us on us.ID = s.UserId"); break }
+  }
+  return "select " + ($sel -join ",`r`n       ") + "`r`nfrom dbo.ms_StockTrans s`r`n" + ($join -join "`r`n") + "`r`nwhere s.RecDate >= cast(@since as date)"
+}
+
 function Sync-Moves {
   $file = Join-Path $Here 'movements-query.sql'
-  if (-not (Test-Path $file)) { return }
-  $q = [IO.File]::ReadAllText($file, [Text.Encoding]::UTF8)
+  if (Test-Path $file) { $q = [IO.File]::ReadAllText($file, [Text.Encoding]::UTF8) }
+  else {
+    try { $q = Build-MovesQuery } catch { Log ("Κινήσεις: " + $_.Exception.Message); return }
+    if (-not $q) { return }
+    # για έλεγχο / αλλαγές: μετονόμασέ το σε movements-query.sql και άλλαξέ το
+    [IO.File]::WriteAllText((Join-Path $Here 'movements-query.auto.sql'), $q, (New-Object Text.UTF8Encoding $true))
+  }
   if ([regex]::Replace($q, '--.*$', '', 'Multiline') -match '\b(insert|update|delete|merge|drop|alter|create|truncate|exec|execute)\b') { Log 'movements-query.sql: επιτρέπεται μόνο SELECT -- παραλείπεται'; return }
   $last = $null
   try { $last = Sb-Request 'POST' '/rest/v1/rpc/wms_moves_last' @{} } catch { Log ("Κινήσεις: " + $_); return }
-  $days = 365; $o = Opt 'MOVES_DAYS'; if ($o -match '^\d+$') { $days = [int]$o }
+  $days = 180; $o = Opt 'MOVES_DAYS'; if ($o -match '^\d+$') { $days = [int]$o }
   $since = if ($last) { ([DateTime]::Parse([string]$last, $Inv)).ToLocalTime().AddDays(-2) } else { (Get-Date).Date.AddDays(-$days) }
   try { $t = Invoke-Sql $q @{ since = $since } } catch { Log ("Κινήσεις: το query απέτυχε (" + $_.Exception.Message + ")"); return }
   $names = @($t.Columns | ForEach-Object { $_.ColumnName.ToLowerInvariant() })
   if ($names -notcontains 'id' -or $names -notcontains 'moved_at') { Log 'Κινήσεις: το movements-query.sql πρέπει να επιστρέφει τουλάχιστον id και moved_at'; return }
   $has = @{}; foreach ($n in $names) { $has[$n] = $true }
+  # πρώτη φορά μπορεί να είναι πολλές: έως MOVES_MAX ανά συγχρονισμό (οι παλαιότερες
+  # πρώτα), οι υπόλοιπες ανεβαίνουν στους επόμενους -- συνεχίζει από την τελευταία
+  $max = 40000; $o = Opt 'MOVES_MAX'; if ($o -match '^\d+$') { $max = [int]$o }
+  $more = $false
+  if ($t.Rows.Count -gt $max) {
+    $t.DefaultView.Sort = 'moved_at ASC'
+    $sorted = $t.DefaultView.ToTable()
+    $t = $sorted.Clone()
+    for ($k = 0; $k -lt $max; $k++) { [void]$t.ImportRow($sorted.Rows[$k]) }
+    $more = $true
+  }
   $col = { param($r, $n) if ($has[$n]) { To-Str $r[$n] } else { '' } }
   $rows = New-Object Collections.ArrayList
   foreach ($r in $t.Rows) {
@@ -499,7 +545,7 @@ function Sync-Moves {
     $chunk = $rows.GetRange($i, [math]::Min($size, $rows.Count - $i)).ToArray()
     try { [void](Sb-Request 'POST' '/rest/v1/rpc/wms_moves_upsert' @{ p_rows = [object[]]$chunk }) } catch { Log ("Κινήσεις: ανέβασμα απέτυχε (" + $_ + ")"); return }
   }
-  Log ("Κινήσεις: {0} από {1:dd/MM/yyyy HH:mm} και μετά." -f $rows.Count, $since)
+  Log ("Κινήσεις: {0} από {1:dd/MM/yyyy HH:mm} και μετά{2}." -f $rows.Count, $since, $(if ($more) { ' -- υπάρχουν κι άλλες, συνεχίζει στον επόμενο συγχρονισμό' } else { '' }))
 }
 
 # ------------------------------------------------------------------ main
