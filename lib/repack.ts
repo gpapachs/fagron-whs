@@ -478,6 +478,9 @@ export type ProductSettings = {
   units_per_package: number | null; // τεμάχια ανά συσκευασία
   reserved: number; // τεμάχια για παραγγελίες σε εκκρεμότητα
   reserved_note: string;
+  description_en?: string; // αγγλική περιγραφή (χρήστης) -- υπερισχύει
+  description_en_wms?: string; // αγγλική περιγραφή από το WMS (sync)
+  units_per_package_wms?: number | null; // τμχ/συσκ. από το WMS (sync)
   updated_at?: string;
   updated_by_email?: string | null;
 };

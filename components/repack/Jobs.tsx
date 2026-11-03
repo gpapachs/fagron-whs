@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import type { RecipeAnalysis } from "@/lib/repack";
 import {
   durationSec,
@@ -470,6 +471,15 @@ export function TimesView({
                         <td className="num strong">{fmtDuration(sec / (j.packages as number))}</td>
                         <td className="dim notes">{j.notes}</td>
                         <td className="row-actions">
+                          <Link
+                            className="rp-link"
+                            href={`/labels/?code=${encodeURIComponent(j.product_code || j.recipe_id)}${
+                              j.units && j.packages && j.units % j.packages === 0 ? `&qty=${j.units / j.packages}` : ""
+                            }&copies=${j.packages ?? 1}`}
+                            title="Ετικέτες για αυτή την ανασυσκευασία (μία ανά συσκευασία)"
+                          >
+                            Ετικέτες
+                          </Link>
                           {canEdit && (
                             <button type="button" className="rp-link" onClick={() => onEdit(j)}>
                               Διόρθωση

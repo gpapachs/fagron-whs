@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const LINKS = [
   { href: "/", label: "Πλάνο Αποθήκης" },
   { href: "/repack", label: "Ανασυσκευασία" },
+  { href: "/labels", label: "Ετικέτες" },
 ];
 
 export default function NavTabs() {

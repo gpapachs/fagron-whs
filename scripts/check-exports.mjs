@@ -12,6 +12,8 @@ import * as XLSX from "xlsx";
 import { buildPlan, filterStockForRecipes, indexStock, picksByRecipe } from "../lib/repack.ts";
 import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkbook } from "../lib/exports.ts";
 import * as jobsLib from "../lib/jobs.ts";
+import bwipjs from "bwip-js";
+import { DEFAULT_LABEL_OPTIONS, dataMatrixText, labelsPdf } from "../lib/labels.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
 const outDir = path.join(root, "out", "_check");
@@ -153,5 +155,21 @@ const jback = XLSX.read(fs.readFileSync(path.join(outDir, "sample-times.xlsx")))
 const per = XLSX.utils.sheet_to_json(jback.Sheets["Ανά κωδικό"])[0];
 console.log(`sample-times.xlsx: ${jback.SheetNames.join(" / ")} · μέσος/συσκ. ${per?.["Μέσος χρόνος / συσκευασία (δευτ.)"]} δευτ.`);
 if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) fail("λάθος μέσος χρόνος στο Excel χρόνων");
+
+// ---- ετικέτα 70×35 σε προεκτυπωμένο χαρτί (τα στοιχεία της φωτογραφίας)
+{
+  const label = { code: "71-01-359", descEl: "ΣΩΛΗΝΑΡΙΟ ΑΛΟΥΜΙΝΙΟΥ GALENPACK 30 ML", descEn: "ALUMINIUM TUBE GALENPACK 30 ml", quantity: 75, batch: "1236095-01" };
+  const txt = dataMatrixText(label);
+  const want = "71-01-359#1236095-01#ALUMINIUM TUBE GALENPACK 30 ml | QUANTITY: 75 BATCH NO.: 1236095-01";
+  if (txt !== want) fail(`DataMatrix: «${txt}» αντί για «${want}»`);
+  const { doc, pages } = labelsPdf(jsPDF, bwipjs, fonts, [{ data: label, copies: 2 }], DEFAULT_LABEL_OPTIONS);
+  const buf = Buffer.from(doc.output("arraybuffer"));
+  fs.writeFileSync(path.join(outDir, "sample-label.pdf"), buf);
+  const raw = bwipjs.raw("datamatrix", txt, "")[0];
+  console.log(`sample-label.pdf: ${buf.length} bytes, ${pages} σελίδες 70×35 · DataMatrix ${raw.pixx}×${raw.pixy} · «${txt}»`);
+  if (pages !== 2) fail("λάθος πλήθος ετικετών");
+  const white = labelsPdf(jsPDF, bwipjs, fonts, [{ data: label, copies: 1 }], { ...DEFAULT_LABEL_OPTIONS, preprinted: false, offsetXMm: 1 });
+  fs.writeFileSync(path.join(outDir, "sample-label-blank-paper.pdf"), Buffer.from(white.doc.output("arraybuffer")));
+}
 
 console.log(process.exitCode ? "ΑΠΕΤΥΧΕ" : "OK: όλες οι εξαγωγές δουλεύουν");

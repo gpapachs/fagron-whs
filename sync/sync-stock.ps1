@@ -313,6 +313,29 @@ function Normalize-Rows($table) {
   return ,([object[]]@($merged.Values))
 }
 
+# ------------------------------------------------------------------ στοιχεία ετικέτας
+# Αγγλική περιγραφή των τελικών κωδικών (ms_Item.AlterDescr) -> εφαρμογή (για τις ετικέτες).
+# Το query αλλάζει με αρχείο item-query.sql (στήλες: code, description_en [, units_per_package]).
+function Get-ItemInfo($finals) {
+  $q = "select i.code as code, i.AlterDescr as description_en from dbo.ms_Item i where i.AlterDescr is not null and ltrim(rtrim(i.AlterDescr)) <> ''"
+  $custom = Join-Path $Here 'item-query.sql'
+  if (Test-Path $custom) {
+    $q = [IO.File]::ReadAllText($custom, [Text.Encoding]::UTF8)
+    if ([regex]::Replace($q, '--.*$', '', 'Multiline') -match '\b(insert|update|delete|merge|drop|alter|create|truncate|exec|execute)\b') { Log 'item-query.sql: επιτρέπεται μόνο SELECT -- παραλείπεται'; return @() }
+  }
+  try { $t = Invoke-Sql $q } catch { Log ("Αγγλικές περιγραφές: το query απέτυχε (" + $_.Exception.Message + ") -- παραλείπεται"); return @() }
+  $hasUpp = $t.Columns.Contains('units_per_package')
+  $out = New-Object Collections.ArrayList
+  foreach ($r in $t.Rows) {
+    $code = (To-Str $r['code']).ToUpperInvariant()
+    if (-not $finals.Contains($code)) { continue }
+    $o = [ordered]@{ code = $code; description_en = (To-Str $r['description_en']) }
+    if ($hasUpp) { $u = To-Num $r['units_per_package']; if ($null -ne $u -and $u -gt 0) { $o['units_per_package'] = [int][math]::Round($u) } }
+    [void]$out.Add([pscustomobject]$o)
+  }
+  return ,([object[]]$out.ToArray())
+}
+
 # ------------------------------------------------------------------ main
 if ($Test) { Discover; exit 0 }
 if ($Describe) { Describe-Tables $Describe; exit 0 }
@@ -338,14 +361,19 @@ try {
 
 $wanted = New-Object 'Collections.Generic.HashSet[string]'
 foreach ($c in $comps) { [void]$wanted.Add(([string]$c.code).ToUpperInvariant()) }
-foreach ($r in $recipes) { [void]$wanted.Add(([string]$r.product_code).ToUpperInvariant()) }
+$finals = New-Object 'Collections.Generic.HashSet[string]'
+foreach ($r in $recipes) { $pc = ([string]$r.product_code).ToUpperInvariant(); [void]$wanted.Add($pc); [void]$finals.Add($pc) }
 if ($comps.Count -gt 0 -and $wanted.Count -lt 3) { Fail ("Η εφαρμογή επέστρεψε μόνο {0} κωδικούς προδιαγραφών -- κάτι δεν πάει καλά με την ανάγνωση, δεν ανεβαίνει τίποτα." -f $wanted.Count) }
 $kept = [object[]]@($all | Where-Object { $wanted.Contains($_.item) })
 $keptItems = @($kept | ForEach-Object { $_.item } | Select-Object -Unique).Count
 Log ("Φιλτράρισμα: {0} γραμμές ({1} κωδικοί) από {2} κωδικούς προδιαγραφών · τώρα στην εφαρμογή: {3}" -f $kept.Count, $keptItems, $wanted.Count, $current.Count)
 
+$itemInfo = Get-ItemInfo $finals
+Log ("Αγγλικές περιγραφές τελικών κωδικών από το WMS: {0}" -f $itemInfo.Count)
+
 if ($DryRun) {
   $kept | Select-Object -First 15 | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+  $itemInfo | Select-Object -First 5 | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
   Log 'Δοκιμή (-DryRun): δεν ανέβηκε τίποτα.'
   exit 0
 }
@@ -359,3 +387,10 @@ try {
   [void](Sb-Request 'POST' '/rest/v1/rpc/repack_replace_stock' @{ stock = $kept; file_name = 'WMS (αυτόματος συγχρονισμός)' })
 } catch { Fail ("Ανέβασμα απέτυχε: " + $_) }
 Log ("OK: ανέβηκαν {0} γραμμές αποθέματος." -f $kept.Count)
+
+if ($itemInfo.Count) {
+  try {
+    $n = Sb-Request 'POST' '/rest/v1/rpc/repack_update_item_info' @{ items = $itemInfo }
+    Log ("Στοιχεία ετικέτας: ενημερώθηκαν {0} κωδικοί." -f $n)
+  } catch { Log ("Στοιχεία ετικέτας: η ενημέρωση απέτυχε (" + $_ + ") -- το απόθεμα ανέβηκε κανονικά") }
+}

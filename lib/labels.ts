@@ -1,4 +1,6 @@
 // Ετικέτες ανασυσκευασίας 70×35 mm (PDF, μία ετικέτα ανά σελίδα) με DataMatrix.
+// Χαρτί ΠΡΟΕΚΤΥΠΩΜΕΝΟ: λογότυπο και διεύθυνση υπάρχουν ήδη -- τυπώνονται μόνο
+// περιγραφές, Item Code / Quantity / Batch και DataMatrix (preprinted: true).
 // Οι βιβλιοθήκες (jsPDF, bwip-js) περνούν ως παράμετροι, όπως στο exports.ts,
 // ώστε το ίδιο κώδικας να τρέχει στον browser και στο CI.
 
@@ -16,6 +18,11 @@ export type LabelOptions = {
   footer: string; // διεύθυνση / τηλέφωνο
   companyText: string; // αν δεν δοθεί λογότυπο
   logoDataUrl?: string | null; // PNG/JPEG
+  /** προεκτυπωμένο χαρτί: ΔΕΝ τυπώνονται λογότυπο και διεύθυνση */
+  preprinted: boolean;
+  /** μετατόπιση όλου του περιεχομένου σε mm (ευθυγράμμιση με το χαρτί) */
+  offsetXMm: number;
+  offsetYMm: number;
 };
 
 export const DEFAULT_LABEL_OPTIONS: LabelOptions = {
@@ -24,6 +31,9 @@ export const DEFAULT_LABEL_OPTIONS: LabelOptions = {
   footer: "12 km N.R. Trikala-Larissa - Tel. +30 24310 83633-5 - info@fagron.gr",
   companyText: "Fagron",
   logoDataUrl: null,
+  preprinted: true,
+  offsetXMm: 0,
+  offsetYMm: 0,
 };
 
 /** Ίδια μορφή με τις υπάρχουσες ετικέτες: κωδικός#παρτίδα#EN | QUANTITY: x BATCH NO.: παρτίδα */
@@ -95,6 +105,8 @@ export function labelsPdf(
 
   const k = H / 35; // κλίμακα αν αλλάξει το μέγεθος
   const m = 2.4 * k; // περιθώριο
+  const ox = opts.offsetXMm || 0;
+  const oy = opts.offsetYMm || 0;
   const dm = 15.5 * k; // πλευρά DataMatrix
   let first = true;
   let pages = 0;
@@ -106,6 +118,8 @@ export function labelsPdf(
       first = false;
       pages++;
       doc.setTextColor(0, 0, 0);
+      // μετατόπιση: όλες οι συντεταγμένες παρακάτω περνούν από εδώ
+      const T = (x: number, y: number) => [x + ox, y + oy] as const;
 
       // 1. ελληνική περιγραφή (έντονα) -- μία γραμμή αν χωράει, αλλιώς δύο
       doc.setFont("DejaVu", "bold");
@@ -114,17 +128,17 @@ export function labelsPdf(
       if (doc.getTextWidth(data.descEl) > W - 2 * m) {
         doc.setFontSize(Math.min(sEl, 6.2 * k));
         const lines = doc.splitTextToSize(data.descEl, W - 2 * m).slice(0, 2);
-        doc.text(lines, m, m + 2.4 * k, { lineHeightFactor: 1.1 });
+        doc.text(lines, ...T(m, m + 2.4 * k), { lineHeightFactor: 1.1 });
         extra = 2.3 * k;
       } else {
-        doc.text(data.descEl, m, m + 2.6 * k);
+        doc.text(data.descEl, ...T(m, m + 2.6 * k));
       }
 
       // 2. αγγλική περιγραφή
       doc.setFont("DejaVu", "normal");
       if (data.descEn) {
         fitText(doc, data.descEn, W - 2 * m, 6.6 * k, 4.8 * k);
-        doc.text(data.descEn, m, m + 7.2 * k + extra);
+        doc.text(data.descEn, ...T(m, m + 7.2 * k + extra));
       }
 
       // 3. στοιχεία (αριστερά)
@@ -138,14 +152,16 @@ export function labelsPdf(
       doc.setFontSize(6.6 * k);
       rows.forEach(([l, v], i) => {
         doc.setFont("DejaVu", "normal");
-        doc.text(l, m + 0.6 * k, y0 + i * lh);
-        doc.text(":", m + 12.8 * k, y0 + i * lh);
-        doc.text(v, m + 14.6 * k, y0 + i * lh);
+        doc.text(l, ...T(m + 0.6 * k, y0 + i * lh));
+        doc.text(":", ...T(m + 12.8 * k, y0 + i * lh));
+        doc.text(v, ...T(m + 14.6 * k, y0 + i * lh));
       });
 
       // 4. λογότυπο ή όνομα εταιρείας
       const logoY = y0 + 3 * lh - 1.2 * k;
-      if (opts.logoDataUrl) {
+      if (opts.preprinted) {
+        /* προεκτυπωμένο λογότυπο */
+      } else if (opts.logoDataUrl) {
         try {
           const fmt = opts.logoDataUrl.startsWith("data:image/png") ? "PNG" : "JPEG";
           const props = doc.getImageProperties(opts.logoDataUrl);
@@ -164,9 +180,10 @@ export function labelsPdf(
       // 5. DataMatrix (δεξιά)
       // με τίτλο δύο γραμμών: λίγο μικρότερο και χαμηλότερα, κάτω από την αγγλική περιγραφή
       const dmSize = extra ? 13 * k : dm;
-      drawMatrix(doc, mat, W - m - dmSize - 1.6 * k, extra ? m + 9.8 * k + extra : m + 8.6 * k, dmSize);
+      drawMatrix(doc, mat, ...T(W - m - dmSize - 1.6 * k, extra ? m + 9.8 * k + extra : m + 8.6 * k), dmSize);
 
-      // 6. υποσέλιδο
+      // 6. υποσέλιδο (μόνο σε λευκό χαρτί)
+      if (opts.preprinted) continue;
       doc.setFont("DejaVu", "normal");
       doc.setTextColor(60, 60, 60);
       fitText(doc, opts.footer, W - 2 * m, 4.6 * k, 3.6 * k);
