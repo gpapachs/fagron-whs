@@ -356,7 +356,7 @@ function Get-GeneralStock($result) {
   $sc = @($cols | Where-Object { $_.table -eq 'ms_Stock' -and $_.column -match '^[A-Za-z0-9_]+$' } | Select-Object -First 1)
   if (-not $sc.Count) { return ,$result }
   $col = $sc[0].column
-  $q = "select p.code as position, i.code as item, i.Descr as description, s.Qty1 as qty, s.Lot as lot, s.ExpDate as expiry, s.[$col] as serial from dbo.ms_Stock s join dbo.ms_Item i on i.ID = s.ItemId join dbo.ms_Pos p on p.ID = s.PosId where s.Qty1 > 0"
+  $q = "select p.code as position, p.Descr as area, i.code as item, i.Descr as description, s.Qty1 as qty, s.Lot as lot, s.ExpDate as expiry, s.[$col] as serial from dbo.ms_Stock s join dbo.ms_Item i on i.ID = s.ItemId join dbo.ms_Pos p on p.ID = s.PosId where s.Qty1 > 0"
   try { $t = Invoke-Sql $q; Log ("Serial: από ms_Stock.$col"); return ,$t } catch { Log ("Serial: το query απέτυχε (" + $_.Exception.Message + ") -- χωρίς serial"); return ,$result }
 }
 
@@ -372,23 +372,20 @@ function Build-General($table) {
     $lot = if ($has['lot']) { To-Str $r['lot'] } else { '' }
     $serial = if ($has['serial']) { To-Str $r['serial'] } else { '' }
     $pos = if ($has['position']) { To-Str $r['position'] } else { '' }
+    $area = if ($has['area']) { To-Str $r['area'] } else { '' }
     $exp = if ($has['expiry']) { To-Date $r['expiry'] } else { $null }
     if ($has['description'] -and -not $desc.ContainsKey($item)) { $desc[$item] = To-Str $r['description'] }
-    $key = "$item|$lot|$serial"
+    # μία γραμμή ανά κωδικό + θέση + παρτίδα + serial (για τη σελίδα «Απόθεμα»)
+    $key = "$item|$pos|$lot|$serial"
     if ($stock.Contains($key)) {
       $o = $stock[$key]
       $o.qty = [math]::Round($o.qty + $qty, 6)
       if ($exp -and (-not $o.expiry -or $exp -lt $o.expiry)) { $o.expiry = $exp }
-      if ($pos -and -not $o._pos.Contains($pos)) { [void]$o._pos.Add($pos) }
       continue
     }
-    $set = New-Object 'Collections.Generic.List[string]'
-    if ($pos) { $set.Add($pos) }
-    $stock[$key] = [pscustomobject]@{ item = $item; lot = $lot; serial = $serial; expiry = $exp; qty = $qty; _pos = $set }
+    $stock[$key] = [pscustomobject][ordered]@{ item = $item; position = $pos; area = $area; lot = $lot; serial = $serial; expiry = $exp; qty = $qty }
   }
-  $rows = foreach ($o in $stock.Values) {
-    [pscustomobject][ordered]@{ item = $o.item; lot = $o.lot; serial = $o.serial; expiry = $o.expiry; qty = $o.qty; positions = (($o._pos | Select-Object -First 6) -join ', ') }
-  }
+  $rows = @($stock.Values)
   # κατάλογος: όλοι οι κωδικοί του ms_Item (αν διαβάζεται), αλλιώς όσοι έχουν απόθεμα
   $items = New-Object Collections.ArrayList
   try {

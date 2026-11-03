@@ -200,7 +200,7 @@ export default function LabelsBoard({
   async function loadItemStock(c: string) {
     const { data: rows, error: err } = await createClient()
       .from("wms_stock")
-      .select("item, lot, serial, expiry, qty, positions")
+      .select("item, position, lot, serial, expiry, qty")
       .eq("item", c)
       .order("expiry", { ascending: true, nullsFirst: false })
       .limit(2000);
@@ -209,7 +209,19 @@ export default function LabelsBoard({
       setItemStock([]);
       return;
     }
-    const list = ((rows ?? []) as WmsRow[]).map((r) => ({ ...r, qty: Number(r.qty) }));
+    // ο πίνακας έχει μία γραμμή ανά θέση -> εδώ ανά παρτίδα/serial, με τις θέσεις μαζί
+    const agg = new Map<string, WmsRow>();
+    for (const r of (rows ?? []) as (Omit<WmsRow, "positions"> & { position: string })[]) {
+      const k = `${r.lot}|${r.serial}`;
+      const cur = agg.get(k);
+      if (!cur) agg.set(k, { item: r.item, lot: r.lot, serial: r.serial, expiry: r.expiry, qty: Number(r.qty), positions: r.position });
+      else {
+        cur.qty += Number(r.qty);
+        if (r.expiry && (!cur.expiry || r.expiry < cur.expiry)) cur.expiry = r.expiry;
+        if (r.position && !cur.positions.split(", ").includes(r.position)) cur.positions = cur.positions ? `${cur.positions}, ${r.position}` : r.position;
+      }
+    }
+    const list = [...agg.values()];
     setItemStock(list);
     const lotsOnly = [...new Set(list.filter((r) => r.lot).map((r) => r.lot))];
     const serialsOnly = list.filter((r) => r.serial);

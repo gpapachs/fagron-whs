@@ -10,7 +10,7 @@ import { jsPDF } from "jspdf";
 import { autoTable } from "jspdf-autotable";
 import * as XLSX from "xlsx";
 import { buildPlan, filterStockForRecipes, indexStock, picksByRecipe } from "../lib/repack.ts";
-import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkbook } from "../lib/exports.ts";
+import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkbook, stockPdf, stockWorkbook } from "../lib/exports.ts";
 import * as jobsLib from "../lib/jobs.ts";
 import bwipjs from "bwip-js";
 import { DEFAULT_LABEL_OPTIONS, bitmapToZpl, dataMatrixText, labelsPdf } from "../lib/labels.ts";
@@ -186,6 +186,29 @@ if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) 
     if (w !== want[0] || h !== want[1]) fail(`στροφή ${rotation}: σελίδα ${w}×${h}`);
     fs.writeFileSync(path.join(outDir, `sample-label-rot${rotation}.pdf`), Buffer.from(r.doc.output("arraybuffer")));
   }
+}
+
+// ---- σελίδα «Απόθεμα»: Excel + PDF
+{
+  const rows = Array.from({ length: 250 }, (_, i) => ({
+    item: `40-00-${String(i % 40).padStart(3, "0")}`,
+    description: "ΣΩΛΗΝΑΡΙΟ ΑΛΟΥΜΙΝΙΟΥ GALENPACK 30ML",
+    position: `16.01.${String(i % 9).padStart(2, "0")}.0${i % 4}`,
+    area: i % 2 ? "ΚΕΝΤΡΙΚΗ ΑΠΟΘΗΚΗ" : "ΨΥΓΕΙΟ",
+    lot: `L${1000 + (i % 13)}`,
+    serial: i % 50 === 0 ? `SN-${i}` : "",
+    expiry: i % 7 ? "2027-05-01" : null,
+    qty: 10 + i,
+  }));
+  const sm = { generatedAt: new Date(), userEmail: "test@fagron.gr", filters: ["θέση 16.01…"], syncedAt: new Date().toISOString() };
+  const { wb } = stockWorkbook(XLSX, rows, sm);
+  const back = XLSX.read(XLSX.write(wb, { type: "buffer", bookType: "xlsx" }));
+  const n = XLSX.utils.sheet_to_json(back.Sheets["Απόθεμα"]).length;
+  const per = XLSX.utils.sheet_to_json(back.Sheets["Ανά κωδικό"]).length;
+  if (n !== 250 || per !== 40) fail(`Excel αποθέματος: ${n} γραμμές / ${per} κωδικοί`);
+  const { doc } = stockPdf(jsPDF, autoTable, fonts, rows, sm);
+  fs.writeFileSync(path.join(outDir, "sample-stock.pdf"), Buffer.from(doc.output("arraybuffer")));
+  console.log(`sample-stock: Excel ${n} γραμμές / ${per} κωδικοί · PDF ${doc.getNumberOfPages()} σελίδες`);
 }
 
 // ---- ZPL (απευθείας εκτύπωση Zebra): 10×2 κουκκίδες, 1η στήλη μαύρη

@@ -270,7 +270,7 @@ function newDoc(jsPDF: JsPDFCtor, fonts: PdfFonts, orientation: "portrait" | "la
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function header(doc: any, title: string, lines: string[]): number {
+function header(doc: any, title: string, lines: string[], subtitle = "Fagron Hellas · Ανασυσκευασία"): number {
   const w = doc.internal.pageSize.getWidth();
   doc.setFillColor(...ACCENT);
   doc.rect(14, 12, 3, 12, "F");
@@ -281,7 +281,7 @@ function header(doc: any, title: string, lines: string[]): number {
   doc.setFont(FONT, "normal");
   doc.setFontSize(8.5);
   doc.setTextColor(...DIM);
-  doc.text("Fagron Hellas · Ανασυσκευασία", 20, 24);
+  doc.text(subtitle, 20, 24);
   let y = 31;
   doc.setFontSize(9);
   for (const l of lines) {
@@ -652,4 +652,119 @@ export function jobsWorkbook(XLSX: XLSXLib, jobs: Job[], meta: ExportMeta, h: Jo
     "Εργασίες"
   );
   return { wb, fileName: `xronoi-anasyskevasias-${stamp(meta.generatedAt)}.xlsx` };
+}
+
+// ============================================================ Απόθεμα (σελίδα «Απόθεμα»)
+
+export type StockRow = {
+  item: string;
+  description: string;
+  position: string;
+  area: string;
+  lot: string;
+  serial: string;
+  expiry: string | null;
+  qty: number;
+};
+export type StockExportMeta = { generatedAt: Date; userEmail: string | null; filters: string[]; syncedAt: string | null };
+
+/** Excel με τις γραμμές αποθέματος που φαίνονται (μετά τα φίλτρα) + σύνοψη ανά κωδικό. */
+export function stockWorkbook(XLSX: XLSXLib, rows: StockRow[], meta: StockExportMeta) {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    wb,
+    sheet(
+      XLSX,
+      rows.map((r) => ({
+        "Θέση": r.position,
+        "Περιοχή": r.area,
+        "Κωδικός": r.item,
+        "Περιγραφή": r.description,
+        "Παρτίδα": r.lot,
+        "Serial": r.serial,
+        "Λήξη": r.expiry ? new Date(r.expiry) : "",
+        "Ποσότητα": r.qty,
+      })),
+      [16, 26, 14, 52, 16, 16, 11, 11]
+    ),
+    "Απόθεμα"
+  );
+  const by = new Map<string, { item: string; description: string; qty: number; positions: Set<string>; lots: Set<string> }>();
+  for (const r of rows) {
+    const g = by.get(r.item) ?? { item: r.item, description: r.description, qty: 0, positions: new Set<string>(), lots: new Set<string>() };
+    g.qty += r.qty;
+    if (r.position) g.positions.add(r.position);
+    if (r.lot) g.lots.add(r.lot);
+    by.set(r.item, g);
+  }
+  XLSX.utils.book_append_sheet(
+    wb,
+    sheet(
+      XLSX,
+      [...by.values()].map((g) => ({
+        "Κωδικός": g.item,
+        "Περιγραφή": g.description,
+        "Σύνολο": Math.round(g.qty * 1000) / 1000,
+        "Θέσεις": g.positions.size,
+        "Παρτίδες": g.lots.size,
+        "Λίστα θέσεων": [...g.positions].join(", "),
+      })),
+      [14, 52, 11, 8, 9, 60]
+    ),
+    "Ανά κωδικό"
+  );
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.aoa_to_sheet([
+      ["Απόθεμα WMS"],
+      ["Δημιουργήθηκε", when(meta.generatedAt)],
+      ["Από", meta.userEmail ?? ""],
+      ["Συγχρονισμός WMS", meta.syncedAt ? when(new Date(meta.syncedAt)) : "—"],
+      ["Φίλτρα", meta.filters.join(" · ") || "χωρίς"],
+      ["Γραμμές", rows.length],
+      ["Κωδικοί", by.size],
+    ]),
+    "Πληροφορίες"
+  );
+  return { wb, fileName: `apothema-${stamp(meta.generatedAt)}.xlsx` };
+}
+
+/** PDF (A4 οριζόντιο) με τις γραμμές αποθέματος, ταξινομημένες όπως στην οθόνη. */
+export function stockPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFonts, rows: StockRow[], meta: StockExportMeta) {
+  const doc = newDoc(jsPDF, fonts, "landscape");
+  const total = rows.reduce((a, r) => a + r.qty, 0);
+  const items = new Set(rows.map((r) => r.item)).size;
+  const y = header(
+    doc,
+    "Απόθεμα",
+    [
+      `Δημιουργήθηκε: ${when(meta.generatedAt)}${meta.userEmail ? ` · ${meta.userEmail}` : ""}${meta.syncedAt ? ` · WMS: ${when(new Date(meta.syncedAt))}` : ""}`,
+      `Φίλτρα: ${meta.filters.join(" · ") || "χωρίς"}`,
+      `${rows.length.toLocaleString("el-GR")} γραμμές · ${items.toLocaleString("el-GR")} κωδικοί · σύνολο ποσότητας ${q(total)}`,
+    ],
+    "Fagron Hellas · Αποθήκη"
+  );
+  autoTable(doc, {
+    ...baseTable,
+    startY: y,
+    head: [["Θέση", "Περιοχή", "Κωδικός", "Περιγραφή", "Παρτίδα", "Serial", "Λήξη", "Ποσότητα"]],
+    body: rows.map((r) => [r.position, r.area, r.item, r.description, r.lot, r.serial, exp(r.expiry), q(r.qty)]),
+    styles: { ...baseTable.styles, fontSize: 7.8, cellPadding: 1.3 },
+    columnStyles: {
+      0: { cellWidth: 24, fontStyle: "bold" },
+      1: { cellWidth: 30 },
+      2: { cellWidth: 20 },
+      3: { cellWidth: "auto" },
+      4: { cellWidth: 24 },
+      5: { cellWidth: 22 },
+      6: { cellWidth: 15 },
+      7: { cellWidth: 18, halign: "right" },
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    didParseCell: (d: any) => {
+      if (d.section === "body" && d.row.index % 2 === 1) d.cell.styles.fillColor = ZEBRA;
+    },
+  });
+  footer(doc, "Απόθεμα · Fagron Hellas");
+  return { doc, fileName: `apothema-${stamp(meta.generatedAt)}.pdf` };
 }

@@ -997,3 +997,42 @@ th.num { font-family: var(--font-body), sans-serif; }
 .lb-kind button.on { background: var(--accent); color: var(--accent-ink); }
 .lb-serial-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .btn.sm { padding: 4px 10px; font-size: 12.5px; min-height: 0; }
+
+/* σελίδα «Απόθεμα» */
+label.field select {
+  height: 40px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: var(--ink);
+  font: inherit; font-weight: 500; font-size: 14px; padding: 0 10px; min-width: 0;
+}
+.st-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.st-filters {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; padding: 14px 16px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow);
+}
+.st-filters .field { min-width: 150px; flex: 0 1 180px; }
+.st-filters .st-grow { flex: 1 1 260px; }
+.st-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--ink-dim); height: 40px; }
+.st-summary { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13.5px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+.st-summary b { color: var(--ink); }
+.st-tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow); }
+.st-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.st-table th { position: sticky; top: 0; background: var(--surface-2); text-align: left; padding: 0; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.st-table th button { all: unset; cursor: pointer; display: block; padding: 9px 10px; font-size: 11.5px; font-weight: 700; color: var(--ink-dim); text-transform: uppercase; letter-spacing: 0.03em; }
+.st-table th.num button { text-align: right; }
+.st-arrow { display: inline-block; width: 12px; margin-left: 3px; font-size: 9px; }
+.st-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.st-table tbody tr:hover td { background: var(--surface-2); }
+.st-table .num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.st-table .mono { font-family: var(--font-mono), monospace; font-size: 12.5px; white-space: nowrap; }
+.st-table .dim { color: var(--ink-dim); font-size: 12px; }
+.st-desc { min-width: 220px; }
+.st-expired { color: var(--occupied); font-weight: 700; }
+.st-soon { color: #b45309; font-weight: 600; }
+.st-link { all: unset; cursor: pointer; color: var(--link); font-weight: 600; }
+.st-link:hover { text-decoration: underline; }
+.st-label { font-size: 12px; font-weight: 600; color: var(--link); text-decoration: none; white-space: nowrap; }
+.st-empty { text-align: center; color: var(--ink-dim); padding: 28px 10px !important; }
+.st-pager { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13px; color: var(--ink-dim); padding-bottom: 24px; }
+@media (max-width: 720px) {
+  .st-hide-sm { display: none; }
+  .st-filters .field { flex: 1 1 140px; }
+}
