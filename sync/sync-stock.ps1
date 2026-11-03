@@ -307,7 +307,8 @@ function Normalize-Rows($table) {
       qty         = $qty
       unit        = $(if ($has['unit']) { To-Str $r['unit'] } else { '' })
       lot         = $lot
-      expiry      = $(if ($has['expiry']) { To-Date $r['expiry'] } else { $null })
+      # χωρίς παρτίδα = χωρίς λήξη (το WMS βάζει εκεί άσχετες ημερομηνίες)
+      expiry      = $(if ($has['expiry'] -and $lot) { To-Date $r['expiry'] } else { $null })
     }
   }
   return ,([object[]]@($merged.Values))
@@ -343,7 +344,7 @@ function Get-ItemInfo($finals) {
 # Κατάλογος κωδικών + απόθεμα ανά παρτίδα / serial για τη σελίδα Ετικέτες -> «Όλα τα προϊόντα».
 function Find-SerialColumns {
   try {
-    $t = Invoke-Sql "select TABLE_NAME as t, COLUMN_NAME as c from INFORMATION_SCHEMA.COLUMNS where COLUMN_NAME like '%serial%' or COLUMN_NAME like '%SerNo%' order by TABLE_NAME, COLUMN_NAME"
+    $t = Invoke-Sql "select TABLE_NAME as t, COLUMN_NAME as c from INFORMATION_SCHEMA.COLUMNS where COLUMN_NAME like '%serial%' or COLUMN_NAME like '%SerNo%' or COLUMN_NAME like '%SerialN%' or COLUMN_NAME like 'SN' or COLUMN_NAME like '%[_]SN' or COLUMN_NAME like '%Seiriak%' order by TABLE_NAME, COLUMN_NAME"
     return ,([object[]]@($t.Rows | ForEach-Object { [pscustomobject]@{ table = To-Str $_['t']; column = To-Str $_['c'] } }))
   } catch { return ,([object[]]@()) }
 }
@@ -353,6 +354,7 @@ function Get-GeneralStock($result) {
   if ($names -contains 'serial') { return ,$result }
   $cols = Find-SerialColumns
   if ($cols.Count) { Log ("Στήλες serial στο WMS: " + (($cols | ForEach-Object { "$($_.table).$($_.column)" }) -join ', ')) }
+  else { Log 'Στήλες serial στο WMS: δεν βρέθηκε καμία (τα serial θα διαβάζονται από το πεδίο Παρτίδα)' }
   $sc = @($cols | Where-Object { $_.table -eq 'ms_Stock' -and $_.column -match '^[A-Za-z0-9_]+$' } | Select-Object -First 1)
   if (-not $sc.Count) { return ,$result }
   $col = $sc[0].column
@@ -373,7 +375,7 @@ function Build-General($table) {
     $serial = if ($has['serial']) { To-Str $r['serial'] } else { '' }
     $pos = if ($has['position']) { To-Str $r['position'] } else { '' }
     $area = if ($has['area']) { To-Str $r['area'] } else { '' }
-    $exp = if ($has['expiry']) { To-Date $r['expiry'] } else { $null }
+    $exp = if ($has['expiry'] -and $lot) { To-Date $r['expiry'] } else { $null }
     if ($has['description'] -and -not $desc.ContainsKey($item)) { $desc[$item] = To-Str $r['description'] }
     # μία γραμμή ανά κωδικό + θέση + παρτίδα + serial (για τη σελίδα «Απόθεμα»)
     $key = "$item|$pos|$lot|$serial"

@@ -245,6 +245,16 @@ export default function LabelsBoard({
     () => (itemStock ?? []).filter((r) => r.serial).sort((a, b) => a.serial.localeCompare(b.serial, "el", { numeric: true })),
     [itemStock]
   );
+  // Το WMS μπορεί να κρατά το serial στο πεδίο «Παρτίδα» (χωρίς ξεχωριστή στήλη):
+  // τότε στη λειτουργία Serial δείχνουμε τις παρτίδες ως serial.
+  const serialFromLot = ownSerials.length === 0 && ownLots.length > 0;
+  const serialChoices: WmsRow[] = useMemo(
+    () =>
+      ownSerials.length
+        ? ownSerials
+        : ownLots.map((l) => ({ item: code, lot: "", serial: l.lot, expiry: l.expiry, qty: l.qty, positions: l.positions })),
+    [ownSerials, ownLots, code]
+  );
   function toggleSerial(sn: string) {
     setSerials((cur) => (cur.includes(sn) ? cur.filter((x) => x !== sn) : [...cur, sn]));
   }
@@ -295,7 +305,7 @@ export default function LabelsBoard({
         const base = { code, descEl: descEl.trim(), descEn: descEn.trim(), quantity: qtyValue };
         if (effKind !== "serial") return { ...base, batch: id, serial: "" };
         // serial: η παρτίδα έρχεται από το απόθεμα του ίδιου serial (αν υπάρχει)
-        const lot = ownSerials.find((r) => r.serial === id)?.lot ?? "";
+        const lot = serialChoices.find((r) => r.serial === id)?.lot ?? "";
         return { ...base, batch: lot, serial: id };
       })
     : [];
@@ -560,7 +570,7 @@ export default function LabelsBoard({
                     <datalist id="lb-lots">
                       {(mode === "all"
                         ? effKind === "serial"
-                          ? ownSerials.map((r) => ({ item: r.item, lot: r.serial, position: r.positions, qty: r.qty, expiry: r.expiry }))
+                          ? serialChoices.map((r) => ({ item: r.item, lot: r.serial, position: r.positions, qty: r.qty, expiry: r.expiry }))
                           : ownLots.map((l) => ({ item: code, lot: l.lot, position: l.positions, qty: l.qty, expiry: l.expiry }))
                         : lotOptions
                       ).map((l) => (
@@ -602,12 +612,17 @@ export default function LabelsBoard({
                       )
                     )}
                     {itemStock !== null && effKind === "serial" && (
-                      ownSerials.length ? (
+                      serialChoices.length ? (
                         <>
                           <div className="lb-serial-tools">
-                            <span className="rp-hint">Διάλεξε ένα ή περισσότερα — μία ετικέτα ανά serial.</span>
-                            <button type="button" className="btn ghost sm" onClick={() => setSerials(ownSerials.map((r) => r.serial))}>
-                              Όλα ({ownSerials.length})
+                            <span className="rp-hint">
+                              {serialFromLot
+                                ? "Δεν βρέθηκε ξεχωριστό serial στο WMS — εδώ οι τιμές του πεδίου «Παρτίδα» ως serial. "
+                                : ""}
+                              Διάλεξε ένα ή περισσότερα — μία ετικέτα ανά serial.
+                            </span>
+                            <button type="button" className="btn ghost sm" onClick={() => setSerials(serialChoices.map((r) => r.serial))}>
+                              Όλα ({serialChoices.length})
                             </button>
                             {serials.length > 0 && (
                               <button type="button" className="btn ghost sm" onClick={() => setSerials([])}>
@@ -616,7 +631,7 @@ export default function LabelsBoard({
                             )}
                           </div>
                           <div className="lb-lots">
-                            {ownSerials.slice(0, 200).map((r) => (
+                            {serialChoices.slice(0, 200).map((r) => (
                               <button
                                 key={`${r.lot}|${r.serial}`}
                                 type="button"
