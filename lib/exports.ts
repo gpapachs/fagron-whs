@@ -1102,7 +1102,7 @@ export function salesListPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: Pd
       body: o.lines.map((l, i) => [
         String(l.line.line_no ?? i + 1),
         l.line.item,
-        l.line.description,
+        l.line.lot ? `${l.line.description}\nΔεσμευμένη παρτίδα: ${l.line.lot}` : l.line.description,
         q(l.need),
         q(l.stock),
         posTxt(l.picks) || "—",

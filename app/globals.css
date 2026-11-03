@@ -1161,3 +1161,7 @@ a.sl-open:hover { text-decoration: underline; }
 .sv-none { padding: 4px 0; }
 .sv-repack { margin-top: 8px; }
 .sv-repack-head { font-size: 12.5px; font-weight: 700; color: var(--reserved); margin-bottom: 4px; }
+.sl-lot { display: inline-block; margin-top: 2px; font-size: 11px; font-weight: 700; color: #6b3fc4; background: #efe7fb; padding: 1px 7px; border-radius: 999px; }
+.sv-popup { padding-top: 14px; }
+.sv-stock tr.sv-other td { opacity: 0.45; }
+.sv-resv { color: #6b3fc4; font-weight: 600; }

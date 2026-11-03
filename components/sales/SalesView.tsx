@@ -1,13 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import AppBar from "@/components/AppBar";
 import LivePill from "@/components/LivePill";
 import { createClient } from "@/lib/supabase/client";
 import { loadPdfFonts } from "@/lib/pdfFonts";
 import { useWmsLive } from "@/lib/live";
-import { evaluateOrders, type OrderColor } from "@/lib/sales";
-import { loadSalesContext, normOrder, SALES_COLS } from "@/lib/salesData";
+import { evaluateOrders, reservedByOthers, type OrderColor, type Reservations } from "@/lib/sales";
+import { loadReservations, loadSalesContext, normOrder, SALES_COLS } from "@/lib/salesData";
 import type { Recipe, StockIndex } from "@/lib/repack";
 import type { OrderRow } from "@/lib/exports";
 
@@ -18,7 +17,7 @@ const COLOR_LABEL: Record<OrderColor, string> = { green: "Όλα διαθέσι�
 const STATE_LABEL = { ok: "Διαθέσιμο", repack: "Ανασυσκευασία", partial: "Μερικό", none: "Δεν υπάρχει" } as const;
 
 /** Μία λίστα πώλησης σε δικό της παράθυρο: γραμμές + ΟΛΟ το απόθεμα κάθε είδους. */
-export default function SalesView({ userEmail, role }: { userEmail: string | null; role: "admin" | "staff" }) {
+export default function SalesView({ userEmail }: { userEmail: string | null; role?: "admin" | "staff" }) {
   const [list, setList] = useState("");
   const [rows, setRows] = useState<OrderRow[] | null>(null);
   const [idx, setIdx] = useState<StockIndex>(new Map());
@@ -26,6 +25,7 @@ export default function SalesView({ userEmail, role }: { userEmail: string | nul
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [repackCounts, setRepackCounts] = useState(true);
+  const [reservations, setReservations] = useState<Reservations>(new Map());
 
   async function load(l: string) {
     setError(null);
@@ -39,7 +39,8 @@ export default function SalesView({ userEmail, role }: { userEmail: string | nul
         .limit(2000);
       if (err) throw new Error(err.message);
       const r = ((data ?? []) as OrderRow[]).map(normOrder);
-      const ctx = await loadSalesContext(r);
+      const [ctx, res] = await Promise.all([loadSalesContext(r), loadReservations()]);
+      setReservations(res);
       setIdx(ctx.idx);
       setRecipes(ctx.recipes);
       setRows(r);
@@ -58,7 +59,7 @@ export default function SalesView({ userEmail, role }: { userEmail: string | nul
     if (list && (sig.key === "orders_sync" || sig.key === "stock" || sig.key === "stock_full")) load(list);
   });
 
-  const o = useMemo(() => (rows && rows.length ? evaluateOrders(rows, idx, recipes, { repackCounts })[0] : null), [rows, idx, recipes, repackCounts]);
+  const o = useMemo(() => (rows && rows.length ? evaluateOrders(rows, idx, recipes, { repackCounts, reservations })[0] ?? null : null), [rows, idx, recipes, repackCounts, reservations]);
 
   async function print() {
     if (!o) return;
@@ -79,8 +80,7 @@ export default function SalesView({ userEmail, role }: { userEmail: string | nul
   const h = o?.head;
   return (
     <>
-      <AppBar email={userEmail} role={role} />
-      <div className="wrap stock">
+      <div className="wrap stock sv-popup">
         <div className="header">
           <div className="titleblock">
             <h1>
@@ -124,6 +124,7 @@ export default function SalesView({ userEmail, role }: { userEmail: string | nul
         {error && <p className="rp-notice error">{error}</p>}
         {rows === null && !error && <p className="rp-hint">Φόρτωση…</p>}
         {rows !== null && !rows.length && <p className="rp-notice warn">Δεν βρέθηκε η λίστα {list}.</p>}
+        {rows !== null && rows.length > 0 && !o && <p className="rp-notice ok">Όλες οι γραμμές της λίστας {list} έχουν ήδη εκτελεστεί.</p>}
 
         {o &&
           o.lines.map((l) => {
@@ -137,13 +138,14 @@ export default function SalesView({ userEmail, role }: { userEmail: string | nul
                   <span className="sv-nums">
                     ζητ. <b>{fmtQ(l.need)}</b> · απόθεμα <b>{fmtQ(l.stock)}</b>
                   </span>
+                  {l.line.lot && <span className="sl-lot">Δεσμευμένη παρτίδα {l.line.lot}</span>}
                   <span className={`sl-state ${l.state}`}>{STATE_LABEL[l.state]}</span>
                 </div>
                 {st.length ? (
                   <table className="st-table sv-stock">
                     <thead>
                       <tr>
-                        {["Θέση", "Περιοχή", "Παρτίδα", "Λήξη", "Ποσότητα", "Πάρε"].map((x, i) => (
+                        {["Θέση", "Περιοχή", "Παρτίδα", "Λήξη", "Ποσότητα", "Δεσμ. άλλων", "Πάρε"].map((x, i) => (
                           <th key={x} className={i >= 4 ? "num" : ""}>
                             <span className="mv-th">{x}</span>
                           </th>
@@ -155,8 +157,10 @@ export default function SalesView({ userEmail, role }: { userEmail: string | nul
                         .sort((a, b) => (a.expiry ?? "9999").localeCompare(b.expiry ?? "9999") || a.position.localeCompare(b.position, "el", { numeric: true }))
                         .map((r) => {
                           const take = pick.get(`${r.position}|${r.lot ?? ""}`);
+                          const resv = r.lot ? reservedByOthers(reservations, l.line.item, r.lot, o.key) : 0;
+                          const other = l.line.lot && r.lot !== l.line.lot;
                           return (
-                            <tr key={`${r.position}|${r.lot}`} className={take ? "sv-take" : ""}>
+                            <tr key={`${r.position}|${r.lot}`} className={take ? "sv-take" : other ? "sv-other" : ""}>
                               <td>
                                 <span className="rack">{r.position}</span>
                               </td>
@@ -164,6 +168,9 @@ export default function SalesView({ userEmail, role }: { userEmail: string | nul
                               <td className="mono">{r.lot}</td>
                               <td className="mono">{fmtExp(r.expiry)}</td>
                               <td className="num">{fmtQ(r.qty)}</td>
+                              <td className="num sv-resv" title={resv ? (reservations.get(`${l.line.item}|${r.lot}`) ?? []).filter((x) => x.list !== o.key).map((x) => `λίστα ${x.list}: ${fmtQ(x.qty)}`).join("\n") : ""}>
+                                {resv ? fmtQ(resv) : ""}
+                              </td>
                               <td className="num">{take ? fmtQ(take) : ""}</td>
                             </tr>
                           );

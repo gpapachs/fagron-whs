@@ -4,7 +4,7 @@
 // ανασυσκευασίας (00-*/71-*) και απόθεμα ειδών + συστατικών.
 import { createClient } from "@/lib/supabase/client";
 import { indexStock, type Recipe, type StockIndex, type StockRow } from "@/lib/repack";
-import { isRepackCode } from "@/lib/sales";
+import { buildReservations, isRepackCode, type Reservations } from "@/lib/sales";
 import type { OrderRow } from "@/lib/exports";
 
 export const SALES_COLS =
@@ -52,4 +52,25 @@ export async function loadSalesContext(list: OrderRow[]): Promise<{ idx: StockIn
     return ((d ?? []) as (Omit<StockRow, "unit" | "qty"> & { qty: number | string })[]).map((s) => ({ ...s, qty: Number(s.qty), unit: "", lot: s.lot ?? "", expiry: s.lot ? s.expiry ?? null : null }));
   });
   return { idx: indexStock(stock as StockRow[]), recipes: recMap, stock: stock as StockRow[] };
+}
+
+/** Δεσμεύσεις παρτίδων από ΟΛΕΣ τις ανοιχτές λίστες πωλήσεων (όχι μόνο όσες φαίνονται). */
+export async function loadReservations(): Promise<Reservations> {
+  const sb = createClient();
+  const rows: Pick<OrderRow, "list_no" | "order_id" | "item" | "lot" | "qty" | "is_completed">[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb
+      .from("wms_orders")
+      .select("list_no, order_id, item, lot, qty, is_completed")
+      .eq("doc_type", "SALEXPORTLS")
+      .eq("is_completed", false)
+      .neq("lot", "")
+      .gt("qty", 0)
+      .order("id")
+      .range(from, from + 999);
+    if (error) throw new Error(error.message);
+    rows.push(...((data ?? []) as typeof rows).map((r) => ({ ...r, qty: Number(r.qty) })));
+    if (!data || data.length < 1000) break;
+  }
+  return buildReservations(rows);
 }

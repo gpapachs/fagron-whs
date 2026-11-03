@@ -11,7 +11,7 @@ import { autoTable } from "jspdf-autotable";
 import * as XLSX from "xlsx";
 import { buildPlan, filterStockForRecipes, indexStock, picksByRecipe } from "../lib/repack.ts";
 import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkbook, stockPdf, stockWorkbook, movesPdf, movesWorkbook, ordersPdf, ordersWorkbook, salesListPdf } from "../lib/exports.ts";
-import { evaluateOrders, orderColor } from "../lib/sales.ts";
+import { buildReservations, evaluateOrders, orderColor } from "../lib/sales.ts";
 import * as jobsLib from "../lib/jobs.ts";
 import bwipjs from "bwip-js";
 import { DEFAULT_LABEL_OPTIONS, bitmapToZpl, dataMatrixText, labelsPdf } from "../lib/labels.ts";
@@ -261,6 +261,13 @@ if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) 
   ];
   const [o] = evaluateOrders(rows, idx, new Map([["71-01-359", [recipe]]]));
   if (o.lines[0].state !== "repack" || o.lines[0].repack?.units !== 7 || !o.needsRepack || o.color !== "green") fail(`ανασυσκευασία: ${o.lines[0].state} ${o.lines[0].repack?.units} ${o.color}`);
+  // δεσμευμένη παρτίδα από άλλη λίστα: μένουν 2 από τα 10 -> μερικό
+  const res = buildReservations([{ list_no: "999", order_id: "9", item: "12-00-001", lot: "L1", qty: 8, is_completed: false }]);
+  const [o3] = evaluateOrders(rows, idx, new Map([["71-01-359", [recipe]]]), { reservations: res });
+  if (o3.lines[1].state !== "partial" || o3.lines[1].covered !== 2 || o3.color !== "red") fail(`δέσμευση: ${o3.lines[1].state} ${o3.lines[1].covered} ${o3.color}`);
+  // εκτελεσμένη γραμμή (ποσότητα 0) δεν εμφανίζεται
+  const [o4] = evaluateOrders([...rows, { ...rows[1], id: "c", qty: 0, init_qty: 4, line_no: 3 }], idx, new Map());
+  if (o4.lines.length !== 2) fail(`εκτελεσμένες γραμμές: ${o4.lines.length}`);
   const [o2] = evaluateOrders(rows, idx, new Map());
   if (o2.color !== "red" || o2.lines[0].state !== "partial") fail(`χωρίς προδιαγραφή: ${o2.color} ${o2.lines[0].state}`);
   const { doc } = salesListPdf(jsPDF, autoTable, fonts, [o, o2], { generatedAt: new Date(), userEmail: "t@f.gr", filters: [], syncedAt: null });

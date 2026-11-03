@@ -7,8 +7,8 @@ import { createClient } from "@/lib/supabase/client";
 import { loadPdfFonts } from "@/lib/pdfFonts";
 import { useWmsLive } from "@/lib/live";
 import type { Recipe, StockIndex } from "@/lib/repack";
-import { loadSalesContext, SALES_COLS } from "@/lib/salesData";
-import { evaluateOrders, isRepackCode, type OrderColor, type OrderEval } from "@/lib/sales";
+import { loadReservations, loadSalesContext, SALES_COLS } from "@/lib/salesData";
+import { evaluateOrders, type OrderColor, type OrderEval, type Reservations } from "@/lib/sales";
 import type { OrderRow } from "@/lib/exports";
 
 type Status = "open" | "completed" | "all";
@@ -31,6 +31,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
   const [rows, setRows] = useState<OrderRow[] | null>(null);
   const [idx, setIdx] = useState<StockIndex>(new Map());
   const [recipes, setRecipes] = useState<Map<string, Recipe[]>>(new Map());
+  const [reservations, setReservations] = useState<Reservations>(new Map());
   const [total, setTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +70,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
     }
     try {
       const sb = createClient();
-      let q = sb.from("wms_orders_v").select(COLS, { count: "exact" }).eq("doc_type", "SALEXPORTLS");
+      let q = sb.from("wms_orders_v").select(COLS, { count: "exact" }).eq("doc_type", "SALEXPORTLS").gt("qty", 0);
       if (ff.status === "open") q = q.eq("is_completed", false);
       if (ff.status === "completed") q = q.eq("is_completed", true);
       if (ff.region !== "all") q = q.eq("is_abroad", ff.region === "abroad");
@@ -88,7 +89,9 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
       const { data, error: err, count } = await q.order("order_date", { ascending: false }).order("list_no", { ascending: false }).order("line_no").limit(LIMIT);
       if (err) throw new Error(err.message);
       const list = ((data ?? []) as OrderRow[]).map((r) => ({ ...r, qty: r.qty == null ? null : Number(r.qty), init_qty: r.init_qty == null ? null : Number(r.init_qty) }));
-      const { idx: newIdx, recipes: recMap } = await loadSalesContext(list);
+      // εκτελεσμένες γραμμές (ποσότητα 0) δεν φορτώνονται καν
+      const [{ idx: newIdx, recipes: recMap }, res] = await Promise.all([loadSalesContext(list), loadReservations()]);
+      setReservations(res);
       setIdx(newIdx);
       setRecipes(recMap);
       setRows(list);
@@ -100,7 +103,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
     }
   }
 
-  const evals = useMemo(() => (rows ? evaluateOrders(rows, idx, recipes, { repackCounts }) : []), [rows, idx, recipes, repackCounts]);
+  const evals = useMemo(() => (rows ? evaluateOrders(rows, idx, recipes, { repackCounts, reservations }) : []), [rows, idx, recipes, repackCounts, reservations]);
   const counts = useMemo(() => {
     const c = { green: 0, yellow: 0, red: 0, repack: 0 };
     for (const o of evals) {
@@ -140,7 +143,15 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
     search(undefined, false, nf);
   }
   const viewUrl = (key: string) => `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/sales/view/?list=${encodeURIComponent(key)}`;
-  const openView = (key: string) => window.open(viewUrl(key), `lista-${key}`);
+  // αναδυόμενο παράθυρο (όχι καρτέλα): με διαστάσεις ο browser ανοίγει popup
+  const openView = (key: string) => {
+    const w = Math.min(1200, window.screen.availWidth - 80);
+    const h = Math.min(900, window.screen.availHeight - 80);
+    const left = Math.max(0, Math.round((window.screen.availWidth - w) / 2));
+    const top = Math.max(0, Math.round((window.screen.availHeight - h) / 2));
+    const win = window.open(viewUrl(key), `lista-${key}`, `popup=yes,width=${w},height=${h},left=${left},top=${top},resizable=yes,scrollbars=yes`);
+    win?.focus();
+  };
 
   const field = (k: keyof F, label: string, ph = "", type = "text") => (
     <label className="field">
@@ -281,7 +292,15 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
                         >
                           {isOpen ? "▾" : "▸"}
                         </button>{" "}
-                        <a href={viewUrl(o.key)} target={`lista-${o.key}`} onClick={(e) => e.stopPropagation()} className="sl-open">
+                        <a
+                          href={viewUrl(o.key)}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            openView(o.key);
+                          }}
+                          className="sl-open"
+                        >
                           <b>{o.key}</b>
                         </a>
                       </td>
@@ -326,6 +345,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
                           <td className="mono">{l.line.item}</td>
                           <td className="st-desc" colSpan={2}>
                             {l.line.description}
+                            {l.line.lot && <div className="sl-lot">Δεσμευμένη παρτίδα: {l.line.lot}</div>}
                             {l.repack && (
                               <div className="sl-repack">
                                 Ανασυσκευασία ×{fmtQ(l.repack.units)} από {l.repack.recipe.id}:{" "}

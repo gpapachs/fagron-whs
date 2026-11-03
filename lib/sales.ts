@@ -37,7 +37,28 @@ export type OrderEval = {
 
 const EPS = 1e-9;
 export const isRepackCode = (code: string) => /^(00|71)-/.test(code);
-export const lineNeed = (l: Pick<OrderRow, "qty" | "init_qty">) => Math.max(0, Number(l.init_qty ?? 0) > 0 ? Number(l.init_qty) : Number(l.qty ?? 0));
+/** ό,τι ΑΠΟΜΕΝΕΙ να συλλεχθεί: Qty1 του WMS (0 = η γραμμή έχει ήδη εκτελεστεί) */
+export const lineNeed = (l: Pick<OrderRow, "qty">) => Math.max(0, Number(l.qty ?? 0));
+
+/** Δεσμευμένες παρτίδες: γραμμές ανοιχτών λιστών με συμπληρωμένη παρτίδα (κωδικός|παρτίδα -> ανά λίστα). */
+export type Reservations = Map<string, { list: string; qty: number }[]>;
+export function buildReservations(rows: Pick<OrderRow, "list_no" | "order_id" | "item" | "lot" | "qty" | "is_completed">[]): Reservations {
+  const m: Reservations = new Map();
+  for (const r of rows) {
+    const q = lineNeed(r);
+    if (!r.lot || q <= EPS || r.is_completed) continue;
+    const k = `${r.item}|${r.lot}`;
+    const list = r.list_no || r.order_id;
+    const arr = m.get(k) ?? [];
+    const e = arr.find((x) => x.list === list);
+    if (e) e.qty += q;
+    else arr.push({ list, qty: q });
+    m.set(k, arr);
+  }
+  return m;
+}
+export const reservedByOthers = (res: Reservations | undefined, item: string, lot: string, list: string) =>
+  (res?.get(`${item}|${lot}`) ?? []).filter((x) => x.list !== list).reduce((a, x) => a + x.qty, 0);
 
 /**
  * Χρώμα λίστας:
@@ -57,11 +78,14 @@ export function evaluateOrders(
   rows: OrderRow[],
   idx: StockIndex,
   recipesByProduct: Map<string, Recipe[]>,
-  opts: { repackCounts?: boolean } = {}
+  opts: { repackCounts?: boolean; reservations?: Reservations } = {}
 ): OrderEval[] {
   const repackCounts = opts.repackCounts ?? true;
+  const res = opts.reservations;
   const groups = new Map<string, OrderRow[]>();
   for (const r of rows) {
+    // γραμμές που έχουν ήδη εκτελεστεί (ποσότητα 0) δεν εμφανίζονται
+    if (lineNeed(r) <= EPS) continue;
     const k = r.list_no || r.order_id;
     const g = groups.get(k);
     if (g) g.push(r);
@@ -71,18 +95,38 @@ export function evaluateOrders(
   const out: OrderEval[] = [];
   for (const [key, lines] of groups) {
     const sorted = [...lines].sort((a, b) => (a.line_no ?? 0) - (b.line_no ?? 0) || a.id.localeCompare(b.id));
-    const used = new Map<string, number>(); // ίδιο είδος σε πολλές γραμμές της λίστας
+    const used = new Map<string, number>(); // ίδια θέση/παρτίδα σε πολλές γραμμές της λίστας
+    // θέσεις του είδους με ό,τι μένει ελεύθερο: αφαιρούνται οι δεσμεύσεις ΑΛΛΩΝ λιστών και
+    // όσα πήραν προηγούμενες γραμμές· με παρτίδα, μόνο αυτή η παρτίδα
+    const freeRows = (item: string, lot: string) => {
+      const rowsOf = (idx.get(item)?.rows ?? []).filter((r) => !lot || (r.lot ?? "") === lot);
+      const left = new Map<string, number>();
+      for (const r of rowsOf) {
+        const l = r.lot ?? "";
+        if (!left.has(l)) left.set(l, reservedByOthers(res, item, l, key));
+      }
+      return rowsOf
+        .map((r) => {
+          const l = r.lot ?? "";
+          const cut = Math.min(r.qty, left.get(l) ?? 0);
+          left.set(l, (left.get(l) ?? 0) - cut);
+          const k = `${item}|${r.position}|${l}`;
+          return { ...r, qty: Math.max(0, r.qty - cut - (used.get(k) ?? 0)) };
+        })
+        .filter((r) => r.qty > EPS);
+    };
     const evals: LineEval[] = sorted.map((line) => {
       const need = lineNeed(line);
-      const stock = total(line.item);
-      const free = Math.max(0, stock - (used.get(line.item) ?? 0));
+      const lot = line.lot ?? "";
+      const stock = lot ? (idx.get(line.item)?.rows ?? []).filter((r) => (r.lot ?? "") === lot).reduce((a, r) => a + r.qty, 0) : total(line.item);
+      const avail = freeRows(line.item, lot);
+      const free = avail.reduce((a, r) => a + r.qty, 0);
       const covered = Math.min(need, free);
-      used.set(line.item, (used.get(line.item) ?? 0) + covered);
-      let state: LineState = need <= EPS || covered + EPS >= need ? "ok" : covered > EPS ? "partial" : "none";
+      let state: LineState = covered + EPS >= need ? "ok" : covered > EPS ? "partial" : "none";
       let repack: RepackSuggestion | null = null;
       const shortage = need - covered;
-      if (shortage > EPS && isRepackCode(line.item)) {
-        // καλύτερη προδιαγραφή: αυτή που βγάζει τα περισσότερα
+      // ανασυσκευασία μόνο όταν η γραμμή δεν ζητά συγκεκριμένη παρτίδα
+      if (shortage > EPS && !lot && isRepackCode(line.item)) {
         let best: { recipe: Recipe; max: number } | null = null;
         for (const recipe of recipesByProduct.get(line.item) ?? []) {
           const { max } = maxUnits(recipe, total);
@@ -104,10 +148,14 @@ export function evaluateOrders(
           else if (state === "none") state = "partial";
         }
       }
-      // θέσεις συλλογής για όσα καλύπτονται από το απόθεμα
-      const picks = covered > EPS
-        ? buildPicks([{ code: line.item, description: line.description, unit: "", required: covered, available: covered, shortage: 0, usedBy: [] }], idx)
-        : [];
+      // θέσεις συλλογής από τις ελεύθερες θέσεις
+      const sub: StockIndex = new Map([[line.item, { total: free, description: line.description, rows: avail }]]);
+      const picks =
+        covered > EPS ? buildPicks([{ code: line.item, description: line.description, unit: "", required: covered, available: covered, shortage: 0, usedBy: [] }], sub) : [];
+      for (const p of picks) {
+        const k = `${line.item}|${p.position}|${p.lot ?? ""}`;
+        used.set(k, (used.get(k) ?? 0) + p.take);
+      }
       return { line, need, stock, covered, state, picks, repack };
     });
     const head = sorted[0];
