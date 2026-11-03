@@ -968,3 +968,21 @@ th.num { font-family: var(--font-body), sans-serif; }
 .lb-dm summary, .lb-setup summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--link); }
 .lb-setup .lb-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .labels .rp-notice { margin: 0; }
+/* παρτίδες συστατικών στις ετικέτες */
+.lb-comps { display: flex; flex-direction: column; gap: 8px; }
+.lb-comps > .l { font-size: 12.5px; color: var(--ink-dim); font-weight: 600; }
+.lb-comp { border: 1px solid var(--border); border-radius: var(--r); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.lb-comp.main { border-color: var(--ink-dim); }
+.lb-comp-head { font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+.lb-comp-head .mono { font-weight: 700; font-size: 12px; }
+.lb-comp-head .desc { color: var(--ink-dim); }
+.lb-lots { display: flex; flex-wrap: wrap; gap: 6px; }
+.lb-lotbtn {
+  display: inline-flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 5px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; font: inherit; color: var(--ink); text-align: left;
+}
+.lb-lotbtn .lot { font-family: var(--font-mono), monospace; font-weight: 700; font-size: 12.5px; }
+.lb-lotbtn .meta { font-size: 11.5px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+.lb-lotbtn:hover { border-color: var(--ink-dim); }
+.lb-lotbtn.on { background: var(--rack); border-color: var(--rack); color: var(--rack-ink); }
+.lb-lotbtn.on .meta { color: var(--rack-ink); }

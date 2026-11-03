@@ -7,7 +7,7 @@ import { loadPdfFonts } from "@/lib/pdfFonts";
 import { DEFAULT_LABEL_OPTIONS, dataMatrixText, isAscii, type LabelData, type LabelOptions } from "@/lib/labels";
 import type { ProductSettings } from "@/lib/repack";
 
-export type LabelProduct = { code: string; description: string };
+export type LabelProduct = { code: string; description: string; components: { code: string; description: string }[] };
 export type LotRow = { item: string; lot: string; expiry: string | null; position: string; qty: number };
 
 const LS_OPTS = "labels.options.v1";
@@ -106,12 +106,35 @@ export default function LabelsBoard({
     return products.filter((p) => searchKey(`${p.code} ${p.description}`).includes(q)).slice(0, 12);
   }, [query, products]);
 
-  // παρτίδες που υπάρχουν στο απόθεμα για τον τελικό κωδικό (προτάσεις)
-  const lotOptions = useMemo(() => {
-    const m = new Map<string, LotRow>();
-    for (const l of lots) if (l.item === code && l.lot && !m.has(l.lot)) m.set(l.lot, l);
-    return [...m.values()];
-  }, [lots, code]);
+  // παρτίδες των ΣΥΣΤΑΤΙΚΩΝ στο απόθεμα (η ετικέτα παίρνει την παρτίδα του συστατικού
+  // που ανασυσκευάζεται). Κύριο συστατικό πρώτο: ίδιος αριθμός με τον τελικό
+  // (71-01-359 -> 40-01-359), αλλιώς το πρώτο της προδιαγραφής. Νωρίτερη λήξη πρώτη.
+  const compLots = useMemo(() => {
+    const p = byCode.get(code);
+    if (!p) return [] as { code: string; description: string; main: boolean; lots: LotRow[] }[];
+    const suffix = code.slice(code.indexOf("-") + 1);
+    const mainIdx = Math.max(0, p.components.findIndex((c) => c.code.slice(c.code.indexOf("-") + 1) === suffix));
+    const ordered = p.components.map((c, i) => ({ ...c, main: i === mainIdx })).sort((a, b) => Number(b.main) - Number(a.main));
+    return ordered.map((c) => {
+      const m = new Map<string, LotRow>();
+      for (const l of lots) {
+        if (l.item !== c.code || !l.lot) continue;
+        const prev = m.get(l.lot);
+        if (prev) m.set(l.lot, { ...prev, qty: prev.qty + l.qty, position: prev.position === l.position ? prev.position : `${prev.position}, ${l.position}` });
+        else m.set(l.lot, { ...l });
+      }
+      const list = [...m.values()].sort((a, b) => (a.expiry ?? "9999").localeCompare(b.expiry ?? "9999") || a.lot.localeCompare(b.lot));
+      return { ...c, lots: list };
+    });
+  }, [byCode, code, lots]);
+  const lotOptions = compLots.flatMap((c) => c.lots);
+
+  // μία μόνο παρτίδα στο κύριο συστατικό -> μπαίνει αυτόματα
+  useEffect(() => {
+    const main = compLots[0];
+    if (code && !batch && main?.main && main.lots.length === 1) setBatch(main.lots[0].lot);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compLots]);
 
   const data: LabelData | null = code
     ? { code, descEl: descEl.trim(), descEn: descEn.trim(), quantity: qty ? Number(qty) : null, batch: batch.trim() }
@@ -274,8 +297,8 @@ export default function LabelsBoard({
                     <input value={batch} onChange={(e) => setBatch(e.target.value.trim())} list="lb-lots" placeholder="π.χ. 1236095-01" />
                     <datalist id="lb-lots">
                       {lotOptions.map((l) => (
-                        <option key={l.lot} value={l.lot}>
-                          {`${l.position} · ${l.qty}${l.expiry ? ` · λ. ${l.expiry}` : ""}`}
+                        <option key={`${l.item}|${l.lot}`} value={l.lot}>
+                          {`${l.item} · ${l.position} · ${l.qty}${l.expiry ? ` · λ. ${l.expiry}` : ""}`}
                         </option>
                       ))}
                     </datalist>
@@ -285,16 +308,39 @@ export default function LabelsBoard({
                     <input inputMode="numeric" value={copies} onChange={(e) => setCopies(e.target.value.replace(/\D/g, ""))} />
                   </label>
                 </div>
-                {lotOptions.length > 0 && !batch && (
-                  <p className="rp-hint">
-                    Παρτίδες στο απόθεμα:{" "}
-                    {lotOptions.slice(0, 6).map((l) => (
-                      <button key={l.lot} type="button" className="rp-link lb-lot" onClick={() => setBatch(l.lot)}>
-                        {l.lot}
-                      </button>
-                    ))}
-                  </p>
-                )}
+                <div className="lb-comps">
+                  <span className="l">Παρτίδες συστατικών στο απόθεμα</span>
+                  {compLots.length === 0 && <span className="rp-hint">Ο κωδικός δεν έχει συστατικά στις προδιαγραφές.</span>}
+                  {compLots.map((c) => (
+                    <div key={c.code} className={`lb-comp ${c.main ? "main" : ""}`}>
+                      <div className="lb-comp-head">
+                        <span className="mono">{c.code}</span> <span className="desc">{c.description}</span>
+                        {c.main && compLots.length > 1 && <span className="rp-alt">κύριο</span>}
+                      </div>
+                      {c.lots.length ? (
+                        <div className="lb-lots">
+                          {c.lots.slice(0, 8).map((l) => (
+                            <button
+                              key={l.lot}
+                              type="button"
+                              className={`lb-lotbtn ${batch === l.lot ? "on" : ""}`}
+                              onClick={() => setBatch(l.lot)}
+                              title={`Θέση ${l.position}`}
+                            >
+                              <span className="lot">{l.lot}</span>
+                              <span className="meta">
+                                {l.qty.toLocaleString("el-GR")} τεμ.{l.expiry ? ` · λ. ${l.expiry.slice(8, 10)}/${l.expiry.slice(5, 7)}/${l.expiry.slice(2, 4)}` : ""}
+                              </span>
+                            </button>
+                          ))}
+                          {c.lots.length > 8 && <span className="rp-hint">+{c.lots.length - 8} ακόμα (γράψε στο Batch)</span>}
+                        </div>
+                      ) : (
+                        <span className="rp-hint">Χωρίς παρτίδα στο απόθεμα.</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
 
                 {!asciiOk && (
                   <p className="rp-notice warn">
