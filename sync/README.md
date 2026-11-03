@@ -9,10 +9,11 @@ WMS. Διαβάζει το απόθεμα (μόνο ανάγνωση), κρατ�
 
 1. **Node.js 18+** στον υπολογιστή (`node -v`).
 2. Στον φάκελο `sync`: `npm install`
-3. Αντέγραψε το `.env.example` σε `.env` και συμπλήρωσε τα στοιχεία SQL του IT.
+3. Άνοιξε το `rythmiseis.txt` με το Notepad και συμπλήρωσε τα στοιχεία SQL του IT
+   (ή, αντί γι' αυτό, αντέγραψε το `.env.example` σε `.env`).
    Ο κωδικός μένει **μόνο** σε αυτό το αρχείο.
 4. Στο Supabase → Authentication → Users → Add user: λογαριασμός συγχρονισμού
-   (π.χ. `wms-sync@fagron-whs.local`, Auto Confirm) και βάλε email/κωδικό στο `.env`.
+   (π.χ. `wms-sync@fagron-whs.local`, Auto Confirm) και βάλε email/κωδικό στο `rythmiseis.txt`.
 5. `node sync-stock.mjs --test` → σύνδεση στη SQL + λίστα πινάκων που μοιάζουν
    με απόθεμα. Με βάση αυτή γράφεται το `stock-query.sql`.
 6. `node sync-stock.mjs --dry-run` → δείχνει τι θα ανέβαινε, χωρίς να ανεβάσει.

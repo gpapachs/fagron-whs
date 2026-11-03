@@ -11,7 +11,7 @@
 //   node sync-stock.mjs             συγχρονισμός (αυτό τρέχει το Task Scheduler)
 //   node sync-stock.mjs --force     συγχρονισμός ακόμα κι αν το απόθεμα έπεσε απότομα
 //
-// Ρυθμίσεις: sync/.env (αντίγραφο του .env.example). Ο κωδικός μένει εκεί,
+// Ρυθμίσεις: sync/rythmiseis.txt ή sync/.env (αντίγραφο του .env.example). Ο κωδικός μένει εκεί,
 // σε αυτόν τον υπολογιστή -- δεν ανεβαίνει στο GitHub (.gitignore).
 
 import fs from "node:fs";
@@ -26,7 +26,8 @@ const FORCE = args.has("--force");
 // ------------------------------------------------------------------ ρυθμίσεις
 function loadEnv(file) {
   if (!fs.existsSync(file)) {
-    fail(`Δεν βρέθηκε το ${file}. Αντέγραψε το .env.example σε .env και συμπλήρωσέ το.`);
+    console.error(`Δεν βρέθηκε το ${file}. Αντέγραψε το .env.example σε rythmiseis.txt και συμπλήρωσέ το.`);
+    process.exit(1);
   }
   const env = {};
   for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
@@ -35,8 +36,10 @@ function loadEnv(file) {
   }
   return env;
 }
-const env = loadEnv(path.join(here, ".env"));
-const need = (k) => env[k] || fail(`Λείπει το ${k} στο sync/.env`);
+// .env ή rythmiseis.txt (πιο εύκολο στα Windows -- ανοίγει με Notepad)
+const envFile = [".env", "rythmiseis.txt"].map((f) => path.join(here, f)).find((f) => fs.existsSync(f)) ?? path.join(here, "rythmiseis.txt");
+const env = loadEnv(envFile);
+const need = (k) => env[k] || fail(`Λείπει το ${k} στο ${path.basename(envFile)}`);
 
 const log = (...a) => {
   const line = `[${new Date().toLocaleString("el-GR")}] ${a.join(" ")}`;
