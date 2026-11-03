@@ -1,0 +1,16 @@
+{
+  "name": "fagron-whs-sync",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Συγχρονισμός αποθέματος από τη SQL του WMS στο Fagron WHS",
+  "scripts": {
+    "test-connection": "node sync-stock.mjs --test",
+    "dry-run": "node sync-stock.mjs --dry-run",
+    "sync": "node sync-stock.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "mssql": "^11.0.1"
+  }
+}

@@ -1,0 +1,29 @@
+-- Απόθεμα από το WMS. ΜΟΝΟ SELECT.
+-- Οι στήλες πρέπει να βγαίνουν με ΑΥΤΑ τα ονόματα (as ...):
+--   position     θέση               (υποχρεωτικό)
+--   item         κωδικός είδους     (υποχρεωτικό)
+--   qty          ποσότητα           (υποχρεωτικό)
+--   area         περιγραφή θέσης / αποθήκη
+--   description  περιγραφή είδους
+--   unit         μονάδα μέτρησης
+--   lot          παρτίδα
+--   expiry       ημ. λήξης παρτίδας
+--
+-- ΣΥΜΠΛΗΡΩΝΕΤΑΙ μετά το «node sync-stock.mjs --test», όταν δούμε ποιος
+-- πίνακας/view έχει το απόθεμα. Παράδειγμα:
+--
+-- select
+--   s.LocationCode   as position,
+--   l.Description    as area,
+--   s.ItemCode       as item,
+--   i.Description    as description,
+--   s.Qty            as qty,
+--   s.Unit           as unit,
+--   s.Lot            as lot,
+--   s.ExpiryDate     as expiry
+-- from dbo.StockByLocation s
+-- join dbo.Locations l on l.Code = s.LocationCode
+-- join dbo.Items i on i.Code = s.ItemCode
+-- where s.Qty > 0
+
+select 1 as position, 'ΣΥΜΠΛΗΡΩΣΕ_ΤΟ_QUERY' as item, 0 as qty where 1 = 0
