@@ -608,8 +608,7 @@ export default function LabelsBoard({
                               >
                                 <span className="lot">{r.serial}</span>
                                 <span className="meta">
-                                  {r.lot ? `παρτ. ${r.lot}` : ""}
-                                  {r.positions ? ` · ${r.positions}` : ""}
+                                  {[r.lot && `παρτ. ${r.lot}`, r.positions].filter(Boolean).join(" · ")}
                                 </span>
                               </button>
                             ))}
