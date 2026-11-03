@@ -205,7 +205,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
               Excel
             </button>
             <button type="button" className="btn primary" onClick={() => printLists(rows ?? [], "all")} disabled={!!busy || !rows?.length} title="Όλες οι λίστες της αναζήτησης, μία ανά σελίδα">
-              {busy === "all" ? "PDF…" : `Μαζική εκτύπωση (${groups.length} λίστες)`}
+              {busy === "all" ? "PDF…" : `Εκτύπωση όλων (${groups.length})`}
             </button>
           </div>
         </div>
@@ -319,7 +319,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
                       </td>
                       <td className="or-head-end">
                         <span className={`or-status ${done === g.lines.length ? "on" : done ? "part" : ""}`}>
-                          {done === g.lines.length ? "Collected" : done ? `${done}/${g.lines.length}` : "Non Collected"}
+                          {done === g.lines.length ? "Collected" : done ? `Collected ${done}/${g.lines.length}` : "Non Collected"}
                         </span>
                         <button type="button" className="st-link or-print" onClick={() => printLists(g.lines, `l${g.list}`)} disabled={!!busy}>
                           {busy === `l${g.list}` ? "…" : "Εκτύπωση"}
