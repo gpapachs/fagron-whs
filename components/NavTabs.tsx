@@ -9,7 +9,7 @@ const LINKS = [
   { href: "/stock", label: "Απόθεμα" },
   { href: "/moves", label: "Κινήσεις" },
   { href: "/sales", label: "Παραγγελίες" },
-  { href: "/orders", label: "Orders" },
+  { href: "/orders", label: "Κινήσεις Εκτελεσμένων Παραγγελιών" },
   { href: "/labels", label: "Ετικέτες" },
 ];
 

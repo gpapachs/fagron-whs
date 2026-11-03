@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { closePlanOrder, loadPlanOrders, planOrderTotals, type PlanOrder } from "@/lib/planOrders";
 import AppBar from "@/components/AppBar";
@@ -797,6 +798,21 @@ export default function RepackBoard({
                           <span className="mono">{a.recipe.id}</span>
                           <span className="desc">{a.recipe.description}</span>
                           <span className="qty">{fmtQty(a.planned)}</span>
+                          {(() => {
+                            // ετικέτες για το πλάνο: μία ανά συσκευασία (τμχ/συσκ. από τις ρυθμίσεις του τελικού)
+                            const pc = a.recipe.product_code;
+                            const upp = settings[pc]?.units_per_package ?? settings[pc]?.units_per_package_wms ?? null;
+                            const copies = upp ? Math.max(1, Math.ceil(a.planned / upp)) : 1;
+                            return (
+                              <Link
+                                className="rp-link rp-labels"
+                                href={`/labels/?code=${encodeURIComponent(pc)}${upp ? `&qty=${upp}` : ""}&copies=${copies}`}
+                                title={upp ? `Ετικέτες: ${copies} × ${upp} τμχ` : "Ετικέτες (όρισε τμχ/συσκευασία για σωστό πλήθος)"}
+                              >
+                                Ετικέτες{upp ? ` (${copies})` : ""}
+                              </Link>
+                            );
+                          })()}
                           {(ordersByRecipe.get(a.recipe.id) ?? []).map((p) => (
                             <span key={p.id} className="rp-order">
                               ×{fmtQty(p.qty)} για <b>{p.customer || "—"}</b>

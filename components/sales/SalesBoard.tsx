@@ -25,7 +25,7 @@ const fmtDt = (s: string | null) => (s ? new Date(s).toLocaleString("el-GR", { d
 const fmtQ = (n: number) => n.toLocaleString("el-GR", { maximumFractionDigits: 3 });
 const COLS = SALES_COLS;
 const COLOR_LABEL: Record<OrderColor, string> = { green: "Όλα διαθέσιμα", yellow: "Μερική συλλογή", red: "Χωρίς απόθεμα" };
-const STATE_LABEL = { ok: "Διαθέσιμο", repack: "Ανασυσκευασία", partial: "Μερικό", none: "Δεν υπάρχει" } as const;
+const STATE_LABEL = { ok: "Διαθέσιμο", repack: "Ανασυσκευασία", partial: "Μερικό", none: "Δεν υπάρχει", done: "Εκτελεσμένο" } as const;
 
 export default function SalesBoard({ userEmail, role }: { userEmail: string | null; role: "admin" | "staff" }) {
   const [f, setF] = useState<F>(EMPTY);
@@ -43,6 +43,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
   const [stockF, setStockF] = useState<"all" | "some" | "none">("all");
   const [modeF, setModeF] = useState<"all" | "strict" | "partial">("all");
   const [collectingOnly, setCollectingOnly] = useState(false);
+  const [showExecuted, setShowExecuted] = useState(false);
   const [repackCounts, setRepackCounts] = useState(true);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [sel, setSel] = useState<Set<string>>(new Set());
@@ -56,7 +57,14 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
       /* τίποτα */
     }
     setF(init);
-    search(undefined, false, init);
+    let se = false;
+    try {
+      se = window.localStorage.getItem("sales.showExecuted") === "1";
+    } catch {
+      /* τίποτα */
+    }
+    setShowExecuted(se);
+    search(undefined, false, init, se);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -64,7 +72,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
     if (rows !== null && (sig.key === "orders_sync" || sig.key === "stock" || sig.key === "stock_full")) search(undefined, true);
   });
 
-  async function search(e?: React.FormEvent, silent = false, ff: F = f) {
+  async function search(e?: React.FormEvent, silent = false, ff: F = f, showExec = showExecuted) {
     e?.preventDefault();
     if (!silent) setLoading(true);
     setError(null);
@@ -75,7 +83,8 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
     }
     try {
       const sb = createClient();
-      let q = sb.from("wms_orders_v").select(COLS, { count: "exact" }).eq("doc_type", "SALEXPORTLS").gt("qty", 0);
+      let q = sb.from("wms_orders_v").select(COLS, { count: "exact" }).eq("doc_type", "SALEXPORTLS");
+      if (!showExec) q = q.gt("qty", 0);
       if (ff.status === "open") q = q.eq("is_completed", false);
       if (ff.status === "completed") q = q.eq("is_completed", true);
       if (ff.region !== "all") q = q.eq("is_abroad", ff.region === "abroad");
@@ -109,7 +118,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
     }
   }
 
-  const evals = useMemo(() => (rows ? evaluateOrders(rows, idx, recipes, { repackCounts, reservations }) : []), [rows, idx, recipes, repackCounts, reservations]);
+  const evals = useMemo(() => (rows ? evaluateOrders(rows, idx, recipes, { repackCounts, reservations, showExecuted }) : []), [rows, idx, recipes, repackCounts, reservations, showExecuted]);
   const counts = useMemo(() => {
     const c = { green: 0, yellow: 0, red: 0, repack: 0 };
     for (const o of evals) {
@@ -286,6 +295,22 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
                 Μερική <b>{evals.length - nStrict}</b>
               </button>
             </div>
+            <label className="st-check" title="Γραμμές που έχουν ήδη συλλεχθεί (ποσότητα 0)">
+              <input
+                type="checkbox"
+                checked={showExecuted}
+                onChange={(e) => {
+                  setShowExecuted(e.target.checked);
+                  try {
+                    window.localStorage.setItem("sales.showExecuted", e.target.checked ? "1" : "");
+                  } catch {
+                    /* τίποτα */
+                  }
+                  search(undefined, false, f, e.target.checked);
+                }}
+              />
+              Εμφάνιση εκτελεσμένων ειδών
+            </label>
             <label className="st-check" title="Αν η ανασυσκευασία καλύπτει την έλλειψη, η γραμμή μετρά ως διαθέσιμη για το χρώμα">
               <input type="checkbox" checked={repackCounts} onChange={(e) => setRepackCounts(e.target.checked)} />
               Η ανασυσκευασία μετρά ως διαθέσιμη

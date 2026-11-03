@@ -16,7 +16,7 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Πλάνο Αποθήκης · Fagron Hellas",
+  title: "Πλάνο Αποθήκης · WHS",
   description: "Διαχείριση παλετοθέσεων αποθήκης",
 };
 

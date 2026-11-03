@@ -13,7 +13,7 @@ type F = { customer: string; item: string; lot: string; sn: string; doc: string;
 const LIMIT = 3000;
 const LS = "orders.filters.v1";
 const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-const EMPTY = (): F => ({ customer: "", item: "", lot: "", sn: "", doc: "", erp: "", list: "", picker: "", from: iso(new Date(Date.now() - 2 * 86400000)), to: iso(new Date()), status: "all" });
+const EMPTY = (): F => ({ customer: "", item: "", lot: "", sn: "", doc: "", erp: "", list: "", picker: "", from: iso(new Date()), to: iso(new Date()), status: "all" });
 const fmtDt = (s: string | null) => (s ? new Date(s).toLocaleString("el-GR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }) : "");
 const fmtQty = (n: number | null) => (n == null ? "" : n.toLocaleString("el-GR", { maximumFractionDigits: 3 }));
 const esc = (s: string) => s.trim().replace(/[\\%_]/g, (c) => `\\${c}`);
@@ -195,7 +195,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
       <div className="wrap stock">
         <div className="header">
           <div className="titleblock">
-            <h1>Orders</h1>
+            <h1>Κινήσεις Εκτελεσμένων Παραγγελιών</h1>
             <p>
               <LivePill connected={live.connected} lastAt={live.lastAt ?? last ?? null} /> Γραμμές πωλήσεων του WMS (salexportcl), ανά λίστα. Δεν φορτώνεται
               τίποτα μέχρι να πατήσεις <b>Αναζήτηση</b>.{" "}

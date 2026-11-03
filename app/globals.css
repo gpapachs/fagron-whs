@@ -1200,3 +1200,6 @@ a.sl-open:hover { text-decoration: underline; }
 .sl-tag.orange { background: #fff1dc; color: #b45309; margin-left: 4px; }
 .sl-chip.orange { color: #b45309; }
 .sv-collecting { margin: 0; padding: 8px 12px; border-radius: var(--r-sm); background: #fff1dc; border: 1px solid #f5c58a; color: #8a4b00; font-size: 12.5px; }
+.sl-state.done { background: var(--surface-2); color: var(--ink-dim); }
+.sv-line.done { opacity: 0.55; border-left-color: var(--ink-dim); }
+.rp-labels { margin-left: 6px; font-size: 12px; }

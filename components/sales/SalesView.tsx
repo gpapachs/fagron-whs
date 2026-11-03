@@ -16,7 +16,7 @@ const fmtDt = (s: string | null) => (s ? new Date(s).toLocaleString("el-GR", { d
 const fmtQ = (n: number) => n.toLocaleString("el-GR", { maximumFractionDigits: 3 });
 const fmtExp = (e: string | null | undefined) => (e ? `${e.slice(8, 10)}/${e.slice(5, 7)}/${e.slice(0, 4)}` : "");
 const COLOR_LABEL: Record<OrderColor, string> = { green: "Όλα διαθέσιμα", yellow: "Μερική συλλογή", red: "Χωρίς απόθεμα" };
-const STATE_LABEL = { ok: "Διαθέσιμο", repack: "Ανασυσκευασία", partial: "Μερικό", none: "Δεν υπάρχει" } as const;
+const STATE_LABEL = { ok: "Διαθέσιμο", repack: "Ανασυσκευασία", partial: "Μερικό", none: "Δεν υπάρχει", done: "Εκτελεσμένο" } as const;
 
 /** Μία λίστα πώλησης σε δικό της παράθυρο: γραμμές + ΟΛΟ το απόθεμα κάθε είδους. */
 export default function SalesView({ userEmail }: { userEmail: string | null; role?: "admin" | "staff" }) {
@@ -29,6 +29,14 @@ export default function SalesView({ userEmail }: { userEmail: string | null; rol
   const [repackCounts, setRepackCounts] = useState(true);
   const [reservations, setReservations] = useState<Reservations>(new Map());
   const [planOrders, setPlanOrders] = useState<PlanOrder[]>([]);
+  const [showExecuted, setShowExecuted] = useState(false);
+  useEffect(() => {
+    try {
+      setShowExecuted(window.localStorage.getItem("sales.showExecuted") === "1");
+    } catch {
+      /* τίποτα */
+    }
+  }, []);
   const [planBusy, setPlanBusy] = useState<string | null>(null);
   const reloadPlan = () => loadPlanOrders().then(setPlanOrders).catch(() => undefined);
 
@@ -64,7 +72,7 @@ export default function SalesView({ userEmail }: { userEmail: string | null; rol
     if (list && (sig.key === "orders_sync" || sig.key === "stock" || sig.key === "stock_full")) load(list);
   });
 
-  const o = useMemo(() => (rows && rows.length ? evaluateOrders(rows, idx, recipes, { repackCounts, reservations })[0] ?? null : null), [rows, idx, recipes, repackCounts, reservations]);
+  const o = useMemo(() => (rows && rows.length ? evaluateOrders(rows, idx, recipes, { repackCounts, reservations, showExecuted })[0] ?? null : null), [rows, idx, recipes, repackCounts, reservations, showExecuted]);
 
   // ---- σύνδεση με το πλάνο ανασυσκευασίας
   const planFor = (lineId: string) => planOrders.filter((p) => p.order_line_id === lineId);
@@ -157,6 +165,21 @@ export default function SalesView({ userEmail }: { userEmail: string | null; rol
             {h?.comments && <p className="sv-comments">Σχόλια: {h.comments}</p>}
           </div>
           <div className="st-actions">
+            <label className="st-check">
+              <input
+                type="checkbox"
+                checked={showExecuted}
+                onChange={(e) => {
+                  setShowExecuted(e.target.checked);
+                  try {
+                    window.localStorage.setItem("sales.showExecuted", e.target.checked ? "1" : "");
+                  } catch {
+                    /* τίποτα */
+                  }
+                }}
+              />
+              Εκτελεσμένα είδη
+            </label>
             <label className="st-check">
               <input type="checkbox" checked={repackCounts} onChange={(e) => setRepackCounts(e.target.checked)} />
               Η ανασυσκευασία μετρά ως διαθέσιμη

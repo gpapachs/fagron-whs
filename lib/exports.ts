@@ -1050,7 +1050,7 @@ export function ordersPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFo
 
 const COLOR_TXT: Record<string, string> = { green: "ΟΛΑ ΔΙΑΘΕΣΙΜΑ", yellow: "ΜΕΡΙΚΗ ΣΥΛΛΟΓΗ", red: "ΧΩΡΙΣ ΑΠΟΘΕΜΑ" };
 const COLOR_RGB: Record<string, [number, number, number]> = { green: [18, 128, 92], yellow: [180, 120, 0], red: [185, 28, 28] };
-const STATE_TXT: Record<string, string> = { ok: "OK", repack: "ΑΝΑΣΥΣΚ.", partial: "ΜΕΡΙΚΟ", none: "ΔΕΝ ΥΠΑΡΧΕΙ" };
+const STATE_TXT: Record<string, string> = { ok: "OK", repack: "ΑΝΑΣΥΣΚ.", partial: "ΜΕΡΙΚΟ", none: "ΔΕΝ ΥΠΑΡΧΕΙ", done: "ΕΚΤΕΛΕΣΜΕΝΟ" };
 
 /** PDF λίστας συλλογής: μία λίστα ανά σελίδα, με θέσεις και πιθανή ανασυσκευασία. */
 export function salesListPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFonts, orders: OrderEval[], meta: StockExportMeta) {

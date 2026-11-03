@@ -4,7 +4,7 @@
 import { buildPicks, maxUnits, type ComponentNeed, type PickLine, type Recipe, type StockIndex } from "./repack.ts";
 import type { OrderRow } from "./exports";
 
-export type LineState = "ok" | "repack" | "partial" | "none";
+export type LineState = "ok" | "repack" | "partial" | "none" | "done"; // done = ήδη εκτελεσμένη
 export type OrderColor = "green" | "yellow" | "red";
 
 export type RepackSuggestion = {
@@ -70,23 +70,24 @@ export const reservedByOthers = (res: Reservations | undefined, item: string, lo
  */
 export function orderColor(lines: Pick<LineEval, "state">[], strict: boolean, repackCounts = true): OrderColor {
   const full = (s: LineState) => s === "ok" || (repackCounts && s === "repack");
-  if (lines.length && lines.every((l) => full(l.state))) return "green";
+  const open = lines.filter((l) => l.state !== "done"); // οι εκτελεσμένες δεν μετράνε
+  if (open.every((l) => full(l.state))) return "green";
   if (strict) return "red";
-  return lines.some((l) => l.state !== "none") ? "yellow" : "red";
+  return open.some((l) => l.state !== "none") ? "yellow" : "red";
 }
 
 export function evaluateOrders(
   rows: OrderRow[],
   idx: StockIndex,
   recipesByProduct: Map<string, Recipe[]>,
-  opts: { repackCounts?: boolean; reservations?: Reservations } = {}
+  opts: { repackCounts?: boolean; reservations?: Reservations; showExecuted?: boolean } = {}
 ): OrderEval[] {
   const repackCounts = opts.repackCounts ?? true;
   const res = opts.reservations;
   const groups = new Map<string, OrderRow[]>();
   for (const r of rows) {
-    // γραμμές που έχουν ήδη εκτελεστεί (ποσότητα 0) δεν εμφανίζονται
-    if (lineNeed(r) <= EPS) continue;
+    // γραμμές που έχουν ήδη εκτελεστεί (ποσότητα 0): μόνο αν το ζητήσει ο χρήστης
+    if (lineNeed(r) <= EPS && !opts.showExecuted) continue;
     const k = r.list_no || r.order_id;
     const g = groups.get(k);
     if (g) g.push(r);
@@ -118,6 +119,7 @@ export function evaluateOrders(
     };
     const evals: LineEval[] = sorted.map((line) => {
       const need = lineNeed(line);
+      if (need <= EPS) return { line, need: 0, stock: total(line.item), covered: 0, state: "done" as LineState, picks: [], repack: null };
       const lot = line.lot ?? "";
       const stock = lot ? (idx.get(line.item)?.rows ?? []).filter((r) => (r.lot ?? "") === lot).reduce((a, r) => a + r.qty, 0) : total(line.item);
       const avail = freeRows(line.item, lot);
