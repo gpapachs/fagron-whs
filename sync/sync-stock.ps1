@@ -193,7 +193,10 @@ function Sb-Request([string]$method, [string]$path, $body) {
   }
   $text = [Text.Encoding]::UTF8.GetString($res.RawContentStream.ToArray())
   if ([string]::IsNullOrWhiteSpace($text)) { return $null }
-  return ConvertFrom-Json $text
+  # Windows PowerShell 5.1: το ConvertFrom-Json δίνει έναν πίνακα JSON ως ΕΝΑ αντικείμενο --
+  # αποθήκευση σε μεταβλητή + return τον «ξεδιπλώνει» σε στοιχεία (ίδια συμπεριφορά με το PS 7).
+  $parsed = ConvertFrom-Json $text
+  return $parsed
 }
 
 function Sb-Login {
@@ -292,6 +295,7 @@ try {
 $wanted = New-Object 'Collections.Generic.HashSet[string]'
 foreach ($c in $comps) { [void]$wanted.Add(([string]$c.code).ToUpperInvariant()) }
 foreach ($r in $recipes) { [void]$wanted.Add(([string]$r.product_code).ToUpperInvariant()) }
+if ($comps.Count -gt 0 -and $wanted.Count -lt 3) { Fail ("Η εφαρμογή επέστρεψε μόνο {0} κωδικούς προδιαγραφών -- κάτι δεν πάει καλά με την ανάγνωση, δεν ανεβαίνει τίποτα." -f $wanted.Count) }
 $kept = [object[]]@($all | Where-Object { $wanted.Contains($_.item) })
 $keptItems = @($kept | ForEach-Object { $_.item } | Select-Object -Unique).Count
 Log ("Φιλτράρισμα: {0} γραμμές ({1} κωδικοί) από {2} κωδικούς προδιαγραφών · τώρα στην εφαρμογή: {3}" -f $kept.Count, $keptItems, $wanted.Count, $current.Count)
