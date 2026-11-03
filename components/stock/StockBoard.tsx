@@ -21,6 +21,8 @@ const key = (s: string) =>
 const nat = (a: string, b: string) => a.localeCompare(b, "el", { numeric: true, sensitivity: "base" });
 const fmtExp = (e: string | null) => (e ? `${e.slice(8, 10)}/${e.slice(5, 7)}/${e.slice(0, 4)}` : "");
 const fmtQty = (n: number) => n.toLocaleString("el-GR", { maximumFractionDigits: 3 });
+/** παλιό sync: πολλές θέσεις σε ένα πεδίο «99.8, 99.11» -> λίστα */
+const splitPos = (p: string) => p.split(/\s*,\s*/).filter(Boolean);
 const today = () => new Date().toISOString().slice(0, 10);
 const plusDays = (d: number) => new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
 
@@ -72,7 +74,7 @@ export default function StockBoard({
     const out = indexed
       .filter(({ r, k }) => {
         if (words.length && !words.every((w) => k.includes(w))) return false;
-        if (pos && !r.position.toLowerCase().startsWith(pos)) return false;
+        if (pos && !splitPos(r.position).some((p) => p.toLowerCase().startsWith(pos))) return false;
         if (f.area && r.area !== f.area) return false;
         if (f.serialOnly && !r.serial) return false;
         if (f.exp === "expired" && !(r.expiry && r.expiry < t)) return false;
@@ -98,7 +100,7 @@ export default function StockBoard({
     let qty = 0;
     for (const r of filtered) {
       items.add(r.item);
-      if (r.position) positions.add(r.position);
+      for (const p of splitPos(r.position)) positions.add(p);
       qty += r.qty;
     }
     return { items: items.size, positions: positions.size, qty };
@@ -255,7 +257,19 @@ export default function StockBoard({
             <tbody>
               {shown.map((r) => (
                 <tr key={`${r.item}|${r.position}|${r.lot}|${r.serial}`}>
-                  <td>{r.position ? <span className="rack">{r.position}</span> : "—"}</td>
+                  <td>
+                    {r.position ? (
+                      <div className="st-poslist">
+                        {splitPos(r.position).map((p) => (
+                          <span key={p} className="rack">
+                            {p}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
                   <td className="st-hide-sm dim">{r.area}</td>
                   <td className="mono">
                     <button type="button" className="st-link" onClick={() => setF({ ...f, text: r.item })} title="Μόνο αυτός ο κωδικός">
@@ -266,7 +280,10 @@ export default function StockBoard({
                   <td className="mono">{r.lot}</td>
                   <td className="mono">{r.serial}</td>
                   <td className={`mono ${r.expiry && r.expiry < t ? "st-expired" : r.expiry && r.expiry <= soon ? "st-soon" : ""}`}>{fmtExp(r.expiry)}</td>
-                  <td className="num">{fmtQty(r.qty)}</td>
+                  <td className="num">
+                    {fmtQty(r.qty)}
+                    {splitPos(r.position).length > 1 && <div className="st-sub">σύνολο {splitPos(r.position).length} θέσεων</div>}
+                  </td>
                   <td>
                     <Link
                       className="st-label"

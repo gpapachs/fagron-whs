@@ -1,7 +1,7 @@
 {
   "name": "fagron-whs",
   "private": true,
-  "version": "1.13.0",
+  "version": "1.13.1",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

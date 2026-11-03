@@ -676,7 +676,7 @@ export function stockWorkbook(XLSX: XLSXLib, rows: StockRow[], meta: StockExport
     sheet(
       XLSX,
       rows.map((r) => ({
-        "Θέση": r.position,
+        "Θέση": r.position.split(/\s*,\s*/).join("\n"),
         "Περιοχή": r.area,
         "Κωδικός": r.item,
         "Περιγραφή": r.description,
@@ -748,7 +748,7 @@ export function stockPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFon
     ...baseTable,
     startY: y,
     head: [["Θέση", "Περιοχή", "Κωδικός", "Περιγραφή", "Παρτίδα", "Serial", "Λήξη", "Ποσότητα"]],
-    body: rows.map((r) => [r.position, r.area, r.item, r.description, r.lot, r.serial, exp(r.expiry), q(r.qty)]),
+    body: rows.map((r) => [r.position.split(/\s*,\s*/).join("\n"), r.area, r.item, r.description, r.lot, r.serial, exp(r.expiry), q(r.qty)]),
     styles: { ...baseTable.styles, fontSize: 7.8, cellPadding: 1.3 },
     columnStyles: {
       0: { cellWidth: 24, fontStyle: "bold" },
