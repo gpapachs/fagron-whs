@@ -10,7 +10,7 @@ export default function LoginPage() {
           <h1>Σύνδεση</h1>
           <LoginForm />
           <p className="login-version" title={versionTitle}>
-            Fagron WHS {versionLabel}
+            WHS {versionLabel}
           </p>
         </div>
       </div>
