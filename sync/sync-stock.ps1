@@ -606,7 +606,7 @@ function Run-Live {
   try { $lastOrd = Sb-Request 'POST' '/rest/v1/rpc/wms_orders_last_id' @{} } catch {}
   if (-not $lastOrd) { $lastOrd = [int64](Invoke-Sql "select max(ID) as m from dbo.ms_Invoicem").Rows[0].m }
   $lastOrd = [int64]$lastOrd
-  $oq = Orders-Query 'm.ID > @lastOrd'
+  $oqs = @((Orders-Query 'm.ID > @lastOrd' 'SALEXPORTCL'), (Orders-Query 'm.ID > @lastOrd' 'SALEXPORTLS'))
   Log ("Live: ξεκίνησε (κάθε {0} δευτ., από κίνηση {1})" -f $secs, $lastId)
   while ($true) {
     try {
@@ -635,9 +635,9 @@ function Run-Live {
       }
     } catch { Log ("Live: " + $_) }
     try {
-      $t = Invoke-Sql $oq @{ lastOrd = $lastOrd }
-      if ($t.Rows.Count) {
-        $orows = Convert-Orders $t
+      $orows = New-Object Collections.ArrayList
+      foreach ($oq in $oqs) { foreach ($x in (Convert-Orders (Invoke-Sql $oq @{ lastOrd = $lastOrd }))) { [void]$orows.Add($x) } }
+      if ($orows.Count) {
         Upload-Orders $orows
         $lastOrd = [int64](($orows | ForEach-Object { [int64]$_.order_id } | Measure-Object -Maximum).Maximum)
         [void](Sb-Request 'POST' '/rest/v1/rpc/wms_signal' @{ p_key = 'orders_sync'; p_n = $orows.Count })
@@ -716,7 +716,9 @@ order by c.TABLE_NAME, c.ORDINAL_POSITION
 # ------------------------------------------------------------------ παραγγελίες (Orders)
 # Λίστες ελέγχου πωλήσεων (ms_InvType.Code = SALEXPORTCL) -> wms_orders, μία γραμμή
 # ανά ms_Invoiced. Η κατάσταση Collected της εφαρμογής ΔΕΝ πειράζεται ποτέ.
-function Orders-Query([string]$where) {
+function Orders-Query([string]$where, [string]$code = 'SALEXPORTCL') {
+  $code = $code -replace '[^A-Za-z]', ''
+
   return @"
 select cast(d.ID as varchar(30)) as id, cast(m.ID as varchar(30)) as order_id, cast(m.Num as varchar(30)) as list_no,
        t.Code as doc_type, m.ErpDocCode as doc_no, m.ErpKey as erp_code,
@@ -725,9 +727,10 @@ select cast(d.ID as varchar(30)) as id, cast(m.ID as varchar(30)) as order_id, c
        pf.code as from_pos, pt.code as to_pos,
        case when m.isChecked = 1 then 'checked' when m.isCompleted = 1 then 'completed' else '' end as wms_status,
        d.LineOrder as line_no,
-       coalesce(nullif(ltrim(rtrim(m.zprocessedby)), ''), us.Descr) as picker
+       coalesce(nullif(ltrim(rtrim(m.zprocessedby)), ''), us.Descr) as picker,
+       cast(isnull(m.isCompleted, 0) as int) as is_completed, cast(isnull(m.isStrictOrderCollection, 0) as int) as is_strict
 from dbo.ms_Invoicem m
-join dbo.ms_InvType t on t.ID = m.InvTypeId and t.Code = 'SALEXPORTCL'
+join dbo.ms_InvType t on t.ID = m.InvTypeId and t.Code = '$code'
 join dbo.ms_Invoiced d on d.InvoicemId = m.ID
 left join dbo.ms_Item i on i.ID = d.ItemId
 left join dbo.ms_Person pe on pe.ID = m.PersonId
@@ -749,6 +752,7 @@ function Convert-Orders($t) {
       item = (To-Str $r['item']).ToUpperInvariant(); lot = To-Str $r['lot']; sn = To-Str $r['sn']
       qty = To-Num $r['qty']; init_qty = To-Num $r['init_qty']; from_pos = To-Str $r['from_pos']; to_pos = To-Str $r['to_pos']
       wms_status = To-Str $r['wms_status']; line_no = To-Num $r['line_no']; picker = To-Str $r['picker']
+      is_completed = ((To-Num $r['is_completed']) -eq 1); is_strict = ((To-Num $r['is_strict']) -eq 1)
     })
   }
   return ,$rows
@@ -761,20 +765,35 @@ function Upload-Orders($rows) {
   }
 }
 
-function Sync-Orders {
+function Sync-Orders([string]$code = 'SALEXPORTCL') {
   $last = $null
-  try { $last = Sb-Request 'POST' '/rest/v1/rpc/wms_orders_last' @{} } catch { Log ("Orders: " + $_); return }
+  try { $last = Sb-Request 'POST' '/rest/v1/rpc/wms_orders_last' @{ p_doc_type = $code } } catch { Log ("Orders $($code): " + $_); return }
   $days = 60; $o = Opt 'ORDERS_DAYS'; if ($o -match '^\d+$') { $days = [int]$o }
   # ξαναδιαβάζει τις τελευταίες 3 ημέρες (αλλαγές σε λίστες που ήδη υπάρχουν)
   $since = if ($last) { ([DateTime]::Parse([string]$last, $Inv)).ToLocalTime().Date.AddDays(-3) } else { (Get-Date).Date.AddDays(-$days) }
   # μία φορά: ξαναδιαβάζει όλο το διάστημα για να συμπληρωθεί ο χρήστης συλλογής
   $mark = Join-Path $Here 'orders-picker.done'
-  if (-not (Test-Path $mark)) { $since = (Get-Date).Date.AddDays(-$days) }
-  try { $t = Invoke-Sql (Orders-Query 'm.RecDate >= cast(@since as date)') @{ since = $since } } catch { Log ("Orders: το query απέτυχε (" + $_.Exception.Message + ")"); return }
+  if ($code -eq 'SALEXPORTCL' -and -not (Test-Path $mark)) { $since = (Get-Date).Date.AddDays(-$days) }
+  # λίστες πωλήσεων: και όλες οι ανοιχτές του τελευταίου έτους (μπορεί να είναι παλιές)
+  $where = if ($code -eq 'SALEXPORTLS') { "(m.RecDate >= cast(@since as date) or (isnull(m.isCompleted, 0) = 0 and m.RecDate >= dateadd(day, -365, getdate())))" } else { 'm.RecDate >= cast(@since as date)' }
+  try { $t = Invoke-Sql (Orders-Query $where $code) @{ since = $since } } catch { Log ("Orders $($code): το query απέτυχε (" + $_.Exception.Message + ")"); return }
   $rows = Convert-Orders $t
-  try { Upload-Orders $rows } catch { Log ("Orders: ανέβασμα απέτυχε (" + $_ + ")"); return }
-  Log ("Orders: {0} γραμμές από {1:dd/MM/yyyy} και μετά." -f $rows.Count, $since)
-  if (-not (Test-Path $mark)) { [IO.File]::WriteAllText($mark, (Get-Date).ToString('o')) }
+  # ανοιχτές στην εφαρμογή που δεν ήρθαν παραπάνω: ξαναδιαβάζονται (π.χ. ολοκληρώθηκαν στο WMS)
+  if ($code -eq 'SALEXPORTLS') {
+    try {
+      $open = @(Sb-Request 'POST' '/rest/v1/rpc/wms_open_lists' @{ p_doc_type = $code } | ForEach-Object { [string]$_ } | Where-Object { $_ -match '^\d+$' })
+      $seen = @{}; foreach ($r in $rows) { $seen[$r.order_id] = $true }
+      $miss = @($open | Where-Object { -not $seen.ContainsKey($_) })
+      for ($i = 0; $i -lt $miss.Count; $i += 500) {
+        $ids = ($miss[$i..([math]::Min($miss.Count, $i + 500) - 1)]) -join ','
+        $t2 = Invoke-Sql (Orders-Query "m.ID in ($ids)" $code)
+        foreach ($x in (Convert-Orders $t2)) { [void]$rows.Add($x) }
+      }
+    } catch { Log ("Orders $($code): ανοιχτές λίστες (" + $_ + ")") }
+  }
+  try { Upload-Orders $rows } catch { Log ("Orders $($code): ανέβασμα απέτυχε (" + $_ + ")"); return }
+  Log ("Orders {0}: {1} γραμμές από {2:dd/MM/yyyy} και μετά." -f $code, $rows.Count, $since)
+  if ($code -eq 'SALEXPORTCL' -and -not (Test-Path $mark)) { [IO.File]::WriteAllText($mark, (Get-Date).ToString('o')) }
   if ($rows.Count) { try { [void](Sb-Request 'POST' '/rest/v1/rpc/wms_signal' @{ p_key = 'orders_sync'; p_n = $rows.Count }) } catch {} }
 }
 
@@ -855,6 +874,6 @@ if ($general.stock.Count -gt 0) {
 }
 
 Sync-Moves
-Sync-Orders
+foreach ($oc in 'SALEXPORTCL', 'SALEXPORTLS') { try { Sync-Orders $oc } catch { Log ("Orders $($oc): " + $_) } }
 
 if (-not (Test-Path (Join-Path $Here 'wms-orders.txt'))) { try { Discover-Orders } catch { Log ("Παραγγελίες (εύρεση): " + $_) } }

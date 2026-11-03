@@ -74,7 +74,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
       /* τίποτα */
     }
     try {
-      let q = createClient().from("wms_orders_v").select(COLS, { count: "exact" });
+      let q = createClient().from("wms_orders_v").select(COLS, { count: "exact" }).eq("doc_type", "SALEXPORTCL");
       if (f.customer.trim()) q = q.ilike("customer", `%${esc(f.customer)}%`);
       if (f.item.trim()) q = q.ilike("item", `${esc(f.item)}%`);
       if (f.lot.trim()) q = q.ilike("lot", `%${esc(f.lot)}%`);
