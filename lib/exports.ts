@@ -754,9 +754,9 @@ export function stockPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFon
       0: { cellWidth: 24, fontStyle: "bold" },
       1: { cellWidth: 30 },
       2: { cellWidth: 20 },
-      3: { cellWidth: "auto" },
-      4: { cellWidth: 24 },
-      5: { cellWidth: 22 },
+      3: { cellWidth: "auto" }, // ~95mm (πριν ~116)
+      4: { cellWidth: 34, overflow: "linebreak" },
+      5: { cellWidth: 32, overflow: "linebreak" },
       6: { cellWidth: 15 },
       7: { cellWidth: 18, halign: "right" },
     },
