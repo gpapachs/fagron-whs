@@ -8,6 +8,7 @@ import { loadPdfFonts } from "@/lib/pdfFonts";
 import { useWmsLive } from "@/lib/live";
 import type { Recipe, StockIndex } from "@/lib/repack";
 import { loadReservations, loadSalesContext, SALES_COLS } from "@/lib/salesData";
+import { loadPlanOrders, type PlanOrder } from "@/lib/planOrders";
 import { evaluateOrders, type OrderColor, type OrderEval, type Reservations } from "@/lib/sales";
 import type { OrderRow } from "@/lib/exports";
 
@@ -32,6 +33,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
   const [idx, setIdx] = useState<StockIndex>(new Map());
   const [recipes, setRecipes] = useState<Map<string, Recipe[]>>(new Map());
   const [reservations, setReservations] = useState<Reservations>(new Map());
+  const [planOrders, setPlanOrders] = useState<PlanOrder[]>([]);
   const [total, setTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,7 +92,8 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
       if (err) throw new Error(err.message);
       const list = ((data ?? []) as OrderRow[]).map((r) => ({ ...r, qty: r.qty == null ? null : Number(r.qty), init_qty: r.init_qty == null ? null : Number(r.init_qty) }));
       // εκτελεσμένες γραμμές (ποσότητα 0) δεν φορτώνονται καν
-      const [{ idx: newIdx, recipes: recMap }, res] = await Promise.all([loadSalesContext(list), loadReservations()]);
+      const [{ idx: newIdx, recipes: recMap }, res, po] = await Promise.all([loadSalesContext(list), loadReservations(), loadPlanOrders().catch(() => [] as PlanOrder[])]);
+      setPlanOrders(po);
       setReservations(res);
       setIdx(newIdx);
       setRecipes(recMap);
@@ -308,6 +311,11 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
                         {o.head.customer}
                         {o.head.is_abroad && <span className="sl-tag abroad">Εξωτερικό</span>}
                         {o.head.customer_city && <div className="dim">{o.head.customer_city}</div>}
+                        {o.head.comments && (
+                          <div className="sl-comments" title={o.head.comments}>
+                            {o.head.comments}
+                          </div>
+                        )}
                       </td>
                       <td className="mono">
                         {o.head.doc_no}
@@ -331,6 +339,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
                           </span>
                         )}
                         {o.needsRepack && <span className="sl-tag blue">Ανασυσκευασία</span>}
+                        {planOrders.some((p) => p.list_no === o.key) && <span className="sl-tag done">Στο πλάνο</span>}
                       </td>
                       <td onClick={(e) => e.stopPropagation()}>
                         <button type="button" className="st-link or-print" onClick={() => print([o], o.key)} disabled={!!busy}>

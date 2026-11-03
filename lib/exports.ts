@@ -899,6 +899,7 @@ export type OrderRow = {
   customer_zip?: string;
   customer_vat?: string;
   is_abroad?: boolean;
+  comments?: string; // σχόλια παραγγελίας (WMS)
 };
 
 /** ομάδες ανά αριθμό λίστας (σειρά εμφάνισης) */
@@ -991,13 +992,15 @@ export function ordersPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFo
       ["Κωδικός ERP", f.erp_code || "—"],
       ["Ημερομηνία", f.order_date ? when(new Date(f.order_date)) : "—"],
       ["Συλλογή από", [...new Set(g.lines.map((l) => l.picker).filter(Boolean))].join(", ") || "—"],
+      ...(f.comments ? ([["Σχόλια", f.comments]] as [string, string][]) : []),
     ];
     for (const [k, v] of info) {
       doc.setFont(FONT, "bold");
       doc.text(`${k}:`, 14, y);
       doc.setFont(FONT, "normal");
-      doc.text(v, 42, y, { maxWidth: W - 56 });
-      y += 5.2;
+      const vl = doc.splitTextToSize(v, W - 56) as string[];
+      doc.text(vl.slice(0, 4), 42, y);
+      y += 5.2 + (Math.min(vl.length, 4) - 1) * 4.2;
     }
     doc.setDrawColor(...LINE);
     doc.line(14, y, W - 14, y);
@@ -1085,13 +1088,15 @@ export function salesListPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: Pd
       ["Κωδικός ERP", h.erp_code || "—"],
       ["Ημερομηνία", h.order_date ? when(new Date(h.order_date)) : "—"],
       ["Συλλογή", o.strict ? "Αυστηρή" : "Μερική"],
+      ...(h.comments ? ([["Σχόλια", h.comments]] as [string, string][]) : []),
     ];
     for (const [k, v] of info) {
       doc.setFont(FONT, "bold");
       doc.text(`${k}:`, 14, y);
       doc.setFont(FONT, "normal");
-      doc.text(v, 42, y, { maxWidth: W - 56 });
-      y += 5;
+      const vl = doc.splitTextToSize(v, W - 56) as string[];
+      doc.text(vl.slice(0, 4), 42, y);
+      y += 5 + (Math.min(vl.length, 4) - 1) * 4.2;
     }
     doc.setDrawColor(...LINE);
     doc.line(14, y, W - 14, y);

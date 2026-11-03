@@ -9,6 +9,8 @@ import { evaluateOrders, reservedByOthers, type OrderColor, type Reservations } 
 import { loadReservations, loadSalesContext, normOrder, SALES_COLS } from "@/lib/salesData";
 import type { Recipe, StockIndex } from "@/lib/repack";
 import type { OrderRow } from "@/lib/exports";
+import { addPlanOrder, closePlanOrder, loadPlanOrders, type PlanOrder } from "@/lib/planOrders";
+import type { LineEval } from "@/lib/sales";
 
 const fmtDt = (s: string | null) => (s ? new Date(s).toLocaleString("el-GR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "");
 const fmtQ = (n: number) => n.toLocaleString("el-GR", { maximumFractionDigits: 3 });
@@ -26,6 +28,9 @@ export default function SalesView({ userEmail }: { userEmail: string | null; rol
   const [busy, setBusy] = useState(false);
   const [repackCounts, setRepackCounts] = useState(true);
   const [reservations, setReservations] = useState<Reservations>(new Map());
+  const [planOrders, setPlanOrders] = useState<PlanOrder[]>([]);
+  const [planBusy, setPlanBusy] = useState<string | null>(null);
+  const reloadPlan = () => loadPlanOrders().then(setPlanOrders).catch(() => undefined);
 
   async function load(l: string) {
     setError(null);
@@ -39,7 +44,7 @@ export default function SalesView({ userEmail }: { userEmail: string | null; rol
         .limit(2000);
       if (err) throw new Error(err.message);
       const r = ((data ?? []) as OrderRow[]).map(normOrder);
-      const [ctx, res] = await Promise.all([loadSalesContext(r), loadReservations()]);
+      const [ctx, res] = await Promise.all([loadSalesContext(r), loadReservations(), reloadPlan()]);
       setReservations(res);
       setIdx(ctx.idx);
       setRecipes(ctx.recipes);
@@ -60,6 +65,46 @@ export default function SalesView({ userEmail }: { userEmail: string | null; rol
   });
 
   const o = useMemo(() => (rows && rows.length ? evaluateOrders(rows, idx, recipes, { repackCounts, reservations })[0] ?? null : null), [rows, idx, recipes, repackCounts, reservations]);
+
+  // ---- σύνδεση με το πλάνο ανασυσκευασίας
+  const planFor = (lineId: string) => planOrders.filter((p) => p.order_line_id === lineId);
+  async function addToPlan(l: LineEval) {
+    if (!l.repack || !o) return;
+    setPlanBusy(l.line.id);
+    try {
+      await addPlanOrder({
+        recipe_id: l.repack.recipe.id,
+        product_code: l.line.item,
+        qty: Math.max(1, Math.ceil(l.repack.units)),
+        list_no: o.key,
+        order_line_id: l.line.id,
+        customer: o.head.customer,
+        created_by: userEmail ?? "",
+      });
+      await reloadPlan();
+    } catch (e) {
+      setError(`Η προσθήκη στο πλάνο απέτυχε: ${(e as Error).message}`);
+    } finally {
+      setPlanBusy(null);
+    }
+  }
+  async function removeFromPlan(id: string) {
+    setPlanBusy(id);
+    try {
+      await closePlanOrder(id);
+      await reloadPlan();
+    } catch (e) {
+      setError(`Η αφαίρεση απέτυχε: ${(e as Error).message}`);
+    } finally {
+      setPlanBusy(null);
+    }
+  }
+  async function addAllToPlan() {
+    if (!o) return;
+    for (const l of o.lines) if (l.repack && !planFor(l.line.id).length) await addToPlan(l);
+  }
+  const repackLines = o?.lines.filter((l) => l.repack) ?? [];
+  const notPlanned = repackLines.filter((l) => !planFor(l.line.id).length);
 
   async function print() {
     if (!o) return;
@@ -107,6 +152,7 @@ export default function SalesView({ userEmail }: { userEmail: string | null; rol
                 </>
               )}
             </p>
+            {h?.comments && <p className="sv-comments">Σχόλια: {h.comments}</p>}
           </div>
           <div className="st-actions">
             <label className="st-check">
@@ -116,6 +162,11 @@ export default function SalesView({ userEmail }: { userEmail: string | null; rol
             <button type="button" className="btn ghost" onClick={() => list && load(list)}>
               Ανανέωση
             </button>
+            {notPlanned.length > 0 && (
+              <button type="button" className="btn sv-plan" onClick={addAllToPlan} disabled={!!planBusy}>
+                Όλες οι ανασυσκευασίες στο πλάνο ({notPlanned.length})
+              </button>
+            )}
             <button type="button" className="btn primary" onClick={print} disabled={!o || busy}>
               {busy ? "PDF…" : "Εκτύπωση λίστας"}
             </button>
@@ -184,6 +235,21 @@ export default function SalesView({ userEmail }: { userEmail: string | null; rol
                   <div className="sv-repack">
                     <div className="sv-repack-head">
                       Ανασυσκευασία ×{fmtQ(l.repack.units)} (λείπουν {fmtQ(l.need - l.covered)} · βγαίνουν έως {fmtQ(l.repack.max)}) — {l.repack.recipe.id}
+                      {planFor(l.line.id).length ? (
+                        planFor(l.line.id).map((p) => (
+                          <span key={p.id} className="sv-inplan">
+                            ✓ Στο πλάνο ×{fmtQ(p.qty)}
+                            <span className="dim"> · {p.created_by || "—"}</span>
+                            <button type="button" className="st-link" onClick={() => removeFromPlan(p.id)} disabled={planBusy === p.id}>
+                              Αφαίρεση
+                            </button>
+                          </span>
+                        ))
+                      ) : (
+                        <button type="button" className="btn sm sv-plan" onClick={() => addToPlan(l)} disabled={planBusy === l.line.id}>
+                          {planBusy === l.line.id ? "…" : "Πρόσθεση στο πλάνο ανασυσκευασίας"}
+                        </button>
+                      )}
                     </div>
                     <table className="st-table sv-stock">
                       <thead>

@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { closePlanOrder, loadPlanOrders, planOrderTotals, type PlanOrder } from "@/lib/planOrders";
 import AppBar from "@/components/AppBar";
 import type { ExportMeta, PdfFonts } from "@/lib/exports";
 import { estimateTotal, fmtDuration, ratesByRecipe, type Job, type Rate } from "@/lib/jobs";
@@ -156,6 +157,39 @@ export default function RepackBoard({
 
   const rates = useMemo(() => ratesByRecipe(jobs), [jobs]);
 
+  // ---------------------------------------------------------------- από παραγγελίες (κοινό, live)
+  const [planOrders, setPlanOrders] = useState<PlanOrder[]>([]);
+  useEffect(() => {
+    loadPlanOrders().then(setPlanOrders).catch(() => undefined);
+    const supabase = createClient();
+    const channel = supabase
+      .channel("repack_plan_orders")
+      .on("postgres_changes", { event: "*", schema: "public", table: "repack_plan_orders" }, () => {
+        loadPlanOrders().then(setPlanOrders).catch(() => undefined);
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+  const orderTotals = useMemo(() => planOrderTotals(planOrders), [planOrders]);
+  const ordersByRecipe = useMemo(() => {
+    const m = new Map<string, PlanOrder[]>();
+    for (const p of planOrders) m.set(p.recipe_id, [...(m.get(p.recipe_id) ?? []), p]);
+    return m;
+  }, [planOrders]);
+  // πλάνο = δικό σου (αυτός ο browser) + όσα ζητήθηκαν από παραγγελίες (όλοι)
+  const effectivePlanned = useMemo(() => {
+    const m: Record<string, number> = { ...planned };
+    for (const [id, q] of Object.entries(orderTotals)) m[id] = (m[id] ?? 0) + q;
+    return m;
+  }, [planned, orderTotals]);
+  const customersOf = (recipeId: string) =>
+    [...new Set((ordersByRecipe.get(recipeId) ?? []).map((p) => `${p.customer}${p.list_no ? ` (λ. ${p.list_no})` : ""}`))].join(", ");
+  // για PDF / Excel: ο πελάτης φαίνεται δίπλα στην περιγραφή
+  const withCustomers = <T extends { recipe: Recipe }>(lines: T[]): T[] =>
+    lines.map((a) => (customersOf(a.recipe.id) ? { ...a, recipe: { ...a.recipe, description: `${a.recipe.description} · για: ${customersOf(a.recipe.id)}` } } : a));
+
   // ---------------------------------------------------------------- ρυθμίσεις ανά τελικό
   useEffect(() => {
     const supabase = createClient();
@@ -253,7 +287,7 @@ export default function RepackBoard({
   const excludedSet = useMemo(() => new Set(excluded), [excluded]);
   const areas = useMemo(() => areasOf(stock), [stock]);
   const stockIdx = useMemo(() => indexStock(stock, excludedSet), [stock, excludedSet]);
-  const plan = useMemo(() => buildPlan(recipes, stock, planned, excludedSet), [recipes, stock, planned, excludedSet]);
+  const plan = useMemo(() => buildPlan(recipes, stock, effectivePlanned, excludedSet), [recipes, stock, effectivePlanned, excludedSet]);
   const recipeById = useMemo(() => new Map(recipes.map((r) => [r.id, r])), [recipes]);
 
   const feasibleCount = plan.analyses.filter((a) => a.max > 0).length;
@@ -296,7 +330,8 @@ export default function RepackBoard({
   function setQty(id: string, value: number) {
     setPlanned((prev) => {
       const next = { ...prev };
-      const n = Math.max(0, Math.floor(Number.isFinite(value) ? value : 0));
+      // η ποσότητα που δίνεις είναι το σύνολο: το κομμάτι των παραγγελιών μένει, αλλάζει το δικό σου
+      const n = Math.max(0, Math.floor(Number.isFinite(value) ? value : 0) - (orderTotals[id] ?? 0));
       if (n) next[id] = n;
       else delete next[id];
       return next;
@@ -493,7 +528,7 @@ export default function RepackBoard({
   const exportPlanExcel = () =>
     run("plan-xlsx", async () => {
       const [XLSX, ex] = await Promise.all([import("xlsx"), import("@/lib/exports")]);
-      const { wb, fileName } = ex.planWorkbook(XLSX, plannedLines, plan.needs, plan.picks, exportMeta());
+      const { wb, fileName } = ex.planWorkbook(XLSX, withCustomers(plannedLines), plan.needs, plan.picks, exportMeta());
       XLSX.writeFile(wb, fileName);
     });
 
@@ -529,8 +564,8 @@ export default function RepackBoard({
         const r = rates.get(a.recipe.id);
         if (r) estimateSec.set(a.recipe.id, r.secPerUnit * a.planned);
       }
-      const { doc, fileName } = ex.picklistPdf(jsPDF, autoTable, fonts, plannedLines, plan.needs, plan.picks, exportMeta(), {
-        byRecipe: picksByRecipe(plannedLines, plan.picks),
+      const { doc, fileName } = ex.picklistPdf(jsPDF, autoTable, fonts, withCustomers(plannedLines), plan.needs, plan.picks, exportMeta(), {
+        byRecipe: picksByRecipe(withCustomers(plannedLines), plan.picks),
         estimateSec: rates.size ? estimateSec : undefined,
         fmtDuration,
       });
@@ -758,11 +793,31 @@ export default function RepackBoard({
                   <>
                     <ul className="rp-planned">
                       {plannedLines.map((a) => (
-                        <li key={a.recipe.id}>
+                        <li key={a.recipe.id} className={ordersByRecipe.has(a.recipe.id) ? "rp-from-orders" : ""}>
                           <span className="mono">{a.recipe.id}</span>
                           <span className="desc">{a.recipe.description}</span>
                           <span className="qty">{fmtQty(a.planned)}</span>
-                          <button type="button" className="rp-remove" onClick={() => setQty(a.recipe.id, 0)} aria-label={`Αφαίρεση ${a.recipe.id} από το πλάνο`} title="Αφαίρεση από το πλάνο">
+                          {(ordersByRecipe.get(a.recipe.id) ?? []).map((p) => (
+                            <span key={p.id} className="rp-order">
+                              ×{fmtQty(p.qty)} για <b>{p.customer || "—"}</b>
+                              {p.list_no && <span className="dim"> · λίστα {p.list_no}</span>}
+                              <button
+                                type="button"
+                                className="rp-link"
+                                onClick={() => closePlanOrder(p.id).then(() => setPlanOrders((x) => x.filter((y) => y.id !== p.id)))}
+                                title="Έγινε / αφαίρεση από το πλάνο (για όλους)"
+                              >
+                                ✓ Έγινε
+                              </button>
+                            </span>
+                          ))}
+                          <button
+                            type="button"
+                            className="rp-remove"
+                            onClick={() => setQty(a.recipe.id, 0)}
+                            aria-label={`Αφαίρεση ${a.recipe.id} από το πλάνο`}
+                            title={ordersByRecipe.has(a.recipe.id) ? "Αφαιρεί μόνο τη δική σου ποσότητα· οι παραγγελίες κλείνουν με «✓ Έγινε»" : "Αφαίρεση από το πλάνο"}
+                          >
                             ×
                           </button>
                         </li>

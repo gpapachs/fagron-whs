@@ -730,6 +730,7 @@ select cast(d.ID as varchar(30)) as id, cast(m.ID as varchar(30)) as order_id, c
        case when m.isChecked = 1 then 'checked' when m.isCompleted = 1 then 'completed' else '' end as wms_status,
        d.LineOrder as line_no,
        coalesce(nullif(ltrim(rtrim(m.zprocessedby)), ''), us.Descr) as picker,
+       ltrim(rtrim(isnull(m.Comments, '') + case when ltrim(rtrim(isnull(m.Comments2, ''))) <> '' then ' · ' + ltrim(rtrim(m.Comments2)) else '' end)) as comments,
        cast(isnull(m.isCompleted, 0) as int) as is_completed, cast(isnull(m.isStrictOrderCollection, 0) as int) as is_strict
 from dbo.ms_Invoicem m
 join dbo.ms_InvType t on t.ID = m.InvTypeId and t.Code = '$code'
@@ -766,7 +767,7 @@ function Convert-Orders($t) {
       wms_status = To-Str $r['wms_status']; line_no = To-Num $r['line_no']; picker = To-Str $r['picker']
       is_completed = ((To-Num $r['is_completed']) -eq 1); is_strict = ((To-Num $r['is_strict']) -eq 1)
       customer_city = To-Str $r['customer_city']; customer_zip = To-Str $r['customer_zip']; customer_vat = To-Str $r['customer_vat']
-      is_abroad = (Test-Abroad (To-Str $r['customer_vat']) (To-Str $r['customer_zip']))
+      is_abroad = (Test-Abroad (To-Str $r['customer_vat']) (To-Str $r['customer_zip'])); comments = To-Str $r['comments']
     })
   }
   return ,$rows
@@ -786,7 +787,7 @@ function Sync-Orders([string]$code = 'SALEXPORTCL') {
   # ξαναδιαβάζει τις τελευταίες 3 ημέρες (αλλαγές σε λίστες που ήδη υπάρχουν)
   $since = if ($last) { ([DateTime]::Parse([string]$last, $Inv)).ToLocalTime().Date.AddDays(-3) } else { (Get-Date).Date.AddDays(-$days) }
   # μία φορά: ξαναδιαβάζει όλο το διάστημα για να συμπληρωθεί ο χρήστης συλλογής
-  $mark = Join-Path $Here "orders-v2-$code.done"
+  $mark = Join-Path $Here "orders-v3-$code.done"
   if (-not (Test-Path $mark)) { $since = (Get-Date).Date.AddDays(-$days) }
   # λίστες πωλήσεων: και όλες οι ανοιχτές του τελευταίου έτους (μπορεί να είναι παλιές)
   $where = if ($code -eq 'SALEXPORTLS') { "(m.RecDate >= cast(@since as date) or (isnull(m.isCompleted, 0) = 0 and m.RecDate >= dateadd(day, -365, getdate())))" } else { 'm.RecDate >= cast(@since as date)' }

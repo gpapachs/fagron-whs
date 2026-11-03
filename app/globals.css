@@ -1165,3 +1165,12 @@ a.sl-open:hover { text-decoration: underline; }
 .sv-popup { padding-top: 14px; }
 .sv-stock tr.sv-other td { opacity: 0.45; }
 .sv-resv { color: #6b3fc4; font-weight: 600; }
+.sl-comments { margin-top: 2px; font-size: 11px; color: #8a5a00; background: #fff6d6; border-radius: 4px; padding: 1px 6px; display: inline-block; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top; }
+.sv-comments { margin: 6px 0 0; font-size: 13px; font-weight: 600; color: #8a5a00; background: #fff6d6; border-radius: 6px; padding: 6px 10px; max-width: none !important; }
+.btn.sv-plan { background: var(--reserved); border-color: var(--reserved); color: #fff; }
+.sv-repack-head .btn.sv-plan { margin-left: 10px; }
+.sv-inplan { margin-left: 10px; display: inline-flex; gap: 6px; align-items: baseline; font-size: 12px; color: var(--free); }
+/* πλάνο: γραμμές από παραγγελίες */
+.rp-planned li.rp-from-orders { flex-wrap: wrap; }
+.rp-order { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; font-size: 12px; color: var(--reserved); padding-left: 2px; }
+.rp-order b { color: var(--ink); font-weight: 700; }

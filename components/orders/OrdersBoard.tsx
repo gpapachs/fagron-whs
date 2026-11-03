@@ -18,7 +18,7 @@ const fmtDt = (s: string | null) => (s ? new Date(s).toLocaleString("el-GR", { d
 const fmtQty = (n: number | null) => (n == null ? "" : n.toLocaleString("el-GR", { maximumFractionDigits: 3 }));
 const esc = (s: string) => s.trim().replace(/[\\%_]/g, (c) => `\\${c}`);
 const COLS =
-  "id, order_id, list_no, doc_type, doc_no, erp_code, order_date, customer, item, description, lot, sn, qty, init_qty, from_pos, to_pos, wms_status, line_no, collected, collected_at, collected_by, picker";
+  "id, order_id, list_no, doc_type, doc_no, erp_code, order_date, customer, item, description, lot, sn, qty, init_qty, from_pos, to_pos, wms_status, line_no, collected, collected_at, collected_by, picker, comments";
 
 export default function OrdersBoard({ userEmail, role }: { userEmail: string | null; role: "admin" | "staff" }) {
   const [f, setF] = useState<F>(EMPTY);
@@ -321,6 +321,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
                           {[h.doc_no && `Παρ. ${h.doc_no}`, h.erp_code && `ERP ${h.erp_code}`, fmtDt(h.order_date), `${g.lines.length} γρ.`].filter(Boolean).join(" · ")}
                         </span>
                         {pickers(g.lines) && <span className="or-picker">Συλλογή: {pickers(g.lines)}</span>}
+                        {h.comments && <div className="sl-comments">Σχόλια: {h.comments}</div>}
                       </td>
                       <td className="or-head-end">
                         <span className={`or-status ${done === g.lines.length ? "on" : done ? "part" : ""}`}>
