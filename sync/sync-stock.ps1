@@ -20,7 +20,7 @@
 
   Ρυθμίσεις: rythmiseis.txt (ή .env) στον ίδιο φάκελο. Ο κωδικός μένει εκεί.
 #>
-param([switch]$Test, [switch]$DryRun, [switch]$Force, [string]$Describe, [string]$Probe, [string]$Find, [switch]$Moves, [switch]$Live)
+param([switch]$Test, [switch]$DryRun, [switch]$Force, [string]$Describe, [string]$Probe, [string]$Find, [switch]$Moves, [switch]$Live, [switch]$Orders)
 
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
@@ -634,12 +634,77 @@ function Run-Live {
   }
 }
 
+# ------------------------------------------------------------------ παραγγελίες (εύρεση)
+# Μία φορά (αν λείπει το wms-orders.txt): στήλες ms_Invoicem / ms_Invoiced, πού
+# υπάρχει η τιμή «salexportcl», δείγμα πρόσφατων παραστατικών. ΜΟΝΟ ανάγνωση.
+function Discover-Orders {
+  $out = New-Object Collections.ArrayList
+  $add = { param($x) [void]$out.Add([string]$x) }
+  $fmt = { param($v) if ($null -eq $v -or $v -is [DBNull]) { return $null }; if ($v -is [DateTime]) { return $v.ToString('yyyy-MM-dd HH:mm', $Inv) }; if ($v -is [double] -or $v -is [decimal]) { return ([double]$v).ToString($Inv) }; $sv = [string]$v; if ($sv.Length -gt 80) { $sv = $sv.Substring(0, 80) + '…' }; return $sv }
+  $dump = { param($tbl) foreach ($r in $tbl.Rows) { $vals = foreach ($c in $tbl.Columns) { $sv = & $fmt $r[$c.ColumnName]; if ($null -ne $sv -and $sv -ne '' -and $sv -ne '0' -and $sv -ne 'False') { "$($c.ColumnName)=$sv" } }; & $add ('   · ' + ($vals -join ' | ')) } }
+  $cols = Invoke-Sql @"
+select c.TABLE_NAME t, c.COLUMN_NAME c, c.DATA_TYPE dt,
+       (select sum(p.rows) from sys.partitions p where p.object_id = object_id('dbo.' + quotename(c.TABLE_NAME)) and p.index_id in (0, 1)) n
+from INFORMATION_SCHEMA.COLUMNS c join INFORMATION_SCHEMA.TABLES t on t.TABLE_NAME = c.TABLE_NAME and t.TABLE_SCHEMA = c.TABLE_SCHEMA and t.TABLE_TYPE = 'BASE TABLE'
+where c.TABLE_SCHEMA = 'dbo'
+order by c.TABLE_NAME, c.ORDINAL_POSITION
+"@
+  $tabs = [ordered]@{}
+  foreach ($r in $cols.Rows) {
+    $t = [string]$r.t
+    if (-not $tabs.Contains($t)) { $tabs[$t] = @{ n = $(if ($r.n -is [DBNull]) { 0 } else { [int64]$r.n }); cols = New-Object Collections.ArrayList } }
+    [void]$tabs[$t].cols.Add(@{ c = [string]$r.c; dt = [string]$r.dt })
+  }
+  foreach ($t in 'ms_Invoicem', 'ms_Invoiced', 'ms_Person') {
+    if ($tabs.Contains($t)) { & $add ''; & $add "== $t ($($tabs[$t].n) γραμμές)"; & $add ('   στήλες: ' + (($tabs[$t].cols | ForEach-Object { "$($_.c) [$($_.dt)]" }) -join ', ')) }
+  }
+  # πού είναι το «salexportcl»: μικροί πίνακες, όλες οι στήλες κειμένου
+  & $add ''; & $add '== αναζήτηση «salexportcl»'
+  $found = 0
+  foreach ($t in $tabs.Keys) {
+    $e = $tabs[$t]
+    if ($e.n -le 0 -or $e.n -gt 20000) { continue }
+    $tc = @($e.cols | Where-Object { $_.dt -match 'char|text' } | ForEach-Object { $_.c })
+    if (-not $tc.Count) { continue }
+    $where = ($tc | ForEach-Object { "cast([$_] as nvarchar(4000)) like N'%salexportcl%'" }) -join ' or '
+    try { $rows = Invoke-Sql "select top 10 * from dbo.[$t] where $where" } catch { continue }
+    if ($rows.Rows.Count) { $found++; & $add ("-- dbo.$t ($($e.n) γραμμές): " + (($e.cols | ForEach-Object { $_.c }) -join ', ')); & $dump $rows }
+  }
+  if (-not $found) { & $add '   (δεν βρέθηκε σε μικρούς πίνακες)' }
+  # πίνακες τύπων παραστατικών
+  foreach ($t in @($tabs.Keys | Where-Object { $_ -match 'InvType|InvoiceType|DocType|Spec' -and $tabs[$_].n -gt 0 -and $tabs[$_].n -lt 2000 })) {
+    try { $rows = Invoke-Sql "select top 60 * from dbo.[$t]" } catch { continue }
+    & $add ''; & $add "== dbo.$t ($($tabs[$t].n) γραμμές)"; & $dump $rows
+  }
+  # δείγμα: 3 πρόσφατα παραστατικά + γραμμές τους
+  if ($tabs.Contains('ms_Invoicem')) {
+    & $add ''; & $add '== πρόσφατα ms_Invoicem'
+    $m = Invoke-Sql "select top 4 * from dbo.ms_Invoicem order by ID desc"
+    & $dump $m
+    if ($tabs.Contains('ms_Invoiced') -and $m.Rows.Count) {
+      & $add ''; & $add '== γραμμές τους (ms_Invoiced)'
+      $ids = ($m.Rows | ForEach-Object { [int64]$_['ID'] }) -join ','
+      & $dump (Invoke-Sql "select top 12 * from dbo.ms_Invoiced where InvoicemId in ($ids)")
+    }
+    foreach ($k in 'InvTypeId') {
+      if (@($tabs['ms_Invoicem'].cols | Where-Object { $_.c -eq $k }).Count) {
+        & $add ''; & $add "== ms_Invoicem ανά $k (τελευταίες 30 ημέρες)"
+        & $dump (Invoke-Sql "select $k, count(*) as n, max(ID) as last_id from dbo.ms_Invoicem where RecDate >= dateadd(day, -30, getdate()) group by $k order by n desc")
+      }
+    }
+  }
+  $report = Join-Path $Here 'wms-orders.txt'
+  [IO.File]::WriteAllLines($report, [string[]]$out, (New-Object Text.UTF8Encoding $true))
+  Log "Παραγγελίες: η εύρεση γράφτηκε στο wms-orders.txt"
+}
+
 # ------------------------------------------------------------------ main
 if ($Test) { Discover; exit 0 }
 if ($Describe) { Describe-Tables $Describe; exit 0 }
 if ($Probe) { Probe-Item $Probe $Find; exit 0 }
 if ($Moves) { Discover-Moves; exit 0 }
 if ($Live) { Run-Live; exit 0 }
+if ($Orders) { Discover-Orders; exit 0 }
 
 $queryFile = Join-Path $Here 'stock-query.sql'
 if (-not (Test-Path $queryFile)) { Fail 'Δεν βρέθηκε το stock-query.sql.' }
@@ -710,3 +775,5 @@ if ($general.stock.Count -gt 0) {
 }
 
 Sync-Moves
+
+if (-not (Test-Path (Join-Path $Here 'wms-orders.txt'))) { try { Discover-Orders } catch { Log ("Παραγγελίες (εύρεση): " + $_) } }
