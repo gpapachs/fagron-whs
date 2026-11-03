@@ -9,6 +9,7 @@ import { useWmsLive } from "@/lib/live";
 import type { Recipe, StockIndex } from "@/lib/repack";
 import { loadReservations, loadSalesContext, SALES_COLS } from "@/lib/salesData";
 import { loadPlanOrders, type PlanOrder } from "@/lib/planOrders";
+import SalesView from "@/components/sales/SalesView";
 import { evaluateOrders, type OrderColor, type OrderEval, type Reservations } from "@/lib/sales";
 import type { OrderRow } from "@/lib/exports";
 
@@ -44,6 +45,17 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
   const [modeF, setModeF] = useState<"all" | "strict" | "partial">("all");
   const [collectingOnly, setCollectingOnly] = useState(false);
   const [showExecuted, setShowExecuted] = useState(false);
+  const [viewing, setViewing] = useState<string | null>(null); // λίστα ανοιχτή σε παράθυρο διαλόγου
+  useEffect(() => {
+    if (!viewing) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setViewing(null);
+    window.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+    };
+  }, [viewing]);
   const [repackCounts, setRepackCounts] = useState(true);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [sel, setSel] = useState<Set<string>>(new Set());
@@ -170,15 +182,9 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
     search(undefined, false, nf);
   }
   const viewUrl = (key: string) => `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/sales/view/?list=${encodeURIComponent(key)}`;
-  // αναδυόμενο παράθυρο (όχι καρτέλα): με διαστάσεις ο browser ανοίγει popup
-  const openView = (key: string) => {
-    const w = Math.min(1200, window.screen.availWidth - 80);
-    const h = Math.min(900, window.screen.availHeight - 80);
-    const left = Math.max(0, Math.round((window.screen.availWidth - w) / 2));
-    const top = Math.max(0, Math.round((window.screen.availHeight - h) / 2));
-    const win = window.open(viewUrl(key), `lista-${key}`, `popup=yes,width=${w},height=${h},left=${left},top=${top},resizable=yes,scrollbars=yes`);
-    win?.focus();
-  };
+  // άνοιγμα μέσα στη σελίδα (παράθυρο διαλόγου), όχι νέο παράθυρο / καρτέλα
+  const openView = (key: string) => setViewing(key);
+
 
   const field = (k: keyof F, label: string, ph = "", type = "text") => (
     <label className="field">
@@ -309,7 +315,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
                   search(undefined, false, f, e.target.checked);
                 }}
               />
-              Εμφάνιση εκτελεσμένων ειδών
+              Εμφάνιση μηδενικών (εκτελεσμένων) ειδών
             </label>
             <label className="st-check" title="Αν η ανασυσκευασία καλύπτει την έλλειψη, η γραμμή μετρά ως διαθέσιμη για το χρώμα">
               <input type="checkbox" checked={repackCounts} onChange={(e) => setRepackCounts(e.target.checked)} />
@@ -337,7 +343,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
                 const missing = o.lines.filter((l) => l.state === "none" || l.state === "partial").length;
                 return (
                   <tbody key={o.key}>
-                    <tr className={`sl-row ${o.completed ? "done" : o.color}`} onClick={() => openView(o.key)} title="Άνοιγμα σε νέο παράθυρο με τα αποθέματα">
+                    <tr className={`sl-row ${o.completed ? "done" : o.color}`} onClick={() => openView(o.key)} title="Άνοιγμα με τα αποθέματα">
                       <td onClick={(e) => e.stopPropagation()}>
                         <input type="checkbox" checked={sel.has(o.key)} onChange={(e) => toggleSel(o.key, e.target.checked)} aria-label={`Επιλογή λίστας ${o.key}`} />
                       </td>
@@ -461,6 +467,13 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
         )}
         {rows === null && loading && <p className="rp-hint">Φόρτωση παραγγελιών και αποθέματος…</p>}
       </div>
+      {viewing && (
+        <div className="sv-modal" role="dialog" aria-modal="true" aria-label={`Λίστα ${viewing}`} onClick={() => setViewing(null)}>
+          <div className="sv-modal-box" onClick={(e) => e.stopPropagation()}>
+            <SalesView userEmail={userEmail} listNo={viewing} onClose={() => setViewing(null)} />
+          </div>
+        </div>
+      )}
     </>
   );
 }

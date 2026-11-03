@@ -1203,3 +1203,9 @@ a.sl-open:hover { text-decoration: underline; }
 .sl-state.done { background: var(--surface-2); color: var(--ink-dim); }
 .sv-line.done { opacity: 0.55; border-left-color: var(--ink-dim); }
 .rp-labels { margin-left: 6px; font-size: 12px; }
+/* λίστα πώλησης σε παράθυρο διαλόγου μέσα στη σελίδα */
+.sv-modal { position: fixed; inset: 0; z-index: 50; background: rgba(14, 21, 36, 0.45); display: flex; align-items: flex-start; justify-content: center; padding: 3vh 2vw; overflow-y: auto; }
+.sv-modal-box { background: var(--bg); border-radius: var(--r-lg); box-shadow: var(--shadow-lg); width: min(1200px, 100%); max-height: 94vh; overflow-y: auto; }
+.sv-modal-box .wrap.sv-embedded { padding: 14px 16px 18px; max-width: none; }
+.sv-close { margin-left: 4px; }
+@media (max-width: 720px) { .sv-modal { padding: 0; } .sv-modal-box { border-radius: 0; max-height: 100vh; min-height: 100vh; } }

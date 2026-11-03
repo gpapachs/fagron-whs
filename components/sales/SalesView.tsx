@@ -19,7 +19,17 @@ const COLOR_LABEL: Record<OrderColor, string> = { green: "Όλα διαθέσι�
 const STATE_LABEL = { ok: "Διαθέσιμο", repack: "Ανασυσκευασία", partial: "Μερικό", none: "Δεν υπάρχει", done: "Εκτελεσμένο" } as const;
 
 /** Μία λίστα πώλησης σε δικό της παράθυρο: γραμμές + ΟΛΟ το απόθεμα κάθε είδους. */
-export default function SalesView({ userEmail }: { userEmail: string | null; role?: "admin" | "staff" }) {
+export default function SalesView({
+  userEmail,
+  listNo,
+  onClose,
+}: {
+  userEmail: string | null;
+  role?: "admin" | "staff";
+  /** μέσα στη σελίδα (παράθυρο διαλόγου): η λίστα δίνεται εδώ, όχι στο URL */
+  listNo?: string;
+  onClose?: () => void;
+}) {
   const [list, setList] = useState("");
   const [rows, setRows] = useState<OrderRow[] | null>(null);
   const [idx, setIdx] = useState<StockIndex>(new Map());
@@ -57,17 +67,18 @@ export default function SalesView({ userEmail }: { userEmail: string | null; rol
       setIdx(ctx.idx);
       setRecipes(ctx.recipes);
       setRows(r);
-      document.title = `Λίστα ${l} · ${r[0]?.customer ?? ""}`;
+      if (!listNo) document.title = `Λίστα ${l} · ${r[0]?.customer ?? ""}`;
     } catch (e) {
       setError((e as Error).message);
     }
   }
   useEffect(() => {
-    const l = new URLSearchParams(window.location.search).get("list") ?? "";
+    const l = listNo ?? new URLSearchParams(window.location.search).get("list") ?? "";
     setList(l);
     if (l) load(l);
     else setError("Δεν δόθηκε αριθμός λίστας.");
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listNo]);
   const live = useWmsLive((sig) => {
     if (list && (sig.key === "orders_sync" || sig.key === "stock" || sig.key === "stock_full")) load(list);
   });
@@ -135,7 +146,7 @@ export default function SalesView({ userEmail }: { userEmail: string | null; rol
   const h = o?.head;
   return (
     <>
-      <div className="wrap stock sv-popup">
+      <div className={`wrap stock sv-popup ${onClose ? "sv-embedded" : ""}`}>
         <div className="header">
           <div className="titleblock">
             <h1>
@@ -178,7 +189,7 @@ export default function SalesView({ userEmail }: { userEmail: string | null; rol
                   }
                 }}
               />
-              Εκτελεσμένα είδη
+              Μηδενικά (εκτελεσμένα) είδη
             </label>
             <label className="st-check">
               <input type="checkbox" checked={repackCounts} onChange={(e) => setRepackCounts(e.target.checked)} />
@@ -195,6 +206,11 @@ export default function SalesView({ userEmail }: { userEmail: string | null; rol
             <button type="button" className="btn primary" onClick={print} disabled={!o || busy}>
               {busy ? "PDF…" : "Εκτύπωση λίστας"}
             </button>
+            {onClose && (
+              <button type="button" className="btn ghost sv-close" onClick={onClose} aria-label="Κλείσιμο">
+                ✕ Κλείσιμο
+              </button>
+            )}
           </div>
         </div>
         {o?.collecting && !o.completed && (
