@@ -4,6 +4,7 @@ import FilterFold from "@/components/FilterFold";
 import { useEffect, useMemo, useState } from "react";
 import KpiTiles from "@/components/KpiTiles";
 import { fullDate, relDate } from "@/lib/format";
+import { displayUser } from "@/lib/users";
 import AppBar from "@/components/AppBar";
 import LivePill from "@/components/LivePill";
 import { createClient } from "@/lib/supabase/client";
@@ -369,7 +370,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
                         <td className="num" data-label="Ποσότητα">{fmtQty(r.qty ?? r.init_qty)}</td>
                         <td data-label="Από θέση">{r.from_pos && <span className="rack">{r.from_pos}</span>}</td>
                         <td data-label="Κατάσταση">
-                          <span className={`or-status ${r.collected ? "on" : ""}`} title={r.collected ? `${r.collected_by} · ${fullDate(r.collected_at)}` : ""}>
+                          <span className={`or-status ${r.collected ? "on" : ""}`} title={r.collected ? `${displayUser(r.collected_by)} · ${fullDate(r.collected_at)}` : ""}>
                             {r.collected ? "Collected" : "Non Collected"}
                           </span>
                         </td>

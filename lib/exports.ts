@@ -9,6 +9,9 @@ import type { ComponentNeed, PickLine, ProductSettings, RecipeAnalysis, RecipePi
 import type { Job, JobStats } from "./jobs";
 import type { OrderEval } from "./sales";
 
+// όπως lib/users.ts (χωρίς import σε runtime): «alex@whs.local» → «alex»
+const displayUser = (e: string) => e.replace(/@whs\.local$/i, "");
+
 const q = (n: number) => n.toLocaleString("el-GR", { maximumFractionDigits: 3 });
 const exp = (iso?: string | null) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(2, 4)}` : "");
 /** «Π. 823600 · λ. 22/05/36» */
@@ -326,7 +329,7 @@ const baseTable = {
 
 function metaLines(meta: ExportMeta) {
   const lines = [
-    `Δημιουργήθηκε: ${when(meta.generatedAt)}${meta.userEmail ? ` · ${meta.userEmail}` : ""}`,
+    `Δημιουργήθηκε: ${when(meta.generatedAt)}${meta.userEmail ? ` · ${displayUser(meta.userEmail)}` : ""}`,
     `Απόθεμα: ${meta.stockFile ?? "—"}${meta.stockUploadedAt ? ` (ανέβηκε ${when(new Date(meta.stockUploadedAt))})` : ""}`,
   ];
   if (meta.excludedAreas.length) lines.push(`Χωρίς τις περιοχές: ${meta.excludedAreas.join(", ")}`);
@@ -739,7 +742,7 @@ export function stockPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFon
     doc,
     "Απόθεμα",
     [
-      `Δημιουργήθηκε: ${when(meta.generatedAt)}${meta.userEmail ? ` · ${meta.userEmail}` : ""}${meta.syncedAt ? ` · WMS: ${when(new Date(meta.syncedAt))}` : ""}`,
+      `Δημιουργήθηκε: ${when(meta.generatedAt)}${meta.userEmail ? ` · ${displayUser(meta.userEmail)}` : ""}${meta.syncedAt ? ` · WMS: ${when(new Date(meta.syncedAt))}` : ""}`,
       `Φίλτρα: ${meta.filters.join(" · ") || "χωρίς"}`,
       `${rows.length.toLocaleString("el-GR")} γραμμές · ${items.toLocaleString("el-GR")} κωδικοί · σύνολο ποσότητας ${q(total)}`,
     ],
@@ -834,7 +837,7 @@ export function movesPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFon
     doc,
     "Κινήσεις",
     [
-      `Δημιουργήθηκε: ${when(meta.generatedAt)}${meta.userEmail ? ` · ${meta.userEmail}` : ""}`,
+      `Δημιουργήθηκε: ${when(meta.generatedAt)}${meta.userEmail ? ` · ${displayUser(meta.userEmail)}` : ""}`,
       `Φίλτρα: ${meta.filters.join(" · ") || "χωρίς"}`,
       `${rows.length.toLocaleString("el-GR")} κινήσεις`,
     ],
@@ -935,7 +938,7 @@ export function ordersWorkbook(XLSX: XLSXLib, rows: OrderRow[], meta: StockExpor
         "Από θέση": r.from_pos,
         "Συλλογή (WMS)": r.picker,
         "Κατάσταση": r.collected ? "Collected" : "Non Collected",
-        "Collected από": r.collected_by,
+        "Collected από": displayUser(r.collected_by || ""),
         "Collected στις": r.collected_at ? new Date(r.collected_at) : "",
       })),
       [10, 16, 34, 16, 14, 14, 44, 16, 16, 10, 16, 22, 14, 24, 16]
@@ -977,7 +980,7 @@ export function ordersPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFo
     doc.setFont(FONT, "normal");
     doc.setFontSize(8.5);
     doc.setTextColor(...DIM);
-    doc.text(`Fagron Hellas · Orders · εκτύπωση ${when(meta.generatedAt)}${meta.userEmail ? ` · ${meta.userEmail}` : ""}`, 20, 24.5);
+    doc.text(`Fagron Hellas · Orders · εκτύπωση ${when(meta.generatedAt)}${meta.userEmail ? ` · ${displayUser(meta.userEmail)}` : ""}`, 20, 24.5);
     // κατάσταση πάνω δεξιά
     const allDone = done === g.lines.length;
     doc.setFont(FONT, "bold");
@@ -1095,7 +1098,7 @@ export function salesListPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: Pd
     doc.setFont(FONT, "normal");
     doc.setFontSize(8.5);
     doc.setTextColor(...DIM);
-    doc.text(`Fagron Hellas · Λίστα πωλήσεων · εκτύπωση ${when(meta.generatedAt)}${meta.userEmail ? ` · ${meta.userEmail}` : ""}`, 20, 24.5);
+    doc.text(`Fagron Hellas · Λίστα πωλήσεων · εκτύπωση ${when(meta.generatedAt)}${meta.userEmail ? ` · ${displayUser(meta.userEmail)}` : ""}`, 20, 24.5);
     doc.setFont(FONT, "bold");
     doc.setFontSize(10);
     doc.setTextColor(...INK);

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { toLoginEmail } from "@/lib/users";
 
 export default function LoginForm() {
   const router = useRouter();
@@ -25,10 +26,10 @@ export default function LoginForm() {
     setLoading(true);
     setError(null);
     const supabase = createClient();
-    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+    const { error: signInError } = await supabase.auth.signInWithPassword({ email: toLoginEmail(email), password });
     setLoading(false);
     if (signInError) {
-      setError("Λάθος email ή κωδικός.");
+      setError("Λάθος όνομα χρήστη / email ή κωδικός.");
       return;
     }
     router.replace("/");
@@ -37,11 +38,15 @@ export default function LoginForm() {
   return (
     <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <label className="field">
-        Email
+        Όνομα χρήστη ή email
         <input
-          type="email"
+          type="text"
           required
           autoComplete="username"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          placeholder="π.χ. alex ή name@fagron.gr"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />

@@ -4,10 +4,12 @@ import Link from "next/link";
 import NavTabs from "@/components/NavTabs";
 import LogoutButton from "@/components/auth/LogoutButton";
 import ThemeMenu from "@/components/ThemeMenu";
+import { displayUser } from "@/lib/users";
 import { versionLabel, versionTitle } from "@/lib/version";
 
 export default function AppBar({ email, role }: { email: string | null; role: "admin" | "staff" }) {
-  const initial = (email ?? "?").trim().charAt(0).toUpperCase();
+  const name = displayUser(email);
+  const initial = (name || "?").trim().charAt(0).toUpperCase();
   return (
     <header className="appbar">
       <div className="appbar-inner">
@@ -31,7 +33,7 @@ export default function AppBar({ email, role }: { email: string | null; role: "a
             {initial}
           </span>
           <span className="who">
-            <span className="email">{email}</span>
+            <span className="email">{name}</span>
             <span className="role">{role === "admin" ? "Διαχειριστής" : "Προσωπικό"}</span>
           </span>
           <LogoutButton />
