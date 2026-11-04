@@ -1,5 +1,6 @@
 "use client";
 
+import FilterFold from "@/components/FilterFold";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import AppBar from "@/components/AppBar";
@@ -206,7 +207,8 @@ export default function StockBoard({
           </div>
         </div>
 
-        <section className="st-filters">
+        <FilterFold active={[f.text, f.position, f.area].filter((x) => x.trim()).length + (f.exp !== "all" ? 1 : 0) + (f.serialOnly ? 1 : 0)}>
+<section className="st-filters">
           <label className="field st-grow">
             Αναζήτηση
             <input value={f.text} onChange={(e) => setF({ ...f, text: e.target.value })} placeholder="Κωδικός, περιγραφή, παρτίδα, serial…" autoFocus />
@@ -247,6 +249,7 @@ export default function StockBoard({
             </button>
           )}
         </section>
+        </FilterFold>
 
         <div className="st-summary">
           <span>

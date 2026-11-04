@@ -1,5 +1,6 @@
 "use client";
 
+import FilterFold from "@/components/FilterFold";
 import { useEffect, useState } from "react";
 import AppBar from "@/components/AppBar";
 import { createClient } from "@/lib/supabase/client";
@@ -163,7 +164,8 @@ export default function MovesBoard({ userEmail, role }: { userEmail: string | nu
           </div>
         </div>
 
-        <form className="st-filters mv-filters" onSubmit={search}>
+        <FilterFold active={[f.item, f.lot, f.serial, f.customer, f.fromPos, f.toPos, f.type, f.doc].filter((x) => x.trim()).length}>
+<form className="st-filters mv-filters" onSubmit={search}>
           {field("item", "Κωδικός", "π.χ. 71-01-359 ή 71-01")}
           {field("lot", "Batch", "παρτίδα")}
           {field("serial", "Serial")}
@@ -191,6 +193,7 @@ export default function MovesBoard({ userEmail, role }: { userEmail: string | nu
             </button>
           </div>
         </form>
+        </FilterFold>
 
         {error && <p className="rp-notice error">{error}</p>}
         {rows !== null && (

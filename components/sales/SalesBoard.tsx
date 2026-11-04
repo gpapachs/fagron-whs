@@ -1,5 +1,6 @@
 "use client";
 
+import FilterFold from "@/components/FilterFold";
 import { useEffect, useMemo, useState } from "react";
 import AppBar from "@/components/AppBar";
 import LivePill from "@/components/LivePill";
@@ -201,21 +202,23 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
           <div className="titleblock">
             <h1>Παραγγελίες</h1>
             <p>
-              <LivePill connected={live.connected} lastAt={live.lastAt} /> Λίστες πωλήσεων (SALEXPORTLS) με διαθεσιμότητα αποθέματος και πιθανή ανασυσκευασία
-              (00-* / 71-*).
+              <LivePill connected={live.connected} lastAt={live.lastAt} /> Λίστες πωλήσεων με διαθεσιμότητα αποθέματος. Κλικ σε λίστα για λεπτομέρειες.
             </p>
           </div>
           <div className="st-actions">
+{sel.size > 0 && (
             <button type="button" className="btn ghost" disabled={!sel.size || !!busy} onClick={() => print(shown.filter((o) => sel.has(o.key)), "sel")}>
               {busy === "sel" ? "PDF…" : `Εκτύπωση επιλεγμένων (${sel.size})`}
             </button>
+            )}
             <button type="button" className="btn primary" disabled={!shown.length || !!busy} onClick={() => print(shown, "all")}>
               {busy === "all" ? "PDF…" : `Εκτύπωση όλων (${shown.length})`}
             </button>
           </div>
         </div>
 
-        <form className="st-filters mv-filters" onSubmit={search}>
+        <FilterFold active={[f.customer, f.item, f.list, f.doc, f.erp].filter((x) => x.trim()).length + (f.region !== "all" ? 1 : 0)}>
+<form className="st-filters mv-filters" onSubmit={search}>
           <label className="field">
             Κατάσταση λίστας
             <select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value as Status })}>
@@ -260,16 +263,14 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
             </button>
           </div>
         </form>
+        </FilterFold>
 
         {error && <p className="rp-notice error">{error}</p>}
 
         {rows !== null && (
-          <div className="or-bar">
-            <label className="st-check">
-              <input type="checkbox" checked={allSel} onChange={(e) => setSel(e.target.checked ? new Set(shown.map((o) => o.key)) : new Set())} />
-              Όλες
-            </label>
-            <div className="sl-chips">
+          <div className="sl-toolbar">
+            <div className="sl-group">
+              <span className="sl-glabel">Κατάσταση</span>
               <button type="button" className={`sl-chip ${colorF === "all" ? "on" : ""}`} onClick={() => setColorF("all")}>
                 Όλες <b>{evals.length}</b>
               </button>
@@ -278,50 +279,58 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
                   <span className="sl-dot" /> {COLOR_LABEL[c]} <b>{counts[c]}</b>
                 </button>
               ))}
-              <button type="button" className={`sl-chip blue ${repackOnly ? "on" : ""}`} onClick={() => setRepackOnly(!repackOnly)}>
-                Χρειάζονται ανασυσκευασία <b>{counts.repack}</b>
-              </button>
             </div>
-            <div className="sl-chips">
-              <span className="rp-hint">Απόθεμα:</span>
+            <div className="sl-group">
+              <span className="sl-glabel">Απόθεμα</span>
               <button type="button" className={`sl-chip ${stockF === "some" ? "on" : ""}`} onClick={() => setStockF(stockF === "some" ? "all" : "some")} title="Τουλάχιστον ένα είδος υπάρχει στο απόθεμα">
                 Με απόθεμα <b>{nSome}</b>
               </button>
               <button type="button" className={`sl-chip ${stockF === "none" ? "on" : ""}`} onClick={() => setStockF(stockF === "none" ? "all" : "none")} title="Κανένα είδος στο απόθεμα">
                 Χωρίς απόθεμα <b>{evals.length - nSome}</b>
               </button>
-              <button type="button" className={`sl-chip orange ${collectingOnly ? "on" : ""}`} onClick={() => setCollectingOnly(!collectingOnly)} title="Λίστες που συλλέγονται αυτή τη στιγμή στο WMS">
-                <span className="sl-live" /> Σε συλλογή <b>{nCollecting}</b>
-              </button>
-              <span className="rp-hint">Συλλογή:</span>
+            </div>
+            <div className="sl-group">
+              <span className="sl-glabel">Συλλογή</span>
               <button type="button" className={`sl-chip ${modeF === "strict" ? "on" : ""}`} onClick={() => setModeF(modeF === "strict" ? "all" : "strict")}>
                 Αυστηρή <b>{nStrict}</b>
               </button>
               <button type="button" className={`sl-chip ${modeF === "partial" ? "on" : ""}`} onClick={() => setModeF(modeF === "partial" ? "all" : "partial")}>
                 Μερική <b>{evals.length - nStrict}</b>
               </button>
+              <button type="button" className={`sl-chip orange ${collectingOnly ? "on" : ""}`} onClick={() => setCollectingOnly(!collectingOnly)} title="Λίστες που συλλέγονται αυτή τη στιγμή στο WMS">
+                <span className="sl-live" /> Σε συλλογή <b>{nCollecting}</b>
+              </button>
+              <button type="button" className={`sl-chip blue ${repackOnly ? "on" : ""}`} onClick={() => setRepackOnly(!repackOnly)}>
+                Ανασυσκευασία <b>{counts.repack}</b>
+              </button>
             </div>
-            <label className="st-check" title="Γραμμές που έχουν ήδη συλλεχθεί (ποσότητα 0)">
-              <input
-                type="checkbox"
-                checked={showExecuted}
-                onChange={(e) => {
-                  setShowExecuted(e.target.checked);
-                  try {
-                    window.localStorage.setItem("sales.showExecuted", e.target.checked ? "1" : "");
-                  } catch {
-                    /* τίποτα */
-                  }
-                  search(undefined, false, f, e.target.checked);
-                }}
-              />
-              Εμφάνιση μηδενικών (εκτελεσμένων) ειδών
-            </label>
-            <label className="st-check" title="Αν η ανασυσκευασία καλύπτει την έλλειψη, η γραμμή μετρά ως διαθέσιμη για το χρώμα">
-              <input type="checkbox" checked={repackCounts} onChange={(e) => setRepackCounts(e.target.checked)} />
-              Η ανασυσκευασία μετρά ως διαθέσιμη
-            </label>
+            <div className="sl-group sl-opts">
+              <label className="st-check">
+                <input type="checkbox" checked={allSel} onChange={(e) => setSel(e.target.checked ? new Set(shown.map((o) => o.key)) : new Set())} />
+                Επιλογή όλων ({shown.length})
+              </label>
+              <label className="st-check" title="Γραμμές που έχουν ήδη συλλεχθεί (ποσότητα 0)">
+                <input
+                  type="checkbox"
+                  checked={showExecuted}
+                  onChange={(e) => {
+                    setShowExecuted(e.target.checked);
+                    try {
+                      window.localStorage.setItem("sales.showExecuted", e.target.checked ? "1" : "");
+                    } catch {
+                      /* τίποτα */
+                    }
+                    search(undefined, false, f, e.target.checked);
+                  }}
+                />
+                Μηδενικά (εκτελεσμένα) είδη
+              </label>
+              <label className="st-check" title="Αν η ανασυσκευασία καλύπτει την έλλειψη, η γραμμή μετρά ως διαθέσιμη για το χρώμα">
+                <input type="checkbox" checked={repackCounts} onChange={(e) => setRepackCounts(e.target.checked)} />
+                Ανασυσκευασία = διαθέσιμο
+              </label>
             {total !== null && rows.length < total && <span className="rp-hint">Φορτώθηκαν {rows.length} από {total} γραμμές — στενέψτε τα φίλτρα.</span>}
+            </div>
           </div>
         )}
 
@@ -386,7 +395,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
                         {o.head.doc_no}
                         {o.head.erp_code && <div className="dim">ERP {o.head.erp_code}</div>}
                       </td>
-                      <td className="mono">{fmtDt(o.head.order_date)}</td>
+                      <td className="mono sl-c-date">{fmtDt(o.head.order_date)}</td>
                       <td>
                         <span className={`sl-tag ${o.strict ? "strict" : ""}`}>{o.strict ? "Αυστηρή" : "Μερική"}</span>
                       </td>

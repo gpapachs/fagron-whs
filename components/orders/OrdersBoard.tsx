@@ -1,5 +1,6 @@
 "use client";
 
+import FilterFold from "@/components/FilterFold";
 import { useEffect, useMemo, useState } from "react";
 import AppBar from "@/components/AppBar";
 import LivePill from "@/components/LivePill";
@@ -213,7 +214,8 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
           </div>
         </div>
 
-        <form className="st-filters mv-filters" onSubmit={search}>
+        <FilterFold active={[f.customer, f.item, f.lot, f.sn, f.doc, f.erp, f.list, f.picker].filter((x) => x.trim()).length + (f.status !== "all" ? 1 : 0)}>
+<form className="st-filters mv-filters" onSubmit={search}>
           {field("customer", "Πελάτης", "μέρος του ονόματος")}
           {field("item", "Κωδικός", "π.χ. 71-01-359")}
           {field("lot", "Batch")}
@@ -249,6 +251,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
             </button>
           </div>
         </form>
+        </FilterFold>
         {f.list.trim() && <p className="rp-hint">Με αριθμό λίστας οι ημερομηνίες αγνοούνται.</p>}
 
         {error && <p className="rp-notice error">{error}</p>}
