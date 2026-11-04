@@ -584,7 +584,7 @@ function Stock-ForItems([string[]]$codes, [string]$serialCol) {
 # Τρέχει συνέχεια: κάθε LIVE_SECONDS (30) νέες κινήσεις (ID > τελευταίο) + απόθεμα
 # μόνο των κωδικών που κινήθηκαν. Τερματίζει μετά από LIVE_MINUTES (0 = ποτέ).
 function Run-Live {
-  $secs = 30; $o = Opt 'LIVE_SECONDS'; if ($o -match '^\d+$' -and [int]$o -ge 5) { $secs = [int]$o }
+  $secs = 5; $o = Opt 'LIVE_SECONDS'; if ($o -match '^\d+$' -and [int]$o -ge 5) { $secs = [int]$o }
   $mins = 0; $o = Opt 'LIVE_MINUTES'; if ($o -match '^\d+$') { $mins = [int]$o }
   $start = Get-Date
   Sb-Login; $loginAt = Get-Date
