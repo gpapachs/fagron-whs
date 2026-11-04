@@ -99,7 +99,9 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
     try {
       const sb = createClient();
       let q = sb.from("wms_orders_v").select(COLS, { count: "exact" }).eq("doc_type", "SALEXPORTLS");
-      if (!showExec) q = q.gt("qty", 0);
+      // μηδενικές γραμμές: κρύβονται στις ανοιχτές, αλλά οι ολοκληρωμένες λίστες τις χρειάζονται
+      if (!showExec && ff.status === "open") q = q.gt("qty", 0);
+      if (!showExec && ff.status === "all") q = q.or("qty.gt.0,is_completed.eq.true");
       if (ff.status === "open") q = q.eq("is_completed", false);
       if (ff.status === "completed") q = q.eq("is_completed", true);
       if (ff.region !== "all") q = q.eq("is_abroad", ff.region === "abroad");

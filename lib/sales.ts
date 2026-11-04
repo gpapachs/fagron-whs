@@ -86,8 +86,9 @@ export function evaluateOrders(
   const res = opts.reservations;
   const groups = new Map<string, OrderRow[]>();
   for (const r of rows) {
-    // γραμμές που έχουν ήδη εκτελεστεί (ποσότητα 0): μόνο αν το ζητήσει ο χρήστης
-    if (lineNeed(r) <= EPS && !opts.showExecuted) continue;
+    // γραμμές που έχουν ήδη εκτελεστεί (ποσότητα 0): μόνο αν το ζητήσει ο χρήστης --
+    // εκτός από τις ολοκληρωμένες λίστες, που αλλιώς δεν θα είχαν καμία γραμμή
+    if (lineNeed(r) <= EPS && !opts.showExecuted && !r.is_completed) continue;
     const k = r.list_no || r.order_id;
     const g = groups.get(k);
     if (g) g.push(r);
