@@ -20,7 +20,7 @@ type Status = "open" | "completed" | "all";
 type Region = "all" | "gr" | "abroad";
 type F = { status: Status; region: Region; customer: string; item: string; doc: string; erp: string; list: string; from: string; to: string };
 const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-const EMPTY = (): F => ({ status: "open", region: "all", customer: "", item: "", doc: "", erp: "", list: "", from: iso(new Date(Date.now() - 30 * 86400000)), to: iso(new Date()) });
+const EMPTY = (): F => ({ status: "open", region: "all", customer: "", item: "", doc: "", erp: "", list: "", from: iso(new Date()), to: iso(new Date()) });
 const LS = "sales.filters.v1";
 const daysAgo = (n: number) => iso(new Date(Date.now() - n * 86400000));
 const LIMIT = 5000;

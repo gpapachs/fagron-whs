@@ -588,8 +588,13 @@ function Run-Live {
   $mins = 0; $o = Opt 'LIVE_MINUTES'; if ($o -match '^\d+$') { $mins = [int]$o }
   $start = Get-Date
   Sb-Login; $loginAt = Get-Date
-  $sc = @(Find-SerialColumns | Where-Object { $_.table -eq 'ms_Stock' -and $_.column -match '^[A-Za-z0-9_]+$' } | Select-Object -First 1)
-  $serialCol = if ($sc.Count) { $sc[0].column } else { '' }
+  # (πρώτα σε μεταβλητή: η Find-SerialColumns επιστρέφει πίνακα ως ένα αντικείμενο)
+  $scAll = Find-SerialColumns
+  $sc = @($scAll | Where-Object { $_.table -eq 'ms_Stock' -and $_.column -match '^[A-Za-z0-9_]+$' } | Select-Object -First 1)
+  $serialCol = if ($sc.Count) { [string]$sc[0].column } else { '' }
+  # αν αλλάξει το αρχείο του script, τερματίζει ώστε η προγραμματισμένη εργασία να το ξεκινήσει με τη νέα έκδοση
+  $selfPath = $PSCommandPath; $selfTime = if ($selfPath) { (Get-Item $selfPath).LastWriteTimeUtc } else { $null }
+  $cycle = 0
   $q = Build-MovesQuery 's.ID > @lastId'
   if (-not $q) { Fail 'Live: δεν βρέθηκε το ms_StockTrans' }
   # λίγες κάθε φορά, με τη σειρά (αν το πλήρες sync είναι πίσω, προλαβαίνει σταδιακά)
@@ -645,6 +650,10 @@ function Run-Live {
       }
     } catch { Log ("Live (Orders): " + $_) }
     try { Sync-Collecting 'SALEXPORTLS' } catch { Log ("Live (σε συλλογή): " + $_) }
+    # κάθε ~2 λεπτά: λίστες ανοιχτές στην εφαρμογή που ολοκληρώθηκαν στο WMS
+    $cycle++
+    if ($cycle % [math]::Max(1, [int](120 / $secs)) -eq 0) { try { Refresh-Completed 'SALEXPORTLS' } catch { Log ("Live (ολοκληρωμένες): " + $_) } }
+    if ($selfTime -and (Test-Path $selfPath) -and (Get-Item $selfPath).LastWriteTimeUtc -ne $selfTime) { Log 'Live: νέα έκδοση script -- επανεκκίνηση'; break }
     if ($mins -gt 0 -and ((Get-Date) - $start).TotalMinutes -ge $mins) { Log 'Live: τέλος χρόνου'; break }
     Start-Sleep -Seconds $secs
   }
@@ -802,6 +811,29 @@ where isnull(m.isNowCollecting, 0) = 1 and isnull(m.isCompleted, 0) = 0 and m.Re
 }
 $script:LastCollecting = $null
 
+# Λίστες ανοιχτές στην εφαρμογή που στο WMS είναι πλέον ολοκληρωμένες: ξαναδιαβάζονται και ανεβαίνουν.
+function Refresh-Completed([string]$code = 'SALEXPORTLS') {
+  $open = @(Sb-Request 'POST' '/rest/v1/rpc/wms_open_lists' @{ p_doc_type = $code } | ForEach-Object { $_ } | ForEach-Object { [string]$_ } | Where-Object { $_ -match '^\d+$' })
+  if (-not $open.Count) { return }
+  $done = New-Object Collections.ArrayList
+  for ($i = 0; $i -lt $open.Count; $i += 500) {
+    $ids = ($open[$i..([math]::Min($open.Count, $i + 500) - 1)]) -join ','
+    $t = Invoke-Sql "select m.ID as id from dbo.ms_Invoicem m where m.ID in ($ids) and isnull(m.isCompleted, 0) <> 0"
+    foreach ($r in $t.Rows) { [void]$done.Add([string]$r['id']) }
+  }
+  if (-not $done.Count) { return }
+  $rows = New-Object Collections.ArrayList
+  for ($i = 0; $i -lt $done.Count; $i += 300) {
+    $ids = ($done[$i..([math]::Min($done.Count, $i + 300) - 1)]) -join ','
+    foreach ($x in (Convert-Orders (Invoke-Sql (Orders-Query "m.ID in ($ids)" $code)))) { [void]$rows.Add($x) }
+  }
+  if ($rows.Count) {
+    Upload-Orders $rows
+    [void](Sb-Request 'POST' '/rest/v1/rpc/wms_signal' @{ p_key = 'orders_sync'; p_n = $rows.Count })
+  }
+  Log ("Ολοκληρωμένες στο WMS ($code): {0} λίστες ενημερώθηκαν" -f $done.Count)
+}
+
 function Sync-Orders([string]$code = 'SALEXPORTCL') {
   $last = $null
   try { $last = Sb-Request 'POST' '/rest/v1/rpc/wms_orders_last' @{ p_doc_type = $code } } catch { Log ("Orders $($code): " + $_); return }
@@ -809,6 +841,8 @@ function Sync-Orders([string]$code = 'SALEXPORTCL') {
   # ξαναδιαβάζει τις τελευταίες 3 ημέρες (αλλαγές σε λίστες που ήδη υπάρχουν)
   $since = if ($last) { ([DateTime]::Parse([string]$last, $Inv)).ToLocalTime().Date.AddDays(-3) } else { (Get-Date).Date.AddDays(-$days) }
   # μία φορά: ξαναδιαβάζει όλο το διάστημα για να συμπληρωθεί ο χρήστης συλλογής
+  # λάθος μελλοντική ημερομηνία στο WMS (π.χ. 18/12/2026) δεν πρέπει να «πηδάει» τις σημερινές
+  if ($since -gt (Get-Date).Date) { $since = (Get-Date).Date.AddDays(-3) }
   $mark = Join-Path $Here "orders-v3-$code.done"
   if (-not (Test-Path $mark)) { $since = (Get-Date).Date.AddDays(-$days) }
   # λίστες πωλήσεων: και όλες οι ανοιχτές του τελευταίου έτους (μπορεί να είναι παλιές)
@@ -818,7 +852,7 @@ function Sync-Orders([string]$code = 'SALEXPORTCL') {
   # ανοιχτές στην εφαρμογή που δεν ήρθαν παραπάνω: ξαναδιαβάζονται (π.χ. ολοκληρώθηκαν στο WMS)
   if ($code -eq 'SALEXPORTLS') {
     try {
-      $open = @(Sb-Request 'POST' '/rest/v1/rpc/wms_open_lists' @{ p_doc_type = $code } | ForEach-Object { [string]$_ } | Where-Object { $_ -match '^\d+$' })
+      $open = @(Sb-Request 'POST' '/rest/v1/rpc/wms_open_lists' @{ p_doc_type = $code } | ForEach-Object { $_ } | ForEach-Object { [string]$_ } | Where-Object { $_ -match '^\d+$' })
       $seen = @{}; foreach ($r in $rows) { $seen[$r.order_id] = $true }
       $miss = @($open | Where-Object { -not $seen.ContainsKey($_) })
       for ($i = 0; $i -lt $miss.Count; $i += 500) {
