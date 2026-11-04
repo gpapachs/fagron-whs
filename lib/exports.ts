@@ -854,7 +854,7 @@ export function movesPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFon
       4: { cellWidth: "auto" },
       5: { cellWidth: 32 },
       6: { cellWidth: 22 },
-      7: { cellWidth: 12, halign: "right" },
+      7: { cellWidth: 16, halign: "right" },
       8: { cellWidth: 19 },
       9: { cellWidth: 19 },
       10: { cellWidth: 36 },
@@ -1017,7 +1017,7 @@ export function ordersPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFo
         2: { cellWidth: "auto" },
         3: { cellWidth: 36 }, // παρτίδα: φαρδύτερη (π.χ. 26F04-H03-01944 σε μία γραμμή)
         4: { cellWidth: 22 },
-        5: { cellWidth: 13, halign: "right", fontStyle: "bold" },
+        5: { cellWidth: 16, halign: "right", fontStyle: "bold" },
         6: { cellWidth: 22 },
         7: { cellWidth: 11, halign: "center" },
       },
@@ -1050,7 +1050,8 @@ export function ordersPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFo
 
 const COLOR_TXT: Record<string, string> = { green: "ΟΛΑ ΔΙΑΘΕΣΙΜΑ", yellow: "ΜΕΡΙΚΗ ΣΥΛΛΟΓΗ", red: "ΧΩΡΙΣ ΑΠΟΘΕΜΑ" };
 const COLOR_RGB: Record<string, [number, number, number]> = { green: [18, 128, 92], yellow: [180, 120, 0], red: [185, 28, 28] };
-const STATE_TXT: Record<string, string> = { ok: "OK", repack: "ΑΝΑΣΥΣΚ.", partial: "ΜΕΡΙΚΟ", none: "ΔΕΝ ΥΠΑΡΧΕΙ", done: "ΕΚΤΕΛΕΣΜΕΝΟ" };
+// σύντομα για στενή στήλη: OK / No / Partial / Del (= delivered, ήδη εκτελεσμένο) / Repack
+const STATE_TXT: Record<string, string> = { ok: "OK", repack: "Repack", partial: "Partial", none: "No", done: "Del" };
 
 /** PDF λίστας συλλογής: μία λίστα ανά σελίδα, με θέσεις και πιθανή ανασυσκευασία. */
 export function salesListPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFonts, orders: OrderEval[], meta: StockExportMeta) {
@@ -1109,7 +1110,7 @@ export function salesListPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: Pd
     autoTable(doc, {
       ...baseTable,
       startY: y + 3,
-      head: [["#", "Κωδικός", "Περιγραφή", "Ζητ.", "Απόθ.", "Θέσεις (ποσότητα · παρτίδα)", "Κατάσταση", ""]],
+      head: [["#", "Κωδικός", "Περιγραφή", "Ζητ.", "Απόθ.", "Θέσεις (ποσότητα · παρτίδα)", "Κατ.", ""]],
       body: o.lines.map((l, i) => [
         String(l.line.line_no ?? i + 1),
         l.line.item,
@@ -1125,10 +1126,10 @@ export function salesListPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: Pd
         0: { cellWidth: 7, halign: "right" },
         1: { cellWidth: 19, fontStyle: "bold" },
         2: { cellWidth: "auto" },
-        3: { cellWidth: 11, halign: "right", fontStyle: "bold" },
-        4: { cellWidth: 12, halign: "right" },
+        3: { cellWidth: 16, halign: "right", fontStyle: "bold", overflow: "visible" },
+        4: { cellWidth: 16, halign: "right", overflow: "visible" },
         5: { cellWidth: 52 },
-        6: { cellWidth: 19 },
+        6: { cellWidth: 13 },
         7: { cellWidth: 7 },
       },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1137,7 +1138,7 @@ export function salesListPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: Pd
         const st = o.lines[d.row.index]?.state;
         if (d.column.index === 6) {
           d.cell.styles.fontStyle = "bold";
-          d.cell.styles.textColor = st === "ok" ? COLOR_RGB.green : st === "repack" ? ([37, 84, 199] as [number, number, number]) : st === "partial" ? COLOR_RGB.yellow : COLOR_RGB.red;
+          d.cell.styles.textColor = st === "done" ? DIM : st === "ok" ? COLOR_RGB.green : st === "repack" ? ([37, 84, 199] as [number, number, number]) : st === "partial" ? COLOR_RGB.yellow : COLOR_RGB.red;
         } else if (d.column.index === 5 && d.cell.raw !== "—") d.cell.styles.fillColor = [255, 246, 204];
         else if (d.row.index % 2 === 1) d.cell.styles.fillColor = ZEBRA;
       },
@@ -1173,7 +1174,7 @@ export function salesListPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: Pd
         ]),
         styles: { ...baseTable.styles, fontSize: 8 },
         headStyles: { ...baseTable.headStyles, fillColor: [231, 238, 251] },
-        columnStyles: { 0: { cellWidth: 20, fontStyle: "bold" }, 1: { cellWidth: "auto" }, 2: { cellWidth: 14, halign: "right" }, 3: { cellWidth: 14, halign: "right", fontStyle: "bold" }, 4: { cellWidth: 56 }, 5: { cellWidth: 7 } },
+        columnStyles: { 0: { cellWidth: 20, fontStyle: "bold" }, 1: { cellWidth: "auto" }, 2: { cellWidth: 16, halign: "right" }, 3: { cellWidth: 16, halign: "right", fontStyle: "bold" }, 4: { cellWidth: 56 }, 5: { cellWidth: 7 } },
       });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       endY = (doc as any).lastAutoTable?.finalY ?? endY + 20;
