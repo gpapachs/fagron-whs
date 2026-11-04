@@ -973,6 +973,7 @@ export function ordersPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFo
     doc.setFontSize(18);
     doc.setTextColor(...INK);
     doc.text(`Λίστα ${g.list}`, 20, 19);
+    titleTag(doc, `Λίστα ${g.list}`, "ΕΚΤΕΛΕΣΜΕΝΟ", 20, 19, false);
     doc.setFont(FONT, "normal");
     doc.setFontSize(8.5);
     doc.setTextColor(...DIM);
@@ -981,7 +982,7 @@ export function ordersPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFo
     const allDone = done === g.lines.length;
     doc.setFont(FONT, "bold");
     doc.setFontSize(10);
-    doc.setTextColor(...(allDone ? ([18, 128, 92] as [number, number, number]) : RED));
+    doc.setTextColor(...INK); // ασπρόμαυρη εκτύπωση
     doc.text(allDone ? "COLLECTED" : done ? `COLLECTED ${done}/${g.lines.length}` : "NON COLLECTED", W - 14, 19, { align: "right" });
     let y = 32;
     doc.setFont(FONT, "normal");
@@ -1048,8 +1049,30 @@ export function ordersPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFo
 
 // ============================================================ Παραγγελίες (λίστες πωλήσεων)
 
+/** Ασπρόμαυρη «ετικέτα» με πλαίσιο δίπλα στον τίτλο (π.χ. ΠΡΟΣ ΕΚΤΕΛΕΣΗ / ΕΚΤΕΛΕΣΜΕΝΟ). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function titleTag(doc: any, title: string, tag: string, x: number, y: number, inverse: boolean) {
+  doc.setFont(FONT, "bold");
+  doc.setFontSize(18);
+  const tx = x + doc.getTextWidth(title) + 4;
+  doc.setFontSize(10.5);
+  const w = doc.getTextWidth(tag) + 5;
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.5);
+  if (inverse) {
+    doc.setFillColor(0, 0, 0);
+    doc.rect(tx, y - 5.6, w, 7.4, "FD");
+    doc.setTextColor(255, 255, 255);
+  } else {
+    doc.rect(tx, y - 5.6, w, 7.4, "S");
+    doc.setTextColor(0, 0, 0);
+  }
+  doc.text(tag, tx + 2.5, y);
+  doc.setLineWidth(0.2);
+  doc.setTextColor(...INK);
+}
+
 const COLOR_TXT: Record<string, string> = { green: "ΟΛΑ ΔΙΑΘΕΣΙΜΑ", yellow: "ΜΕΡΙΚΗ ΣΥΛΛΟΓΗ", red: "ΧΩΡΙΣ ΑΠΟΘΕΜΑ" };
-const COLOR_RGB: Record<string, [number, number, number]> = { green: [18, 128, 92], yellow: [180, 120, 0], red: [185, 28, 28] };
 // σύντομα για στενή στήλη: OK / No / Partial / Del (= delivered, ήδη εκτελεσμένο) / Repack
 const STATE_TXT: Record<string, string> = { ok: "OK", repack: "Repack", partial: "Partial", none: "No", done: "Del" };
 
@@ -1062,28 +1085,29 @@ export function salesListPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: Pd
   orders.forEach((o, oi) => {
     if (oi > 0) doc.addPage();
     const h = o.head;
-    doc.setFillColor(...(o.completed ? DIM : COLOR_RGB[o.color]));
+    doc.setFillColor(...(o.completed ? DIM : INK));
     doc.rect(14, 12, 3, 14, "F");
     doc.setFont(FONT, "bold");
     doc.setFontSize(18);
     doc.setTextColor(...INK);
     doc.text(`Λίστα ${o.key}`, 20, 19);
+    titleTag(doc, `Λίστα ${o.key}`, "ΠΡΟΣ ΕΚΤΕΛΕΣΗ", 20, 19, true);
     doc.setFont(FONT, "normal");
     doc.setFontSize(8.5);
     doc.setTextColor(...DIM);
     doc.text(`Fagron Hellas · Λίστα πωλήσεων · εκτύπωση ${when(meta.generatedAt)}${meta.userEmail ? ` · ${meta.userEmail}` : ""}`, 20, 24.5);
     doc.setFont(FONT, "bold");
     doc.setFontSize(10);
-    doc.setTextColor(...(o.completed ? DIM : COLOR_RGB[o.color]));
+    doc.setTextColor(...INK);
     doc.text(o.completed ? "ΟΛΟΚΛΗΡΩΜΕΝΗ" : COLOR_TXT[o.color], W - 14, 19, { align: "right" });
     if (o.collecting && !o.completed) {
       doc.setFontSize(8.5);
-      doc.setTextColor(217, 119, 6);
+      doc.setTextColor(...INK);
       doc.text(`ΣΕ ΣΥΛΛΟΓΗ${o.picker ? ` · ${o.picker}` : ""}`, W - 14, o.needsRepack ? 29 : 24.5, { align: "right" });
     }
     if (o.needsRepack) {
       doc.setFontSize(8.5);
-      doc.setTextColor(37, 84, 199);
+      doc.setTextColor(...INK);
       doc.text("ΧΡΕΙΑΖΕΤΑΙ ΑΝΑΣΥΣΚΕΥΑΣΙΑ", W - 14, 24.5, { align: "right" });
     }
     let y = 32;
@@ -1129,7 +1153,7 @@ export function salesListPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: Pd
         3: { cellWidth: 16, halign: "right", fontStyle: "bold", overflow: "visible" },
         4: { cellWidth: 16, halign: "right", overflow: "visible" },
         5: { cellWidth: 52 },
-        6: { cellWidth: 13 },
+        6: { cellWidth: 15 },
         7: { cellWidth: 7 },
       },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1137,8 +1161,16 @@ export function salesListPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: Pd
         if (d.section !== "body") return;
         const st = o.lines[d.row.index]?.state;
         if (d.column.index === 6) {
+          // ασπρόμαυρη εκτύπωση: No = μαύρο φόντο, Partial / Repack = γκρι φόντο, Del = αχνό
           d.cell.styles.fontStyle = "bold";
-          d.cell.styles.textColor = st === "done" ? DIM : st === "ok" ? COLOR_RGB.green : st === "repack" ? ([37, 84, 199] as [number, number, number]) : st === "partial" ? COLOR_RGB.yellow : COLOR_RGB.red;
+          d.cell.styles.halign = "center";
+          if (st === "none") {
+            d.cell.styles.fillColor = [0, 0, 0];
+            d.cell.styles.textColor = [255, 255, 255];
+          } else if (st === "partial" || st === "repack") {
+            d.cell.styles.fillColor = [205, 205, 205];
+            d.cell.styles.textColor = [0, 0, 0];
+          } else d.cell.styles.textColor = st === "done" ? DIM : [0, 0, 0];
         } else if (d.column.index === 5 && d.cell.raw !== "—") d.cell.styles.fillColor = [255, 246, 204];
         else if (d.row.index % 2 === 1) d.cell.styles.fillColor = ZEBRA;
       },
@@ -1154,7 +1186,7 @@ export function salesListPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: Pd
       }
       doc.setFont(FONT, "bold");
       doc.setFontSize(10.5);
-      doc.setTextColor(37, 84, 199);
+      doc.setTextColor(...INK);
       doc.text(`Ανασυσκευασία: ${l.line.item} × ${q(r.units)}  (λείπουν ${q(l.need - l.covered)} · βγαίνουν έως ${q(r.max)})`, 14, endY + 8);
       doc.setFont(FONT, "normal");
       doc.setFontSize(8.5);
