@@ -48,10 +48,8 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
   }, []);
 
   // live: νέα παραγγελίες από το sync ή αλλαγή κατάστασης από άλλο χρήστη
-  const live = useWmsLive((sig) => {
-    if (rows === null) return;
-    if (sig.key === "orders" || sig.key === "orders_sync") search(undefined, true);
-  });
+  // χωρίς αυτόματη ανανέωση (κατ' επιλογή χρήστη): η λίστα αλλάζει μόνο με «Αναζήτηση»
+  const live = useWmsLive(() => {});
 
   function filterLabels() {
     const out: string[] = [];

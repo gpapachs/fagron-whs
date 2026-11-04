@@ -8,7 +8,7 @@ import AppBar from "@/components/AppBar";
 import LivePill from "@/components/LivePill";
 import { createClient } from "@/lib/supabase/client";
 import { loadPdfFonts } from "@/lib/pdfFonts";
-import { useWmsLive } from "@/lib/live";
+import { useCoalesced, useWmsLive } from "@/lib/live";
 import type { Recipe, StockIndex } from "@/lib/repack";
 import { loadReservations, loadSalesContext, SALES_COLS } from "@/lib/salesData";
 import { loadPlanOrders, type PlanOrder } from "@/lib/planOrders";
@@ -83,8 +83,9 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const refresh = useCoalesced(() => search(undefined, true));
   const live = useWmsLive((sig) => {
-    if (rows !== null && (sig.key === "orders_sync" || sig.key === "stock" || sig.key === "stock_full")) search(undefined, true);
+    if (rows !== null && (sig.key === "orders_sync" || sig.key === "orders" || sig.key === "stock" || sig.key === "stock_full")) refresh();
   });
 
   async function search(e?: React.FormEvent, silent = false, ff: F = f, showExec = showExecuted) {

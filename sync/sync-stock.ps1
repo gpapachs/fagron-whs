@@ -650,6 +650,7 @@ function Run-Live {
       }
     } catch { Log ("Live (Orders): " + $_) }
     try { Sync-Collecting 'SALEXPORTLS' } catch { Log ("Live (σε συλλογή): " + $_) }
+    try { Refresh-Collecting 'SALEXPORTLS' } catch { Log ("Live (γραμμές σε συλλογή): " + $_) }
     # κάθε ~2 λεπτά: λίστες ανοιχτές στην εφαρμογή που ολοκληρώθηκαν στο WMS
     $cycle++
     if ($cycle % [math]::Max(1, [int](120 / $secs)) -eq 0) { try { Refresh-Completed 'SALEXPORTLS' } catch { Log ("Live (ολοκληρωμένες): " + $_) } }
@@ -805,11 +806,38 @@ where isnull(m.isNowCollecting, 0) = 1 and isnull(m.isCompleted, 0) = 0 and m.Re
   $ids = New-Object Collections.ArrayList; $users = @{}
   foreach ($r in $t.Rows) { $id = To-Str $r['id']; [void]$ids.Add($id); $u = To-Str $r['usr']; if ($u) { $users[$id] = $u } }
   $sig = ($ids | Sort-Object) -join ','
+  # λίστες σε συλλογή τώρα + όσες μόλις τελείωσαν (για μία τελευταία ανάγνωση)
+  $prev = @($script:CollectingIds)
+  $script:CollectingIds = @($ids)
+  $script:CollectingEnded = @($prev | Where-Object { $ids -notcontains $_ })
   if ($sig -eq $script:LastCollecting) { return }
   [void](Sb-Request 'POST' '/rest/v1/rpc/wms_orders_set_collecting' @{ p_doc_type = $code; p_ids = [string[]]$ids.ToArray(); p_users = $users })
   $script:LastCollecting = $sig
 }
 $script:LastCollecting = $null
+$script:CollectingIds = @()
+$script:CollectingEnded = @()
+$script:CollectingRead = @{}
+
+# Γραμμές των λιστών που συλλέγονται τώρα: ξαναδιαβάζονται συχνά ώστε οι ποσότητες που
+# απομένουν να ενημερώνονται στην εφαρμογή σχεδόν αμέσως. Ανεβαίνουν μόνο αν άλλαξαν.
+function Refresh-Collecting([string]$code = 'SALEXPORTLS') {
+  $ids = @(@($script:CollectingIds) + @($script:CollectingEnded) | Where-Object { $_ -match '^\d+$' } | Select-Object -Unique)
+  if (-not $ids.Count) { return }
+  $t = Invoke-Sql (Orders-Query ("m.ID in (" + ($ids -join ',') + ")") $code)
+  $rows = Convert-Orders $t
+  $byList = @{}
+  foreach ($r in $rows) { $k = [string]$r.order_id; if (-not $byList.ContainsKey($k)) { $byList[$k] = New-Object Collections.ArrayList }; [void]$byList[$k].Add($r) }
+  $changed = New-Object Collections.ArrayList
+  foreach ($k in $byList.Keys) {
+    $sig = (@($byList[$k] | ForEach-Object { "$($_.id)=$($_.qty)/$($_.is_completed)" }) | Sort-Object) -join ';'
+    if ($script:CollectingRead[$k] -ne $sig) { $script:CollectingRead[$k] = $sig; foreach ($x in $byList[$k]) { [void]$changed.Add($x) } }
+  }
+  if ($changed.Count) {
+    Upload-Orders $changed
+    [void](Sb-Request 'POST' '/rest/v1/rpc/wms_signal' @{ p_key = 'orders_sync'; p_n = $changed.Count })
+  }
+}
 
 # Λίστες ανοιχτές στην εφαρμογή που στο WMS ολοκληρώθηκαν (ξαναδιαβάζονται) ή διαγράφηκαν (αφαιρούνται).
 function Refresh-Completed([string]$code = 'SALEXPORTLS') {

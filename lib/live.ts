@@ -52,3 +52,18 @@ export function ago(iso: string | null, now = Date.now()) {
   if (s < 3600) return `πριν ${Math.round(s / 60)}'`;
   return new Date(iso).toLocaleString("el-GR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
+
+/** Πολλά σήματα σε λίγα δευτερόλεπτα (Live κάθε 5") -> μία ανανέωση. */
+export function useCoalesced(fn: () => void, ms = 1500) {
+  const f = useRef(fn);
+  f.current = fn;
+  const t = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (t.current) clearTimeout(t.current); }, []);
+  return () => {
+    if (t.current) return;
+    t.current = setTimeout(() => {
+      t.current = null;
+      f.current();
+    }, ms);
+  };
+}

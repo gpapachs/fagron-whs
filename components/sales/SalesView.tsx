@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import LivePill from "@/components/LivePill";
 import { createClient } from "@/lib/supabase/client";
 import { loadPdfFonts } from "@/lib/pdfFonts";
-import { useWmsLive } from "@/lib/live";
+import { useCoalesced, useWmsLive } from "@/lib/live";
 import { evaluateOrders, reservedByOthers, type OrderColor, type Reservations } from "@/lib/sales";
 import { loadReservations, loadSalesContext, normOrder, SALES_COLS } from "@/lib/salesData";
 import type { Recipe, StockIndex } from "@/lib/repack";
@@ -79,8 +79,9 @@ export default function SalesView({
     else setError("Δεν δόθηκε αριθμός λίστας.");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [listNo]);
+  const refresh = useCoalesced(() => list && load(list));
   const live = useWmsLive((sig) => {
-    if (list && (sig.key === "orders_sync" || sig.key === "stock" || sig.key === "stock_full")) load(list);
+    if (list && (sig.key === "orders_sync" || sig.key === "orders" || sig.key === "stock" || sig.key === "stock_full")) refresh();
   });
 
   const o = useMemo(() => (rows && rows.length ? evaluateOrders(rows, idx, recipes, { repackCounts, reservations, showExecuted })[0] ?? null : null), [rows, idx, recipes, repackCounts, reservations, showExecuted]);
