@@ -26,7 +26,7 @@
   --r-lg: 16px;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
+  :root:not([data-theme]) {
     color-scheme: dark;
     --bg: #0e1524;
     --surface: #151e31;
@@ -57,6 +57,105 @@
   --reserved: #7ea6ff; --reserved-bg: rgba(126, 166, 255, 0.14); --border: #26324d; --focus: #8fb0ff;
   --shadow: 0 1px 0 rgba(0, 0, 0, 0.3); --shadow-lg: 0 16px 40px -12px rgba(0, 0, 0, 0.6);
 }
+
+/* ---- Θέματα χρωμάτων (επιλογή χρήστη, data-theme στο <html>) ---- */
+:root[data-theme="ocean"] {
+  --bg: #eaf3f6; --surface: #ffffff; --surface-2: #dcebf0; --ink: #0d2e3a; --ink-dim: #4f6f7c;
+  --accent: #0b6e8a; --accent-ink: #ffffff; --link: #0a7aa0; --border: #c9dfe7; --focus: #0a7aa0;
+  --reserved: #0a7aa0; --reserved-bg: #dff1f7;
+}
+:root[data-theme="forest"] {
+  --bg: #eff5ef; --surface: #ffffff; --surface-2: #e1ece1; --ink: #1d3322; --ink-dim: #5b7360;
+  --accent: #2f6b3a; --accent-ink: #ffffff; --link: #2e7d45; --border: #d0e0d1; --focus: #2e7d45;
+}
+:root[data-theme="sunset"] {
+  --bg: #fbf3ec; --surface: #fffdfb; --surface-2: #f6e6da; --ink: #3a1d14; --ink-dim: #80604f;
+  --accent: #b5452b; --accent-ink: #ffffff; --link: #b5452b; --border: #efd9c9; --focus: #d0603f;
+  --rack: #ffb347;
+}
+:root[data-theme="lavender"] {
+  --bg: #f4f2fb; --surface: #ffffff; --surface-2: #e9e5f7; --ink: #261c45; --ink-dim: #6a628a;
+  --accent: #5b3fa8; --accent-ink: #ffffff; --link: #5b3fa8; --border: #dcd6f0; --focus: #6f52c4;
+  --reserved: #5b3fa8; --reserved-bg: #ece6fb;
+}
+:root[data-theme="midnight"] {
+  color-scheme: dark;
+  --bg: #0b0e1d; --surface: #13172b; --surface-2: #1b2040; --ink: #e9e7ff; --ink-dim: #9c99c4;
+  --accent: #a78bfa; --accent-ink: #120d2b; --link: #b9a4ff; --rack: #ffd23f;
+  --free: #4ade80; --free-bg: rgba(74, 222, 128, 0.14); --occupied: #fb7185; --occupied-bg: rgba(251, 113, 133, 0.15);
+  --reserved: #93c5fd; --reserved-bg: rgba(147, 197, 253, 0.14); --border: #2a2f55; --focus: #b9a4ff;
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.35); --shadow-lg: 0 16px 40px -12px rgba(0, 0, 0, 0.7);
+}
+:root[data-theme="graphite"] {
+  color-scheme: dark;
+  --bg: #121314; --surface: #1b1c1e; --surface-2: #26282b; --ink: #f2f2f0; --ink-dim: #a3a39e;
+  --accent: #f5b301; --accent-ink: #1a1400; --link: #ffc933; --rack: #f5b301;
+  --free: #5fd39b; --free-bg: rgba(95, 211, 155, 0.13); --occupied: #ff8a75; --occupied-bg: rgba(255, 138, 117, 0.14);
+  --reserved: #7fb4ff; --reserved-bg: rgba(127, 180, 255, 0.13); --border: #34363a; --focus: #ffc933;
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.35); --shadow-lg: 0 16px 40px -12px rgba(0, 0, 0, 0.7);
+}
+:root[data-theme="contrast"] {
+  --bg: #ffffff; --surface: #ffffff; --surface-2: #f0f0f0; --ink: #000000; --ink-dim: #262626;
+  --accent: #000000; --accent-ink: #ffffff; --link: #0033cc; --border: #000000; --focus: #0033cc;
+  --free: #006b3c; --free-bg: #d8f5e6; --occupied: #b00000; --occupied-bg: #ffe0e0;
+  --reserved: #0033cc; --reserved-bg: #e0e8ff; --shadow: none;
+}
+/* μέγεθος γραμμάτων ανά συσκευή */
+:root[data-size="sm"] body { zoom: 0.9; }
+:root[data-size="lg"] body { zoom: 1.12; }
+:root[data-size="xl"] body { zoom: 1.25; }
+
+/* ---- επιλογή θέματος ---- */
+.theme-menu { position: relative; }
+.theme-btn {
+  display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px;
+  border-radius: 50%; border: 1px solid var(--border); background: var(--surface); color: var(--ink); cursor: pointer;
+}
+.theme-btn:hover { background: var(--surface-2); }
+.theme-pop {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 60; width: 280px; max-width: calc(100vw - 32px);
+  background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: var(--r);
+  box-shadow: var(--shadow-lg); padding: 12px; display: flex; flex-direction: column; gap: 8px;
+}
+.theme-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-dim); }
+.theme-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.theme-opt {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--r-sm); font-size: 12.5px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--ink); cursor: pointer; text-align: left;
+}
+.theme-opt.on { border-color: var(--focus); box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 35%, transparent); font-weight: 700; }
+.theme-sw { width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.15); position: relative; flex: none; overflow: hidden; }
+.theme-sw span { position: absolute; inset: 50% 0 0 50%; }
+.theme-sizes { display: flex; gap: 6px; }
+.theme-size {
+  flex: 1; padding: 6px 0; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--surface);
+  color: var(--ink); cursor: pointer; font-weight: 700;
+}
+.theme-size:nth-child(1) { font-size: 12px; } .theme-size:nth-child(3) { font-size: 16px; } .theme-size:nth-child(4) { font-size: 18px; }
+.theme-size.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+
+/* ---- πλακίδια σύνοψης (KPI) ---- */
+.kt-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 8px; }
+.kt {
+  --tone: var(--ink-dim);
+  display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 10px 12px;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-left: 4px solid var(--tone);
+  border-radius: var(--r-sm); box-shadow: var(--shadow); font: inherit;
+}
+button.kt { cursor: pointer; }
+button.kt:hover { background: var(--surface-2); }
+.kt.on { background: color-mix(in srgb, var(--tone) 14%, var(--surface)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--tone) 45%, transparent); }
+.kt.green { --tone: var(--free); } .kt.red { --tone: var(--occupied); } .kt.blue { --tone: var(--reserved); }
+.kt.yellow { --tone: #d9a400; } .kt.orange { --tone: #e07a1f; } .kt.neutral { --tone: var(--ink-dim); }
+.kt-n { font-size: 22px; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.kt-l { font-size: 11.5px; color: var(--ink-dim); font-weight: 600; }
+@media (max-width: 720px) {
+  .kt-row { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .kt { padding: 7px 8px; }
+  .kt-n { font-size: 17px; }
+  .kt-l { font-size: 10.5px; }
+}
+.reldate { white-space: nowrap; }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
@@ -1244,19 +1343,20 @@ a.sl-open:hover { text-decoration: underline; }
   .sl-table, .sl-table tbody { display: block; }
   .sl-table tr.sl-row { display: grid; grid-template-columns: 26px 1fr auto; gap: 2px 8px; padding: 8px 10px 8px 6px; border-bottom: 1px solid var(--border); }
   .sl-table tr.sl-row td { display: block; padding: 0; border: none; background: none; }
-  .sl-table tr.sl-row td:nth-child(1) { grid-row: 1 / span 3; box-shadow: none; }
-  .sl-table tr.sl-row td:nth-child(2) { grid-column: 2; font-size: 13px; }
-  .sl-table tr.sl-row td:nth-child(3) { grid-column: 2 / -1; font-size: 13px; font-weight: 600; min-width: 0; }
-  .sl-table tr.sl-row td:nth-child(4) { grid-column: 2; font-size: 11px; }
-  .sl-table tr.sl-row td:nth-child(5) { grid-column: 3; grid-row: 1; text-align: right; font-size: 11px; color: var(--ink-dim); }
-  .sl-table tr.sl-row td:nth-child(6) { grid-column: 3; grid-row: 3; text-align: right; }
-  .sl-table tr.sl-row td:nth-child(7) { grid-column: 2; text-align: left; font-size: 11.5px; }
-  .sl-table tr.sl-row td:nth-child(8) { grid-column: 2 / -1; }
-  .sl-table tr.sl-row td:nth-child(9) { grid-column: 3; grid-row: 2; text-align: right; }
+  /* 1 επιλογή · 2 λίστα · 3 πελάτης · 4 ημερομηνία · 5 συλλογή · 6 γραμμές · 7 κατάσταση · 8 εκτύπωση */
+  .sl-table tr.sl-row td:nth-child(1) { grid-row: 1 / span 4; box-shadow: none; }
+  .sl-table tr.sl-row td:nth-child(2) { grid-column: 2; grid-row: 1; font-size: 13px; }
+  .sl-table tr.sl-row td:nth-child(4) { grid-column: 3; grid-row: 1; text-align: right; font-size: 11px; color: var(--ink-dim); }
+  .sl-table tr.sl-row td:nth-child(3) { grid-column: 2 / -1; grid-row: 2; font-size: 13px; font-weight: 600; min-width: 0; }
+  .sl-table tr.sl-row td:nth-child(7) { grid-column: 2; grid-row: 3; }
+  .sl-table tr.sl-row td:nth-child(8) { grid-column: 3; grid-row: 3; text-align: right; }
+  .sl-table tr.sl-row td:nth-child(5) { grid-column: 2; grid-row: 4; display: inline; }
+  .sl-table tr.sl-row td:nth-child(6) { grid-column: 3; grid-row: 4; text-align: right; font-size: 11.5px; }
+  .sl-table tr.sl-row td:nth-child(6)::before { content: "Γραμμές "; color: var(--ink-dim); font-size: 11px; }
   .sl-table tr.sl-row { border-left: 4px solid var(--border); }
-  .sl-table tr.sl-row.green { border-left-color: #12805c; }
+  .sl-table tr.sl-row.green { border-left-color: var(--free); }
   .sl-table tr.sl-row.yellow { border-left-color: #d99a00; }
-  .sl-table tr.sl-row.red { border-left-color: #c4291c; }
+  .sl-table tr.sl-row.red { border-left-color: var(--occupied); }
   .sl-table tr.sl-line { display: grid; grid-template-columns: 1fr auto; padding: 4px 10px 4px 32px; }
   .sl-table tr.sl-line td { display: block; padding: 1px 0; border: none; }
   .sl-table tr.sl-line td:first-child { display: none; }
@@ -1264,7 +1364,43 @@ a.sl-open:hover { text-decoration: underline; }
   .sl-comments { max-width: 100%; }
 }
 @media (max-width: 720px) {
-  .sl-table tr.sl-row td:nth-child(7) { grid-column: 2 / -1; display: flex; gap: 8px; align-items: baseline; text-align: left; }
-  .sl-table tr.sl-row td:nth-child(7)::before { content: "Γραμμές:"; color: var(--ink-dim); font-size: 11px; }
   .sl-toolbar { padding: 8px 10px; gap: 6px 12px; }
+}
+
+/* ---- κοινή εμφάνιση «κάρτας» στο κινητό για Απόθεμα / Κινήσεις / Εκτελεσμένες ---- */
+@media (max-width: 720px) {
+  .st-tablewrap:has(.st-cards), .st-tablewrap:has(.or-table) { overflow: visible; border: none; background: none; box-shadow: none; }
+  .st-cards thead, .or-table thead { display: none; }
+  .st-cards, .st-cards tbody, .or-table, .or-table tbody { display: block; width: 100%; }
+  .st-cards tr {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 3px 12px; padding: 9px 12px; margin-bottom: 8px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); box-shadow: var(--shadow);
+  }
+  .or-table tr:not(.or-head) {
+    display: grid; grid-template-columns: 26px 1fr 1fr; gap: 3px 10px; padding: 8px 10px; border-top: 1px solid var(--border); background: var(--surface);
+  }
+  .or-table tr:not(.or-head) td:first-child { grid-row: 1 / span 4; }
+  .or-table tr.or-head { display: block; padding: 8px 10px; background: var(--surface-2); border-radius: var(--r-sm) var(--r-sm) 0 0; }
+  .or-table tr.or-head td { display: inline-block; padding: 0 6px 0 0; border: none; vertical-align: middle; }
+  .or-table tr.or-head td.or-head-end { display: flex; gap: 10px; justify-content: flex-end; width: 100%; padding-top: 4px; }
+  .or-table tbody { margin-bottom: 10px; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; }
+  .or-table tbody + tbody { border-top: 1px solid var(--border); }
+  .st-cards td, .or-table tr:not(.or-head) td { display: block; padding: 0; border: none; background: none; min-width: 0; font-size: 12.5px; text-align: left; }
+  .st-cards td.num, .or-table tr:not(.or-head) td.num { text-align: left; }
+  .st-cards td[data-label]::before, .or-table td[data-label]::before {
+    content: attr(data-label); display: block; font-size: 10px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--ink-dim); font-family: var(--font-body), sans-serif;
+  }
+  .st-cards td.st-desc, .or-table td.st-desc { grid-column: 1 / -1; font-weight: 600; }
+  .or-table tr:not(.or-head) td.st-desc { grid-column: 2 / -1; }
+  .st-cards td.st-hide-sm { display: none; }
+  .st-cards td:empty, .or-table tr:not(.or-head) td:empty { display: none; }
+  .st-cards td.st-empty { grid-column: 1 / -1; }
+  .st-cards tr.st-new { border-color: var(--free); }
+}
+@media (max-width: 720px) {
+  .kt-row[data-n="4"] { grid-template-columns: repeat(2, 1fr); }
+  .kt-row[data-n="7"] .kt:last-child { grid-column: span 3; }
+  .st-cards td, .or-table tr:not(.or-head) td { background: transparent !important; box-shadow: none !important; position: static !important; }
+  .or-table tr.or-on { background: var(--reserved-bg) !important; }
 }

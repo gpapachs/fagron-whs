@@ -27,8 +27,14 @@ export const viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="el" className={`${inter.variable} ${mono.variable}`}>
+    <html lang="el" className={`${inter.variable} ${mono.variable}`} suppressHydrationWarning>
       <body>
+        {/* θέμα / μέγεθος πριν ζωγραφιστεί η σελίδα (χωρίς «αναβόσβημα») */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem("whs.theme"),s=localStorage.getItem("whs.size"),e=document.documentElement;if(t&&t!=="auto")e.setAttribute("data-theme",t);if(s&&s!=="md")e.setAttribute("data-size",s);}catch(x){}})();`,
+          }}
+        />
         {/* μετά από νέα δημοσίευση: αν λείπει αρχείο της παλιάς έκδοσης, ανανέωση μία φορά */}
         <script
           dangerouslySetInnerHTML={{

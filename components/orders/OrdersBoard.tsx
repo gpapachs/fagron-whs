@@ -2,6 +2,8 @@
 
 import FilterFold from "@/components/FilterFold";
 import { useEffect, useMemo, useState } from "react";
+import KpiTiles from "@/components/KpiTiles";
+import { fullDate, relDate } from "@/lib/format";
 import AppBar from "@/components/AppBar";
 import LivePill from "@/components/LivePill";
 import { createClient } from "@/lib/supabase/client";
@@ -15,7 +17,6 @@ const LIMIT = 3000;
 const LS = "orders.filters.v1";
 const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const EMPTY = (): F => ({ customer: "", item: "", lot: "", sn: "", doc: "", erp: "", list: "", picker: "", from: iso(new Date()), to: iso(new Date()), status: "all" });
-const fmtDt = (s: string | null) => (s ? new Date(s).toLocaleString("el-GR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }) : "");
 const fmtQty = (n: number | null) => (n == null ? "" : n.toLocaleString("el-GR", { maximumFractionDigits: 3 }));
 const esc = (s: string) => s.trim().replace(/[\\%_]/g, (c) => `\\${c}`);
 const COLS =
@@ -31,6 +32,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [last, setLast] = useState<string | null | undefined>(undefined);
+  const [viewF, setViewF] = useState<"all" | "collected" | "open">("all"); // φίλτρο από τα πλακίδια (χωρίς νέα αναζήτηση)
 
   useEffect(() => {
     try {
@@ -106,6 +108,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
         init_qty: r.init_qty == null ? null : Number(r.init_qty),
       }));
       setRows(list);
+      setViewF("all");
       setTotal(count ?? null);
       // κρατά μόνο επιλογές που υπάρχουν ακόμα
       setSel((cur) => new Set([...cur].filter((id) => list.some((r) => r.id === id))));
@@ -117,7 +120,15 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
   }
 
   const pickers = (lines: OrderRow[]) => [...new Set(lines.map((l) => l.picker).filter(Boolean))].join(", ");
-  const groups = useMemo(() => groupOrdersByList(rows ?? []), [rows]);
+  const allGroups = useMemo(() => groupOrdersByList(rows ?? []), [rows]);
+  const groups = useMemo(
+    () =>
+      viewF === "all"
+        ? allGroups
+        : allGroups.filter((g) => (viewF === "collected" ? g.lines.every((l) => l.collected) : g.lines.some((l) => !l.collected))),
+    [allGroups, viewF]
+  );
+  const nColl = (rows ?? []).filter((r) => r.collected).length;
   const toggle = (ids: string[], on: boolean) =>
     setSel((cur) => {
       const n = new Set(cur);
@@ -201,7 +212,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
               <LivePill connected={live.connected} lastAt={live.lastAt ?? last ?? null} /> Γραμμές πωλήσεων του WMS (salexportcl), ανά λίστα. Δεν φορτώνεται
               τίποτα μέχρι να πατήσεις <b>Αναζήτηση</b>.{" "}
               {last === null && "Δεν έχουν συγχρονιστεί ακόμα παραγγελίες."}
-              {last && `Τελευταία: ${fmtDt(last)}.`}
+              {last && <span title={fullDate(last)}>Τελευταία: {relDate(last)}.</span>}
             </p>
           </div>
           <div className="st-actions">
@@ -258,6 +269,19 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
         {notice && <p className="rp-notice ok">{notice}</p>}
 
         {rows !== null && (
+          <KpiTiles
+            active={viewF === "all" ? null : viewF}
+            onPick={(k) => setViewF(k === viewF || k === "lists" || k === "lines" ? "all" : (k as "collected" | "open"))}
+            items={[
+              { key: "lists", label: "Λίστες", value: allGroups.length, tone: "blue" },
+              { key: "lines", label: "Γραμμές", value: rows.length, tone: "neutral" },
+              { key: "collected", label: "Collected (γραμμές)", value: nColl, tone: "green", hint: "Δείξε μόνο λίστες πλήρως collected" },
+              { key: "open", label: "Non Collected (γραμμές)", value: rows.length - nColl, tone: "red", hint: "Δείξε λίστες με γραμμές non collected" },
+            ]}
+          />
+        )}
+
+        {rows !== null && (
           <div className="or-bar">
             <label className="st-check">
               <input type="checkbox" checked={allOn} onChange={(e) => toggle(allIds, e.target.checked)} />
@@ -267,9 +291,6 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
               <span>
                 <b>{groups.length.toLocaleString("el-GR")}</b> λίστες · <b>{rows.length.toLocaleString("el-GR")}</b> γραμμές
                 {total !== null && total > rows.length && ` (από ${total.toLocaleString("el-GR")} — στενέψτε τα φίλτρα)`}
-              </span>
-              <span>
-                <b>{rows.filter((r) => r.collected).length.toLocaleString("el-GR")}</b> collected
               </span>
             </span>
             <span className="or-sel">
@@ -321,7 +342,8 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
                         <span className="or-list">Λίστα {g.list}</span>
                         <span className="or-cust">{h.customer || "—"}</span>
                         <span className="or-meta">
-                          {[h.doc_no && `Παρ. ${h.doc_no}`, h.erp_code && `ERP ${h.erp_code}`, fmtDt(h.order_date), `${g.lines.length} γρ.`].filter(Boolean).join(" · ")}
+                          <span title={fullDate(h.order_date)}>{relDate(h.order_date)}</span>
+                          {[h.doc_no && `Παρ. ${h.doc_no}`, h.erp_code && `ERP ${h.erp_code}`, `${g.lines.length} γρ.`].filter(Boolean).map((x) => ` · ${x}`).join("")}
                         </span>
                         {pickers(g.lines) && <span className="or-picker">Συλλογή: {pickers(g.lines)}</span>}
                         {h.comments && <div className="sl-comments">Σχόλια: {h.comments}</div>}
@@ -340,14 +362,14 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
                         <td onClick={(e) => e.stopPropagation()}>
                           <input type="checkbox" checked={sel.has(r.id)} onChange={(e) => toggle([r.id], e.target.checked)} aria-label={`Επιλογή γραμμής ${r.item}`} />
                         </td>
-                        <td className="mono">{r.item}</td>
-                        <td className="st-desc">{r.description}</td>
-                        <td className="mono">{r.lot}</td>
-                        <td className="mono">{r.sn}</td>
-                        <td className="num">{fmtQty(r.qty ?? r.init_qty)}</td>
-                        <td>{r.from_pos && <span className="rack">{r.from_pos}</span>}</td>
-                        <td>
-                          <span className={`or-status ${r.collected ? "on" : ""}`} title={r.collected ? `${r.collected_by} · ${fmtDt(r.collected_at)}` : ""}>
+                        <td className="mono" data-label="Κωδικός">{r.item}</td>
+                        <td className="st-desc" data-label="Περιγραφή">{r.description}</td>
+                        <td className="mono" data-label="Batch">{r.lot}</td>
+                        <td className="mono" data-label="SN">{r.sn}</td>
+                        <td className="num" data-label="Ποσότητα">{fmtQty(r.qty ?? r.init_qty)}</td>
+                        <td data-label="Από θέση">{r.from_pos && <span className="rack">{r.from_pos}</span>}</td>
+                        <td data-label="Κατάσταση">
+                          <span className={`or-status ${r.collected ? "on" : ""}`} title={r.collected ? `${r.collected_by} · ${fullDate(r.collected_at)}` : ""}>
                             {r.collected ? "Collected" : "Non Collected"}
                           </span>
                         </td>
@@ -356,7 +378,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
                   </tbody>
                 );
               })}
-              {!rows.length && (
+              {!groups.length && (
                 <tbody>
                   <tr>
                     <td colSpan={8} className="st-empty">

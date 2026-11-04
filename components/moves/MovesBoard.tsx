@@ -1,6 +1,7 @@
 "use client";
 
 import FilterFold from "@/components/FilterFold";
+import { fullDate, relDate } from "@/lib/format";
 import { useEffect, useState } from "react";
 import AppBar from "@/components/AppBar";
 import { createClient } from "@/lib/supabase/client";
@@ -15,7 +16,6 @@ const LS = "moves.filters.v1";
 const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const daysAgo = (n: number) => iso(new Date(Date.now() - n * 86400000));
 const EMPTY = (): F => ({ item: "", lot: "", serial: "", customer: "", from: daysAgo(7), to: iso(new Date()), fromPos: "", toPos: "", type: "", doc: "" });
-const fmtDt = (s: string | null) => (s ? new Date(s).toLocaleString("el-GR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }) : "");
 const fmtQty = (n: number | null) => (n == null ? "" : n.toLocaleString("el-GR", { maximumFractionDigits: 3 }));
 // τα % και _ του χρήστη να μη γίνονται μπαλαντέρ στο ilike
 const esc = (s: string) => s.trim().replace(/[\\%_]/g, (c) => `\\${c}`);
@@ -147,7 +147,7 @@ export default function MovesBoard({ userEmail, role }: { userEmail: string | nu
             <p>
               <LivePill connected={live.connected} lastAt={live.lastAt ?? last ?? null} /> Κινήσεις του WMS. Δεν φορτώνεται τίποτα μέχρι να πατήσεις <b>Αναζήτηση</b>.{" "}
               {last === null && "Δεν έχουν συγχρονιστεί ακόμα κινήσεις."}
-              {last && `Τελευταία κίνηση: ${fmtDt(last)}.`}
+              {last && <span title={fullDate(last)}>Τελευταία κίνηση: {relDate(last)}.</span>}
             </p>
           </div>
           <div className="st-actions">
@@ -207,7 +207,7 @@ export default function MovesBoard({ userEmail, role }: { userEmail: string | nu
 
         {rows !== null && (
           <div className="st-tablewrap">
-            <table className="st-table">
+            <table className="st-table st-cards">
               <thead>
                 <tr>
                   {["Ημερομηνία", "Κίνηση", "Παραστατικό", "Κωδικός", "Περιγραφή", "Batch", "Serial", "Ποσότητα", "Από", "Προς", "Πελάτης", "Χρήστης"].map((h, i) => (
@@ -220,22 +220,22 @@ export default function MovesBoard({ userEmail, role }: { userEmail: string | nu
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.id} className={newIds.has(r.id) ? "st-new" : ""}>
-                    <td className="mono">{fmtDt(r.moved_at)}</td>
-                    <td>{r.type}</td>
-                    <td className="mono">{r.doc}</td>
-                    <td className="mono">
+                    <td className="mono reldate" data-label="Ημερομηνία" title={fullDate(r.moved_at)}>{relDate(r.moved_at)}</td>
+                    <td data-label="Κίνηση">{r.type}</td>
+                    <td className="mono" data-label="Παραστατικό">{r.doc}</td>
+                    <td className="mono" data-label="Κωδικός">
                       <button type="button" className="st-link" onClick={() => setF({ ...f, item: r.item })} title="Φίλτρο σε αυτόν τον κωδικό">
                         {r.item}
                       </button>
                     </td>
-                    <td className="st-desc">{r.description}</td>
-                    <td className="mono">{r.lot}</td>
-                    <td className="mono">{r.serial}</td>
-                    <td className="num">{fmtQty(r.qty)}</td>
-                    <td>{r.from_pos && <span className="rack">{r.from_pos}</span>}</td>
-                    <td>{r.to_pos && <span className="rack">{r.to_pos}</span>}</td>
-                    <td>{r.customer}</td>
-                    <td className="dim">{r.username}</td>
+                    <td className="st-desc" data-label="Περιγραφή">{r.description}</td>
+                    <td className="mono" data-label="Batch">{r.lot}</td>
+                    <td className="mono" data-label="Serial">{r.serial}</td>
+                    <td className="num" data-label="Ποσότητα">{fmtQty(r.qty)}</td>
+                    <td data-label="Από">{r.from_pos && <span className="rack">{r.from_pos}</span>}</td>
+                    <td data-label="Προς">{r.to_pos && <span className="rack">{r.to_pos}</span>}</td>
+                    <td data-label="Πελάτης">{r.customer}</td>
+                    <td className="dim" data-label="Χρήστης">{r.username}</td>
                   </tr>
                 ))}
                 {!rows.length && (

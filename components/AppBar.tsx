@@ -3,6 +3,7 @@
 import Link from "next/link";
 import NavTabs from "@/components/NavTabs";
 import LogoutButton from "@/components/auth/LogoutButton";
+import ThemeMenu from "@/components/ThemeMenu";
 import { versionLabel, versionTitle } from "@/lib/version";
 
 export default function AppBar({ email, role }: { email: string | null; role: "admin" | "staff" }) {
@@ -25,6 +26,7 @@ export default function AppBar({ email, role }: { email: string | null; role: "a
         </span>
         <NavTabs />
         <div className="appbar-user">
+          <ThemeMenu />
           <span className="avatar" aria-hidden>
             {initial}
           </span>

@@ -2,6 +2,8 @@
 
 import FilterFold from "@/components/FilterFold";
 import { useEffect, useMemo, useState } from "react";
+import KpiTiles from "@/components/KpiTiles";
+import { fullDate, relDate } from "@/lib/format";
 import AppBar from "@/components/AppBar";
 import LivePill from "@/components/LivePill";
 import { createClient } from "@/lib/supabase/client";
@@ -23,7 +25,6 @@ const LS = "sales.filters.v1";
 const daysAgo = (n: number) => iso(new Date(Date.now() - n * 86400000));
 const LIMIT = 5000;
 const esc = (s: string) => s.trim().replace(/[\\%_]/g, (c) => `\\${c}`);
-const fmtDt = (s: string | null) => (s ? new Date(s).toLocaleString("el-GR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }) : "");
 const fmtQ = (n: number) => n.toLocaleString("el-GR", { maximumFractionDigits: 3 });
 const COLS = SALES_COLS;
 const COLOR_LABEL: Record<OrderColor, string> = { green: "Όλα διαθέσιμα", yellow: "Μερική συλλογή", red: "Χωρίς απόθεμα" };
@@ -46,6 +47,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
   const [modeF, setModeF] = useState<"all" | "strict" | "partial">("all");
   const [collectingOnly, setCollectingOnly] = useState(false);
   const [showExecuted, setShowExecuted] = useState(false);
+  const [sortBy, setSortBy] = useState<"priority" | "newest" | "oldest">("priority");
   const [viewing, setViewing] = useState<string | null>(null); // λίστα ανοιχτή σε παράθυρο διαλόγου
   useEffect(() => {
     if (!viewing) return;
@@ -143,17 +145,36 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
   }, [evals]);
   // «με απόθεμα» = τουλάχιστον ένα είδος μπορεί να συλλεχθεί τώρα· «χωρίς» = κανένα
   const hasStock = (o: OrderEval) => o.lines.some((l) => l.covered > 0);
-  const shown = evals.filter(
-    (o) =>
-      (colorF === "all" || (!o.completed && o.color === colorF)) &&
-      (!repackOnly || o.needsRepack) &&
-      (stockF === "all" || (stockF === "some" ? hasStock(o) : !hasStock(o))) &&
-      (modeF === "all" || (modeF === "strict" ? o.strict : !o.strict)) &&
-      (!collectingOnly || o.collecting)
-  );
+  // προτεραιότητα: έτοιμες → μερικές → με έλλειψη, οι παλαιότερες πρώτα· ολοκληρωμένες στο τέλος
+  const RANK: Record<string, number> = { green: 0, yellow: 1, red: 2 };
+  const ts = (o: OrderEval) => (o.head.order_date ? new Date(o.head.order_date).getTime() : 0);
+  const shown = evals
+    .filter(
+      (o) =>
+        (colorF === "all" || (!o.completed && o.color === colorF)) &&
+        (!repackOnly || o.needsRepack) &&
+        (stockF === "all" || (stockF === "some" ? hasStock(o) : !hasStock(o))) &&
+        (modeF === "all" || (modeF === "strict" ? o.strict : !o.strict)) &&
+        (!collectingOnly || o.collecting)
+    )
+    .sort((a, b) =>
+      sortBy === "newest"
+        ? ts(b) - ts(a)
+        : sortBy === "oldest"
+          ? ts(a) - ts(b)
+          : (a.completed ? 9 : RANK[a.color]) - (b.completed ? 9 : RANK[b.color]) || ts(a) - ts(b)
+    );
   const nCollecting = evals.filter((o) => o.collecting && !o.completed).length;
   const nSome = evals.filter(hasStock).length;
   const nStrict = evals.filter((o) => o.strict).length;
+  const nOpen = evals.filter((o) => !o.completed).length;
+  const kpiActive = collectingOnly ? "collecting" : repackOnly ? "repack" : colorF !== "all" ? colorF : null;
+  function pickKpi(k: string) {
+    const again = k === kpiActive;
+    setColorF(!again && (k === "green" || k === "yellow" || k === "red") ? k : "all");
+    setRepackOnly(!again && k === "repack");
+    setCollectingOnly(!again && k === "collecting");
+  }
 
   const meta = () => ({ generatedAt: new Date(), userEmail, filters: [], syncedAt: null });
   async function print(list: OrderEval[], id: string) {
@@ -268,18 +289,22 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
         {error && <p className="rp-notice error">{error}</p>}
 
         {rows !== null && (
+          <KpiTiles
+            active={kpiActive}
+            onPick={pickKpi}
+            items={[
+              { key: "all", label: "Ανοιχτές λίστες", value: nOpen, tone: "neutral" },
+              { key: "green", label: "Έτοιμες", value: counts.green, tone: "green", hint: "Όλα τα είδη διαθέσιμα" },
+              { key: "yellow", label: "Μερικές", value: counts.yellow, tone: "yellow", hint: "Μερική συλλογή με απόθεμα σε κάποια είδη" },
+              { key: "red", label: "Με έλλειψη", value: counts.red, tone: "red", hint: "Δεν μπορούν να συλλεχθούν" },
+              { key: "repack", label: "Ανασυσκευασία", value: counts.repack, tone: "blue" },
+              { key: "collecting", label: "Σε συλλογή", value: nCollecting, tone: "orange", hint: "Ανοιχτές τώρα σε τερματικό" },
+            ]}
+          />
+        )}
+
+        {rows !== null && (
           <div className="sl-toolbar">
-            <div className="sl-group">
-              <span className="sl-glabel">Κατάσταση</span>
-              <button type="button" className={`sl-chip ${colorF === "all" ? "on" : ""}`} onClick={() => setColorF("all")}>
-                Όλες <b>{evals.length}</b>
-              </button>
-              {(["green", "yellow", "red"] as const).map((c) => (
-                <button key={c} type="button" className={`sl-chip ${c} ${colorF === c ? "on" : ""}`} onClick={() => setColorF(colorF === c ? "all" : c)}>
-                  <span className="sl-dot" /> {COLOR_LABEL[c]} <b>{counts[c]}</b>
-                </button>
-              ))}
-            </div>
             <div className="sl-group">
               <span className="sl-glabel">Απόθεμα</span>
               <button type="button" className={`sl-chip ${stockF === "some" ? "on" : ""}`} onClick={() => setStockF(stockF === "some" ? "all" : "some")} title="Τουλάχιστον ένα είδος υπάρχει στο απόθεμα">
@@ -297,14 +322,16 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
               <button type="button" className={`sl-chip ${modeF === "partial" ? "on" : ""}`} onClick={() => setModeF(modeF === "partial" ? "all" : "partial")}>
                 Μερική <b>{evals.length - nStrict}</b>
               </button>
-              <button type="button" className={`sl-chip orange ${collectingOnly ? "on" : ""}`} onClick={() => setCollectingOnly(!collectingOnly)} title="Λίστες που συλλέγονται αυτή τη στιγμή στο WMS">
-                <span className="sl-live" /> Σε συλλογή <b>{nCollecting}</b>
-              </button>
-              <button type="button" className={`sl-chip blue ${repackOnly ? "on" : ""}`} onClick={() => setRepackOnly(!repackOnly)}>
-                Ανασυσκευασία <b>{counts.repack}</b>
-              </button>
             </div>
             <div className="sl-group sl-opts">
+              <label className="st-check sl-sort">
+                Ταξινόμηση
+                <select value={sortBy} onChange={(e) => setSortBy(e.target.value as typeof sortBy)}>
+                  <option value="priority">Προτεραιότητα</option>
+                  <option value="oldest">Παλαιότερες πρώτα</option>
+                  <option value="newest">Νεότερες πρώτα</option>
+                </select>
+              </label>
               <label className="st-check">
                 <input type="checkbox" checked={allSel} onChange={(e) => setSel(e.target.checked ? new Set(shown.map((o) => o.key)) : new Set())} />
                 Επιλογή όλων ({shown.length})
@@ -340,7 +367,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
               <thead>
                 <tr>
                   <th />
-                  {["Λίστα", "Πελάτης", "Παραστατικό / ERP", "Ημερομηνία", "Συλλογή", "Γραμμές", "Κατάσταση", ""].map((h) => (
+                  {["Λίστα", "Πελάτης", "Ημερομηνία", "Συλλογή", "Γραμμές", "Κατάσταση", ""].map((h) => (
                     <th key={h}>
                       <span className="mv-th">{h}</span>
                     </th>
@@ -384,18 +411,15 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
                       <td className="st-desc">
                         {o.head.customer}
                         {o.head.is_abroad && <span className="sl-tag abroad">Εξωτερικό</span>}
-                        {o.head.customer_city && <div className="dim">{o.head.customer_city}</div>}
                         {o.head.comments && (
                           <div className="sl-comments" title={o.head.comments}>
                             {o.head.comments}
                           </div>
                         )}
                       </td>
-                      <td className="mono">
-                        {o.head.doc_no}
-                        {o.head.erp_code && <div className="dim">ERP {o.head.erp_code}</div>}
+                      <td className="sl-c-date reldate" title={fullDate(o.head.order_date)}>
+                        {relDate(o.head.order_date)}
                       </td>
-                      <td className="mono sl-c-date">{fmtDt(o.head.order_date)}</td>
                       <td>
                         <span className={`sl-tag ${o.strict ? "strict" : ""}`}>{o.strict ? "Αυστηρή" : "Μερική"}</span>
                       </td>
@@ -431,7 +455,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
                         <tr key={l.line.id} className="sl-line">
                           <td />
                           <td className="mono">{l.line.item}</td>
-                          <td className="st-desc" colSpan={2}>
+                          <td className="st-desc">
                             {l.line.description}
                             {l.line.lot && <div className="sl-lot">Δεσμευμένη παρτίδα: {l.line.lot}</div>}
                             {l.repack && (
@@ -465,7 +489,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
               {!shown.length && (
                 <tbody>
                   <tr>
-                    <td colSpan={9} className="st-empty">
+                    <td colSpan={8} className="st-empty">
                       Καμία παραγγελία.
                     </td>
                   </tr>

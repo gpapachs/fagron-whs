@@ -1,5 +1,6 @@
 "use client";
 
+import KpiTiles from "@/components/KpiTiles";
 import FilterFold from "@/components/FilterFold";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -133,6 +134,21 @@ export default function StockBoard({
     return { items: items.size, positions: positions.size, qty };
   }, [filtered]);
 
+  // μετρητές σε όλο το απόθεμα (για τα πλακίδια που φιλτράρουν)
+  const flags = useMemo(() => {
+    const t0 = today();
+    const s90 = plusDays(90);
+    let expired = 0,
+      soon90 = 0,
+      serial = 0;
+    for (const r of rows) {
+      if (r.expiry && r.expiry < t0) expired++;
+      else if (r.expiry && r.expiry <= s90) soon90++;
+      if (r.serial) serial++;
+    }
+    return { expired, soon90, serial };
+  }, [rows]);
+
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE));
   const shown = filtered.slice(page * PAGE, page * PAGE + PAGE);
   const active = JSON.stringify(f) !== JSON.stringify(EMPTY);
@@ -251,25 +267,28 @@ export default function StockBoard({
         </section>
         </FilterFold>
 
-        <div className="st-summary">
-          <span>
-            <b>{filtered.length.toLocaleString("el-GR")}</b> γραμμές
-          </span>
-          <span>
-            <b>{totals.items.toLocaleString("el-GR")}</b> κωδικοί
-          </span>
-          <span>
-            <b>{totals.positions.toLocaleString("el-GR")}</b> θέσεις
-          </span>
-          <span>
-            ποσότητα <b>{fmtQty(totals.qty)}</b>
-          </span>
-          {rows.length === 0 && <span className="rp-hint">Το απόθεμα γεμίζει με τον συγχρονισμό του WMS (νέο sync-stock.ps1).</span>}
-        </div>
+        <KpiTiles
+          active={f.exp === "expired" ? "expired" : f.exp === "90" ? "soon" : f.serialOnly ? "serial" : null}
+          onPick={(k) => {
+            if (k === "expired") setF({ ...f, exp: f.exp === "expired" ? "all" : "expired" });
+            else if (k === "soon") setF({ ...f, exp: f.exp === "90" ? "all" : "90" });
+            else if (k === "serial") setF({ ...f, serialOnly: !f.serialOnly });
+          }}
+          items={[
+            { key: "rows", label: "Γραμμές", value: filtered.length, tone: "neutral" },
+            { key: "items", label: "Κωδικοί", value: totals.items, tone: "blue" },
+            { key: "pos", label: "Θέσεις", value: totals.positions, tone: "blue" },
+            { key: "qty", label: "Ποσότητα", value: fmtQty(totals.qty), tone: "neutral" },
+            { key: "expired", label: "Ληγμένα", value: flags.expired, tone: "red", hint: "Κλικ: μόνο ληγμένα" },
+            { key: "soon", label: "Λήγουν ≤90 ημ.", value: flags.soon90, tone: "yellow", hint: "Κλικ: λήγουν σε ≤90 ημέρες" },
+            { key: "serial", label: "Με serial", value: flags.serial, tone: "green", hint: "Κλικ: μόνο με serial" },
+          ]}
+        />
+        {rows.length === 0 && <p className="rp-hint">Το απόθεμα γεμίζει με τον συγχρονισμό του WMS (νέο sync-stock.ps1).</p>}
         {error && <p className="rp-notice error">{error}</p>}
 
         <div className="st-tablewrap">
-          <table className="st-table">
+          <table className="st-table st-cards">
             <thead>
               <tr>
                 {th("position", "Θέση")}
@@ -286,7 +305,7 @@ export default function StockBoard({
             <tbody>
               {shown.map((r) => (
                 <tr key={`${r.item}|${r.position}|${r.lot}|${r.serial}|${fresh.has(r.item) ? flash : 0}`} className={fresh.has(r.item) ? "st-new" : ""}>
-                  <td>
+                  <td data-label="Θέση">
                     {r.position ? (
                       <div className="st-poslist">
                         {splitPos(r.position).map((p) => (
@@ -299,17 +318,17 @@ export default function StockBoard({
                       "—"
                     )}
                   </td>
-                  <td className="st-hide-sm dim">{r.area}</td>
-                  <td className="mono">
+                  <td className="st-hide-sm dim" data-label="Περιοχή">{r.area}</td>
+                  <td className="mono" data-label="Κωδικός">
                     <button type="button" className="st-link" onClick={() => setF({ ...f, text: r.item })} title="Μόνο αυτός ο κωδικός">
                       {r.item}
                     </button>
                   </td>
-                  <td className="st-desc">{r.description}</td>
-                  <td className="mono">{r.lot}</td>
-                  <td className="mono">{r.serial}</td>
-                  <td className={`mono ${r.expiry && r.expiry < t ? "st-expired" : r.expiry && r.expiry <= soon ? "st-soon" : ""}`}>{fmtExp(r.expiry)}</td>
-                  <td className="num">
+                  <td className="st-desc" data-label="Περιγραφή">{r.description}</td>
+                  <td className="mono" data-label="Παρτίδα">{r.lot}</td>
+                  <td className="mono" data-label="Serial">{r.serial}</td>
+                  <td data-label="Λήξη" className={`mono ${r.expiry && r.expiry < t ? "st-expired" : r.expiry && r.expiry <= soon ? "st-soon" : ""}`}>{fmtExp(r.expiry)}</td>
+                  <td className="num" data-label="Ποσότητα">
                     {fmtQty(r.qty)}
                     {splitPos(r.position).length > 1 && <div className="st-sub">σύνολο {splitPos(r.position).length} θέσεων</div>}
                   </td>
