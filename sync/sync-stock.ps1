@@ -811,16 +811,24 @@ where isnull(m.isNowCollecting, 0) = 1 and isnull(m.isCompleted, 0) = 0 and m.Re
 }
 $script:LastCollecting = $null
 
-# Λίστες ανοιχτές στην εφαρμογή που στο WMS είναι πλέον ολοκληρωμένες: ξαναδιαβάζονται και ανεβαίνουν.
+# Λίστες ανοιχτές στην εφαρμογή που στο WMS ολοκληρώθηκαν (ξαναδιαβάζονται) ή διαγράφηκαν (αφαιρούνται).
 function Refresh-Completed([string]$code = 'SALEXPORTLS') {
   $open = @(Sb-Request 'POST' '/rest/v1/rpc/wms_open_lists' @{ p_doc_type = $code } | ForEach-Object { $_ } | ForEach-Object { [string]$_ } | Where-Object { $_ -match '^\d+$' })
   if (-not $open.Count) { return }
   $done = New-Object Collections.ArrayList
+  $exists = @{}
   for ($i = 0; $i -lt $open.Count; $i += 500) {
     $ids = ($open[$i..([math]::Min($open.Count, $i + 500) - 1)]) -join ','
-    $t = Invoke-Sql "select m.ID as id from dbo.ms_Invoicem m where m.ID in ($ids) and isnull(m.isCompleted, 0) <> 0"
-    foreach ($r in $t.Rows) { [void]$done.Add([string]$r['id']) }
+    $t = Invoke-Sql "select cast(m.ID as varchar(30)) as id, cast(isnull(m.isCompleted, 0) as int) as c from dbo.ms_Invoicem m where m.ID in ($ids)"
+    foreach ($r in $t.Rows) { $id = [string]$r['id']; $exists[$id] = $true; if ([int]$r['c'] -ne 0) { [void]$done.Add($id) } }
   }
+  # δεν υπάρχουν πια στο WMS -> αφαίρεση (με όριο ασφαλείας: όχι αν «λείπουν» σχεδόν όλες)
+  $gone = @($open | Where-Object { -not $exists.ContainsKey($_) })
+  if ($gone.Count -and $gone.Count -lt [math]::Max(20, $open.Count / 2)) {
+    $n = Sb-Request 'POST' '/rest/v1/rpc/wms_orders_remove' @{ p_doc_type = $code; p_order_ids = [string[]]$gone }
+    Log ("Διαγραμμένες στο WMS ($code): {0} λίστες αφαιρέθηκαν ({1} γραμμές)" -f $gone.Count, $n)
+    [void](Sb-Request 'POST' '/rest/v1/rpc/wms_signal' @{ p_key = 'orders_sync'; p_n = [int]$n })
+  } elseif ($gone.Count) { Log ("Διαγραμμένες στο WMS ($code): {0} -- πάρα πολλές, δεν αφαιρούνται (έλεγχος)" -f $gone.Count) }
   if (-not $done.Count) { return }
   $rows = New-Object Collections.ArrayList
   for ($i = 0; $i -lt $done.Count; $i += 300) {
@@ -947,5 +955,6 @@ if ($general.stock.Count -gt 0) {
 Sync-Moves
 foreach ($oc in 'SALEXPORTCL', 'SALEXPORTLS') { try { Sync-Orders $oc } catch { Log ("Orders $($oc): " + $_) } }
 try { Sync-Collecting 'SALEXPORTLS' } catch { Log ("Σε συλλογή: " + $_) }
+try { Refresh-Completed 'SALEXPORTLS' } catch { Log ("Ολοκληρωμένες / διαγραμμένες: " + $_) }
 
 if (-not (Test-Path (Join-Path $Here 'wms-orders.txt'))) { try { Discover-Orders } catch { Log ("Παραγγελίες (εύρεση): " + $_) } }
