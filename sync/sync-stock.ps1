@@ -540,6 +540,23 @@ function Sync-Moves {
   if ($rows.Count) { try { [void](Sb-Request 'POST' '/rest/v1/rpc/wms_signal' @{ p_key = 'moves'; p_n = $rows.Count }) } catch {} }
 }
 
+# Μία φορά: κινήσεις από 01/01/2026 έως εκεί που ξεκινούσε το αρχικό sync (για αναφορές έτους).
+function Backfill-Moves {
+  $mark = Join-Path $Here 'moves-backfill-20260101.done'
+  if (Test-Path $mark) { return }
+  $from = [DateTime]'2026-01-01'; $until = [DateTime]'2026-05-10'
+  $total = 0
+  for ($d = $from; $d -lt $until; $d = $d.AddMonths(1)) {
+    $e = $d.AddMonths(1); if ($e -gt $until) { $e = $until }
+    $q = Build-MovesQuery ("s.RecDate >= '{0:yyyyMMdd}' and s.RecDate < '{1:yyyyMMdd}'" -f $d, $e)
+    $rows = Convert-Moves (Invoke-Sql $q)
+    if ($rows.Count -and -not (Upload-Moves $rows)) { Log 'Κινήσεις (αναδρομικά): διακοπή στο ανέβασμα'; return }
+    $total += $rows.Count
+  }
+  Set-Content -Path $mark -Value (Get-Date -Format s) -Encoding UTF8
+  Log ("Κινήσεις (αναδρομικά από 01/01/2026): {0} γραμμές" -f $total)
+}
+
 function Convert-Moves($t) {
   $names = @($t.Columns | ForEach-Object { $_.ColumnName.ToLowerInvariant() })
   $has = @{}; foreach ($n in $names) { $has[$n] = $true }
@@ -981,6 +998,7 @@ if ($general.stock.Count -gt 0) {
 }
 
 Sync-Moves
+try { Backfill-Moves } catch { Log ("Κινήσεις (αναδρομικά): " + $_) }
 foreach ($oc in 'SALEXPORTCL', 'SALEXPORTLS') { try { Sync-Orders $oc } catch { Log ("Orders $($oc): " + $_) } }
 try { Sync-Collecting 'SALEXPORTLS' } catch { Log ("Σε συλλογή: " + $_) }
 try { Refresh-Completed 'SALEXPORTLS' } catch { Log ("Ολοκληρωμένες / διαγραμμένες: " + $_) }
