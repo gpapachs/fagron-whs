@@ -117,6 +117,21 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
         <button type="submit" className="btn primary" disabled={loading}>
           {loading ? "Υπολογισμός…" : "Υπολογισμός"}
         </button>
+        <button
+          type="button"
+          className="btn ghost sm"
+          title="Επαναφορά ρυθμίσεων· τα «Κράτα όλο» και οι περιοχές μένουν"
+          onClick={() => {
+            save({ ...DEF, prefix: "", areaClass: s.areaClass, excluded: s.excluded });
+            setRows(null);
+            setLoaded(null);
+            setQ("");
+            setView("lines");
+            setError(null);
+          }}
+        >
+          Καθαρισμός
+        </button>
         <div className="rl-params">
           <label className="field">
             Μένουν στην κεντρική

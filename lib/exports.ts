@@ -1256,7 +1256,12 @@ function batchRow(b: BatchLike) {
 }
 const BATCH_W = [12, 40, 18, 11, 8, 28, 11, 12, 11, 12, 11, 9, 11, 9, 9, 12, 12, 9, 40];
 
-export function analysisWorkbook(XLSX: XLSXLib, a: AnalysisLike, meta: StockExportMeta) {
+export function analysisWorkbook(
+  XLSX: XLSXLib,
+  a: AnalysisLike,
+  meta: StockExportMeta,
+  expiring?: { item: string; description: string | null; position: string; area: string | null; lot: string | null; expiry: string; qty: number }[]
+) {
   const wb = XLSX.utils.book_new();
   const qty = (bs: { stock: number }[]) => Math.round(bs.reduce((s, b) => s + b.stock, 0) * 1000) / 1000;
   const pal = (bs: { pallets: number | null }[]) => {
@@ -1274,7 +1279,9 @@ export function analysisWorkbook(XLSX: XLSXLib, a: AnalysisLike, meta: StockExpo
     { "Ομάδα": "Κωδικοί χωρίς κατανάλωση (ανέγγιχτες παρτίδες)", "Παρτίδες": a.noConsumption.length, "Ποσότητα σήμερα": qty(a.noConsumption), "Παλέτες (εκτίμηση)": pal(a.noConsumption) },
     { "Ομάδα": "Κάλυψη > 24 μηνών (κωδικοί)", "Παρτίδες": a.overstock.length, "Ποσότητα σήμερα": Math.round(a.overstock.reduce((s, c) => s + c.stock, 0)), "Παλέτες (εκτίμηση)": pal(a.overstock) },
     { "Ομάδα": "FIFO / FEFO", "Παρτίδες": a.fifo.length, "Ποσότητα σήμερα": qty(a.fifo.map((f) => f.batch)), "Παλέτες (εκτίμηση)": pal(a.fifo.map((f) => f.batch)) },
-    { "Ομάδα": "Λήξεις < 6 μηνών (ανέγγιχτες)", "Παρτίδες": a.expiring.length, "Ποσότητα σήμερα": qty(a.expiring), "Παλέτες (εκτίμηση)": pal(a.expiring) },
+    expiring
+      ? { "Ομάδα": "Λήξεις < 6 μηνών (όλο το απόθεμα, γραμμές θέσεων)", "Παρτίδες": expiring.length, "Ποσότητα σήμερα": qty(expiring.map((r) => ({ stock: r.qty }))), "Παλέτες (εκτίμηση)": "" }
+      : { "Ομάδα": "Λήξεις < 6 μηνών (ανέγγιχτες)", "Παρτίδες": a.expiring.length, "Ποσότητα σήμερα": qty(a.expiring), "Παλέτες (εκτίμηση)": pal(a.expiring) },
     { "Ομάδα": "Για έλεγχο (μοναδική παρτίδα, έξοδος πριν την παραλαβή)", "Παρτίδες": a.toCheck.length, "Ποσότητα σήμερα": qty(a.toCheck), "Παλέτες (εκτίμηση)": pal(a.toCheck) },
   ];
   XLSX.utils.book_append_sheet(wb, sheet(XLSX, summary, [58, 10, 16, 30]), "Σύνοψη");
@@ -1309,7 +1316,17 @@ export function analysisWorkbook(XLSX: XLSXLib, a: AnalysisLike, meta: StockExpo
     ),
     "FIFO-FEFO"
   );
-  XLSX.utils.book_append_sheet(wb, sheet(XLSX, a.expiring.map(batchRow), BATCH_W), "Λήξεις <6μ");
+  XLSX.utils.book_append_sheet(
+    wb,
+    expiring
+      ? sheet(
+          XLSX,
+          expiring.map((r) => ({ "Κωδικός": r.item, "Περιγραφή": r.description ?? "", "Παρτίδα": r.lot ?? "", "Θέση": r.position, "Περιοχή": r.area ?? "", "Λήξη": dOnly(r.expiry), "Ποσότητα": r.qty })),
+          [12, 40, 20, 16, 26, 11, 11]
+        )
+      : sheet(XLSX, a.expiring.map(batchRow), BATCH_W),
+    "Λήξεις <6μ"
+  );
   XLSX.utils.book_append_sheet(wb, sheet(XLSX, a.toCheck.map(batchRow), BATCH_W), "Για έλεγχο");
   XLSX.utils.book_append_sheet(wb, sheet(XLSX, a.untouched.map(batchRow), BATCH_W), "Ανέγγιχτες");
   XLSX.utils.book_append_sheet(

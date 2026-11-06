@@ -15,11 +15,15 @@ const yearStart = () => `${new Date().getFullYear()}-01-01`;
 const fq = (n: number | null | undefined, d = 3) => (n == null ? "" : n.toLocaleString("el-GR", { maximumFractionDigits: d }));
 const fd = (s: string | null) => (s ? new Date(s.length <= 10 ? `${s}T00:00:00` : s).toLocaleDateString("el-GR", { day: "2-digit", month: "2-digit", year: "2-digit" }) : "");
 
+const EXP_MONTHS = 6;
+const isoDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+export type ExpRow = { item: string; description: string | null; position: string; area: string | null; lot: string | null; expiry: string; qty: number };
+
 const VIEWS: { key: View; label: string; hint: string }[] = [
   { key: "noConsumption", label: "Χωρίς κατανάλωση", hint: "Ανέγγιχτες παρτίδες κωδικών χωρίς καμία έξοδο/ανάλωση στην περίοδο" },
   { key: "overstock", label: "Κάλυψη > 24 μ.", hint: "Απόθεμα κωδικού ÷ μέση μηνιαία κατανάλωση της περιόδου" },
   { key: "fifo", label: "FIFO / FEFO", hint: "Ανέγγιχτη παλαιότερη παρτίδα ενώ καταναλώνεται νεότερη" },
-  { key: "expiring", label: "Λήξεις < 6 μ.", hint: "Ανέγγιχτες παρτίδες ληγμένες ή που λήγουν σε 6 μήνες" },
+  { key: "expiring", label: "Λήξεις < 6 μ.", hint: "Όλο το απόθεμα του προθέματος (κάθε προέλευση) που έχει λήξει ή λήγει μέσα σε 6 μήνες" },
   { key: "toCheck", label: "Για έλεγχο", hint: "Μοναδική παρτίδα· η τελευταία έξοδος του κωδικού έγινε πριν την παραλαβή" },
   { key: "old", label: "Ανέγγιχτες > 90 ημ.", hint: "Παραλαβή πριν από 90+ ημέρες, τίποτα δεν έχει φύγει" },
   { key: "untouched", label: "Όλες οι ανέγγιχτες", hint: "Σημερινό απόθεμα παρτίδας ≥ παραληφθείσα ποσότητα" },
@@ -35,6 +39,7 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
   const [palErr, setPalErr] = useState<string | null>(null);
   const [view, setView] = useState<View>("noConsumption");
   const [q, setQ] = useState("");
+  const [exp, setExp] = useState<ExpRow[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -62,10 +67,44 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
     } catch {
       /* τίποτα */
     }
-    const { data, error } = await createClient().rpc("wms_receipt_analysis", { p_prefix: clean, p_from: from });
+    const sb = createClient();
+    // λήξεις: όλο το απόθεμα του προθέματος, όχι μόνο οι παραλαβές της περιόδου (π.χ. έτοιμα
+    // προϊόντα παραγωγής ή απόθεμα προηγούμενων ετών δεν έχουν «παραλαβή» στην περίοδο)
+    const until = new Date();
+    until.setMonth(until.getMonth() + EXP_MONTHS);
+    const [res, ex] = await Promise.all([
+      sb.rpc("wms_receipt_analysis", { p_prefix: clean, p_from: from }),
+      sb
+        .from("wms_stock_v")
+        .select("item, description, position, area, lot, expiry, qty")
+        .like("item", `${clean}%`)
+        .not("expiry", "is", null)
+        .lte("expiry", isoDate(until))
+        .gt("qty", 0)
+        .order("expiry")
+        .range(0, 4999),
+    ]);
     setLoading(false);
-    if (error) return setError(`Η ανάλυση απέτυχε: ${error.message}`);
-    setRaw({ rows: ((data as Record<string, unknown>[]) ?? []).map(normReceipt), prefix: clean, from });
+    if (res.error) return setError(`Η ανάλυση απέτυχε: ${res.error.message}`);
+    setRaw({ rows: ((res.data as Record<string, unknown>[]) ?? []).map(normReceipt), prefix: clean, from });
+    setExp(ex.error ? null : ((ex.data as ExpRow[]) ?? []).map((r) => ({ ...r, qty: Number(r.qty) || 0 })));
+    if (ex.error) setError(`Οι λήξεις δεν φορτώθηκαν: ${ex.error.message}`);
+  }
+
+  function clearAll() {
+    setPrefix("");
+    setFrom(yearStart());
+    setQ("");
+    setView("noConsumption");
+    setRaw(null);
+    setExp(null);
+    setError(null);
+    setPalErr(null);
+    try {
+      window.localStorage.setItem(LS, JSON.stringify({ mode }));
+    } catch {
+      /* τίποτα */
+    }
   }
 
   // χειροκίνητη ποσότητα ανά παλέτα: αποθηκεύεται για όλους, ισχύει σε όλες τις αναλύσεις
@@ -85,7 +124,7 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
     setBusy(true);
     try {
       const [XLSX, ex] = await Promise.all([import("xlsx"), import("@/lib/exports")]);
-      const { wb, fileName } = ex.analysisWorkbook(XLSX, a, { generatedAt: new Date(), userEmail, filters: [], syncedAt: null });
+      const { wb, fileName } = ex.analysisWorkbook(XLSX, a, { generatedAt: new Date(), userEmail, filters: [], syncedAt: null }, exp ?? undefined);
       XLSX.writeFile(wb, fileName);
     } finally {
       setBusy(false);
@@ -100,9 +139,10 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
     !a ? [] : v === "noConsumption" ? a.noConsumption : v === "expiring" ? a.expiring : v === "toCheck" ? a.toCheck : v === "old" ? a.old : v === "untouched" ? a.untouched : v === "partial" ? a.partial : [];
   const shownBatches = useMemo(() => batchesOf(view).filter((b) => match(b.item, b.description, b.lot, b.supplier)), [a, view, q]); // eslint-disable-line react-hooks/exhaustive-deps
   const shownCover = useMemo(() => (a?.overstock ?? []).filter((c) => match(c.item, c.description)), [a, q]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shownExp = useMemo(() => (exp ?? []).filter((r) => match(r.item, r.description, r.lot, r.position)), [exp, q]); // eslint-disable-line react-hooks/exhaustive-deps
   const shownFifo = useMemo(() => (a?.fifo ?? []).filter((f) => match(f.batch.item, f.batch.description, f.batch.lot)), [a, q]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const count = (v: View) => (!a ? 0 : v === "overstock" ? a.overstock.length : v === "fifo" ? a.fifo.length : batchesOf(v).length);
+  const count = (v: View) => (!a ? 0 : v === "overstock" ? a.overstock.length : v === "fifo" ? a.fifo.length : v === "expiring" ? exp?.length ?? 0 : batchesOf(v).length);
   const tone: Record<View, "green" | "yellow" | "red" | "blue" | "orange" | "neutral"> = {
     noConsumption: "red",
     overstock: "orange",
@@ -177,6 +217,9 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
           <button type="submit" className="btn primary" disabled={loading}>
             {loading ? "Ανάλυση…" : "Ανάλυση"}
           </button>
+          <button type="button" className="btn ghost sm" onClick={clearAll}>
+            Καθαρισμός
+          </button>
           <div className="an-quick">
             Γρήγορα:
             {QUICK.map((p) => (
@@ -206,7 +249,7 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
             <div className="an-bar">
               <span className="dim">
                 {VIEWS.find((v) => v.key === view)?.hint}
-                {view !== "fifo" && (
+                {view !== "fifo" && view !== "expiring" && (
                   <>
                     {" · "}
                     <PalletLine label="Σε αυτή την ομάδα" bs={view === "overstock" ? shownCover : shownBatches} />
@@ -219,6 +262,8 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
               <CoverTable rows={shownCover} months={a.periodMonths} onPal={savePallet} />
             ) : view === "fifo" ? (
               <FifoTable rows={shownFifo} />
+            ) : view === "expiring" ? (
+              <ExpTable rows={shownExp} />
             ) : (
               <BatchTable rows={shownBatches} partial={view === "partial"} onPal={savePallet} />
             )}
@@ -331,6 +376,43 @@ function CoverTable({ rows, months, onPal }: { rows: Coverage[]; months: number;
           {!rows.length && (
             <tr>
               <td colSpan={9} className="st-empty">Κανένας κωδικός με κάλυψη πάνω από 24 μήνες.</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ExpTable({ rows }: { rows: ExpRow[] }) {
+  const today = isoDate(new Date());
+  return (
+    <div className="st-tablewrap">
+      <table className="st-table st-cards">
+        <thead>
+          <tr>
+            {["Κωδικός", "Περιγραφή", "Παρτίδα", "Θέση", "Περιοχή", "Λήξη", "Ποσότητα"].map((h) => (
+              <th key={h}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={`${r.item}|${r.lot}|${r.position}|${i}`}>
+              <td className="mono" data-label="Κωδικός">{r.item}</td>
+              <td className="st-desc" data-label="Περιγραφή">{r.description}</td>
+              <td className="mono" data-label="Παρτίδα">{r.lot}</td>
+              <td data-label="Θέση"><span className="rack">{r.position}</span></td>
+              <td className="dim" data-label="Περιοχή">{r.area}</td>
+              <td className={`mono ${r.expiry < today ? "st-expired" : "st-soon"}`} data-label="Λήξη">
+                {fd(r.expiry)} {r.expiry < today && <b>· ΛΗΓΜΕΝΟ</b>}
+              </td>
+              <td className="num" data-label="Ποσότητα"><b>{fq(r.qty)}</b></td>
+            </tr>
+          ))}
+          {!rows.length && (
+            <tr>
+              <td colSpan={7} className="st-empty">Καμία λήξη μέσα σε 6 μήνες.</td>
             </tr>
           )}
         </tbody>
