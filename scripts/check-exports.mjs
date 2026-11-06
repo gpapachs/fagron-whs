@@ -10,8 +10,9 @@ import { jsPDF } from "jspdf";
 import { autoTable } from "jspdf-autotable";
 import * as XLSX from "xlsx";
 import { buildPlan, filterStockForRecipes, indexStock, picksByRecipe } from "../lib/repack.ts";
-import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkbook, stockPdf, stockWorkbook, movesPdf, movesWorkbook, ordersPdf, ordersWorkbook, salesListPdf, analysisWorkbook } from "../lib/exports.ts";
+import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkbook, stockPdf, stockWorkbook, movesPdf, movesWorkbook, ordersPdf, ordersWorkbook, salesListPdf, analysisWorkbook, relocationWorkbook, relocationPdf } from "../lib/exports.ts";
 import { analyse, normReceipt } from "../lib/analysis.ts";
+import { normRel, planRelocation } from "../lib/relocation.ts";
 import { buildReservations, evaluateOrders, orderColor } from "../lib/sales.ts";
 import * as jobsLib from "../lib/jobs.ts";
 import bwipjs from "bwip-js";
@@ -324,6 +325,26 @@ if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) 
   const { wb } = analysisWorkbook(XLSX, a, { generatedAt: new Date(), userEmail: "alex@whs.local", filters: [], syncedAt: null });
   if (wb.SheetNames.length !== 9) { console.error("ανάλυση: φύλλα", wb.SheetNames); process.exitCode = 1; }
   console.log("ανάλυση παραλαβών: OK");
+}
+
+// πλάνο μεταφοράς: μένουν 3 μήνες σε ολόκληρες παλέτες, φεύγουν οι νεότερες, θέσεις που αδειάζουν
+{
+  const R = (o) => normRel({ item: "41-00-001", description: "JAR", pos: "20.01.01.01", area: "ΚΕΝΤΡΙΚΗ ΑΠΟΘΗΚΗ", lot: "A", expiry: "2030-01-01", qty: 1000, lot_first_receipt: "2026-02-01T00:00:00Z", item_out_qty: 1000, item_out_n: 10, item_out_last: "2026-10-01T00:00:00Z", item_first_move: "2026-01-05T00:00:00Z", open_demand: 0, open_lists: 0, pal_manual: 500, pal_manual_by: "x", pal_wms_ppp: null, pos_other_rows: 0, item_first_receipt: "2026-02-01T00:00:00Z", ...o });
+  const rows = [
+    R({}),
+    R({ pos: "20.01.01.02", lot: "B", expiry: "2031-01-01", lot_first_receipt: "2026-09-01T00:00:00Z" }),
+    R({ pos: "20.01.01.03", lot: "C", expiry: "2032-01-01", lot_first_receipt: "2026-10-01T00:00:00Z" }),
+    R({ item: "41-00-002", pos: "20.02.01.01", lot: "Z", item_out_qty: 0, item_out_n: 0, item_first_move: "2026-01-10T00:00:00Z", item_first_receipt: null, qty: 300, pal_manual: null }),
+    R({ item: "41-00-003", pos: "200.00.00.00", area: "ΕΞΩΤΕΡΙΚΗ ΑΠΟΘΗΚΗ ΝΑΤΣΙΟΠΟΥΛΟΣ", lot: "X", qty: 900 }),
+  ];
+  const p = planRelocation(rows, { prefix: "41", from: "2026-01-01", keepMonths: 3, includeNew: false, partial: true, areaClass: {}, excluded: [], today: new Date("2026-11-06T10:00:00") });
+  const i1 = p.items.find((i) => i.item === "41-00-001");
+  const i2 = p.items.find((i) => i.item === "41-00-002");
+  const ok = i1 && i1.keep === 500 && i1.moveQty === 2500 && i1.lines[0].lot === "C" && i2.category === "dead" && i2.moveQty === 300 && p.freedPositions.includes("20.01.01.03") && !p.freedPositions.includes("20.01.01.01") && p.items.find((i) => i.item === "41-00-003").offsite === 900;
+  if (!ok) { console.error("πλάνο μεταφοράς: λάθος", i1 && { keep: i1.keep, move: i1.moveQty, first: i1.lines[0]?.lot }, i2 && { c: i2.category, m: i2.moveQty }, p.freedPositions); process.exitCode = 1; }
+  relocationWorkbook(XLSX, p, { generatedAt: new Date(), userEmail: "alex@whs.local", filters: [], syncedAt: null });
+  relocationPdf(jsPDF, autoTable, fonts, p, { generatedAt: new Date(), userEmail: "alex@whs.local", filters: [], syncedAt: null });
+  console.log("πλάνο μεταφοράς: OK");
 }
 
 console.log(process.exitCode ? "ΑΠΕΤΥΧΕ" : "OK: όλες οι εξαγωγές δουλεύουν");

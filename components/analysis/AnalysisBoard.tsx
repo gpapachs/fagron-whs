@@ -5,7 +5,8 @@ import AppBar from "@/components/AppBar";
 import KpiTiles from "@/components/KpiTiles";
 import { createClient } from "@/lib/supabase/client";
 import { analyse, normReceipt, sumPallets, sumStock, withPallet, type Analysis, type Batch, type Coverage, type FifoCase, type PalSource, type ReceiptRow } from "@/lib/analysis";
-import { displayUser } from "@/lib/users";
+import PalInput from "@/components/analysis/PalInput";
+import RelocationBoard from "@/components/analysis/RelocationBoard";
 
 type View = "noConsumption" | "overstock" | "fifo" | "expiring" | "toCheck" | "old" | "untouched" | "partial";
 const LS = "analysis.v1";
@@ -26,6 +27,7 @@ const VIEWS: { key: View; label: string; hint: string }[] = [
 ];
 
 export default function AnalysisBoard({ userEmail, role }: { userEmail: string | null; role: "admin" | "staff" }) {
+  const [mode, setMode] = useState<"receipts" | "relocate">("receipts");
   const [prefix, setPrefix] = useState("60");
   const [from, setFrom] = useState(yearStart());
   const [raw, setRaw] = useState<{ rows: ReceiptRow[]; prefix: string; from: string } | null>(null);
@@ -41,6 +43,7 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
     try {
       const s = JSON.parse(window.localStorage.getItem(LS) ?? "{}");
       if (s.prefix) setPrefix(s.prefix);
+      if (s.mode === "relocate") setMode("relocate");
       if (s.from) setFrom(s.from);
     } catch {
       /* τίποτα */
@@ -55,7 +58,7 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
     setLoading(true);
     setError(null);
     try {
-      window.localStorage.setItem(LS, JSON.stringify({ prefix: clean, from }));
+      window.localStorage.setItem(LS, JSON.stringify({ prefix: clean, from, mode }));
     } catch {
       /* τίποτα */
     }
@@ -117,16 +120,51 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
       <div className="wrap stock">
         <div className="header">
           <div className="titleblock">
-            <h1>Ανάλυση παραλαβών</h1>
-            <p>Παρτίδες που ήρθαν από προμηθευτή από μια ημερομηνία και μετά, σε σχέση με το σημερινό απόθεμα: τι δεν έχει αναλωθεί, τι δεν κινείται, υπεραπόθεμα, FIFO, λήξεις.</p>
+            <h1>{mode === "receipts" ? "Ανάλυση παραλαβών" : "Μεταφορά αποθέματος"}</h1>
+            <p>
+              {mode === "receipts"
+                ? "Παρτίδες που ήρθαν από προμηθευτή από μια ημερομηνία και μετά, σε σχέση με το σημερινό απόθεμα: τι δεν έχει αναλωθεί, τι δεν κινείται, υπεραπόθεμα, FIFO, λήξεις."
+                : "Τι μπορεί να φύγει σε εξωτερική αποθήκη χωρίς να λείψει από την παραγωγή: μένει η κατανάλωση των επόμενων μηνών, φεύγει το υπόλοιπο, με λίστα θέσεων για την αποθήκη."}
+            </p>
+            <div className="an-modes" role="tablist">
+              {(
+                [
+                  ["receipts", "Ανάλυση παραλαβών"],
+                  ["relocate", "Μεταφορά αποθέματος"],
+                ] as const
+              ).map(([k, l]) => (
+                <button
+                  key={k}
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === k}
+                  className={`sl-chip ${mode === k ? "on" : ""}`}
+                  onClick={() => {
+                    setMode(k);
+                    try {
+                      const v = JSON.parse(window.localStorage.getItem(LS) ?? "{}");
+                      window.localStorage.setItem(LS, JSON.stringify({ ...v, mode: k }));
+                    } catch {
+                      /* τίποτα */
+                    }
+                  }}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="st-actions">
+          <div className="st-actions" hidden={mode !== "receipts"}>
             <button type="button" className="btn ghost" onClick={excel} disabled={busy || !a}>
               {busy ? "Excel…" : "Excel"}
             </button>
           </div>
         </div>
 
+        {mode === "relocate" ? (
+          <RelocationBoard userEmail={userEmail} />
+        ) : (
+          <>
         <form className="st-filters an-filters" onSubmit={run}>
           <label className="field">
             Πρόθεμα κωδικού
@@ -186,6 +224,8 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
             )}
           </>
         )}
+          </>
+        )}
       </div>
     </>
   );
@@ -197,33 +237,6 @@ function PalletLine({ label, bs }: { label: string; bs: { pallets: number | null
     <span className="an-palline">
       {label}: <b>≈ {fq(t.pallets, 0)} παλέτες</b>
       {t.missing > 0 && <span className="dim"> (+{t.missing} χωρίς ποσότητα/παλέτα)</span>}
-    </span>
-  );
-}
-
-/** Πεδίο ποσότητας ανά παλέτα: αποθηκεύεται όταν φύγεις από το πεδίο ή πατήσεις Enter. */
-function PalInput({ item, qty, source, by, onPal }: { item: string; qty: number | null; source: PalSource; by?: string | null; onPal: (item: string, q: number | null) => void }) {
-  const [v, setV] = useState(qty == null ? "" : String(qty));
-  useEffect(() => setV(qty == null ? "" : String(qty)), [qty]);
-  const commit = () => {
-    const n = v.trim() === "" ? null : Number(v.replace(",", "."));
-    if (n != null && (!isFinite(n) || n <= 0)) return setV(qty == null ? "" : String(qty));
-    if (source === "wms" && n === qty) return; // ίδια με του WMS: τίποτα
-    if ((n ?? null) !== (source === "manual" ? qty : null)) onPal(item, n);
-  };
-  return (
-    <span className="an-pal">
-      <input
-        value={v}
-        inputMode="decimal"
-        placeholder="—"
-        onChange={(e) => setV(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-        title={source === "manual" ? `Χειροκίνητη${by ? ` (${displayUser(by)})` : ""} — άδειασέ το για διαγραφή` : source === "wms" ? "Από το WMS — γράψε άλλη τιμή για να την αλλάξεις" : "Γράψε πόσα χωράει μία παλέτα"}
-        aria-label={`Ποσότητα ανά παλέτα ${item}`}
-      />
-      {source && <i className={`an-src ${source}`}>{source === "manual" ? "χειρ." : "WMS"}</i>}
     </span>
   );
 }

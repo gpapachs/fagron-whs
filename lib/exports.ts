@@ -1338,3 +1338,126 @@ export function analysisWorkbook(XLSX: XLSXLib, a: AnalysisLike, meta: StockExpo
   const fileName = `analysi-${a.prefix}-${a.from}.xlsx`;
   return { wb, fileName };
 }
+
+// ---------------------------------------------------------------------------
+// Πλάνο μεταφοράς αποθέματος (Ανάλυση → Μεταφορά)
+// ---------------------------------------------------------------------------
+type RelPlanLike = import("./relocation").RelPlan;
+const CAT_TXT: Record<string, string> = { dead: "Χωρίς κατανάλωση", slow: "Αργή κίνηση", new: "Νέος κωδικός", active: "Ενεργός", excluded: "Μένει (επιλογή)" };
+const AREA_TXT: Record<string, string> = { movable: "Μεταφέρσιμη", fixed: "Σταθερή (μένει)", offsite: "Εξωτερική" };
+const rnd = (n: number | null, d = 2) => (n == null ? "" : Math.round(n * 10 ** d) / 10 ** d);
+
+export function relocationWorkbook(XLSX: XLSXLib, p: RelPlanLike, meta: StockExportMeta) {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    wb,
+    sheet(
+      XLSX,
+      p.lines.map((l) => ({
+        "Θέση": l.pos,
+        "Περιοχή": l.area,
+        "Κωδικός": l.item,
+        "Περιγραφή": l.description ?? "",
+        "Παρτίδα": l.lot,
+        "Λήξη": dOnly(l.expiry),
+        "Ποσότητα θέσης": l.posQty,
+        "Να φύγει": l.moveQty,
+        "Ολόκληρη": l.full ? "ναι" : "μέρος",
+        "Παλέτες": l.pallets ?? "",
+        "Αδειάζει η θέση": l.freesPosition ? "ΝΑΙ" : "",
+        "✓": "",
+      })),
+      [16, 24, 12, 40, 18, 11, 12, 11, 9, 8, 10, 5]
+    ),
+    "Λίστα μεταφοράς"
+  );
+  XLSX.utils.book_append_sheet(
+    wb,
+    sheet(
+      XLSX,
+      p.items.map((i) => ({
+        "Κωδικός": i.item,
+        "Περιγραφή": i.description ?? "",
+        "Κατηγορία": CAT_TXT[i.category],
+        "Κεντρική": rnd(i.onsite, 3),
+        "Εξωτερική": rnd(i.offsite, 3),
+        "Κατανάλωση / μήνα": rnd(i.perMonth),
+        "Κάλυψη (μήνες)": i.cover == null ? "—" : Math.round(i.cover),
+        "Ανοιχτές παραγγελίες": i.demand || "",
+        "Να μείνει": rnd(i.keep, 3),
+        "Να φύγει": rnd(i.moveQty, 3),
+        "Παλέτες να φύγουν": i.movePallets ?? "",
+        "Ποσ./παλέτα": i.palQty ?? "",
+        "Θα χρειαστεί πίσω περίπου": dOnly(i.neededBack),
+        "Επιστροφή από εξωτερική": i.returnQty ? rnd(i.returnQty, 3) : "",
+      })),
+      [12, 40, 16, 11, 11, 12, 10, 11, 11, 11, 10, 10, 14, 13]
+    ),
+    "Ανά κωδικό"
+  );
+  XLSX.utils.book_append_sheet(wb, sheet(XLSX, p.freedPositions.map((pos) => ({ "Θέση που αδειάζει": pos })), [20]), "Θέσεις που αδειάζουν");
+  XLSX.utils.book_append_sheet(
+    wb,
+    sheet(
+      XLSX,
+      [
+        { "Στοιχείο": "Πρόθεμα", "Τιμή": `${p.params.prefix}*` },
+        { "Στοιχείο": "Κατανάλωση από", "Τιμή": p.params.from.split("-").reverse().join("/") },
+        { "Στοιχείο": "Μένουν στην κεντρική", "Τιμή": `${p.params.keepMonths} μήνες κατανάλωσης + ανοιχτές παραγγελίες, σε ολόκληρες παλέτες` },
+        { "Στοιχείο": "Σειρά", "Τιμή": "μένουν οι παλαιότερες παρτίδες (νωρίτερη λήξη / παραλαβή), φεύγουν οι νεότερες" },
+        { "Στοιχείο": "Νέοι κωδικοί", "Τιμή": p.params.includeNew ? "μετακινούνται" : "μένουν (πρώτη κίνηση < 90 ημ.)" },
+        { "Στοιχείο": "Μέρος θέσης", "Τιμή": p.params.partial ? "ναι, σε ολόκληρες παλέτες" : "όχι, μόνο ολόκληρες θέσεις" },
+        ...p.areas.map((a) => ({ "Στοιχείο": `Περιοχή: ${a.area || "(χωρίς όνομα)"}`, "Τιμή": AREA_TXT[a.cls] })),
+        { "Στοιχείο": "Δημιουργήθηκε", "Τιμή": `${meta.generatedAt.toLocaleString("el-GR")}${meta.userEmail ? ` · ${displayUser(meta.userEmail)}` : ""}` },
+      ],
+      [34, 70]
+    ),
+    "Ρυθμίσεις"
+  );
+  return { wb, fileName: `metafora-${p.params.prefix}-${stamp(meta.generatedAt)}.xlsx` };
+}
+
+/** Λίστα μεταφοράς για την αποθήκη: ανά θέση (σειρά διαδρομής), με κουτάκι ✓. */
+export function relocationPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFonts, p: RelPlanLike, meta: StockExportMeta) {
+  const doc = newDoc(jsPDF, fonts, "landscape");
+  const t = p.totals;
+  const y = header(
+    doc,
+    `Λίστα μεταφοράς ${p.params.prefix}*`,
+    [
+      `Δημιουργήθηκε: ${when(meta.generatedAt)}${meta.userEmail ? ` · ${displayUser(meta.userEmail)}` : ""}`,
+      `Μένουν ${p.params.keepMonths} μήνες κατανάλωσης + ανοιχτές παραγγελίες · φεύγουν οι νεότερες παρτίδες`,
+      `${t.items} κωδικοί · ${t.lines} γραμμές · ≈ ${t.pallets} παλέτες${t.palletsMissing ? ` (+${t.palletsMissing} γραμμές χωρίς ποσ./παλέτα)` : ""} · ${p.freedPositions.length} θέσεις αδειάζουν`,
+    ],
+    "Fagron Hellas · Αποθήκη"
+  );
+  autoTable(doc, {
+    ...baseTable,
+    startY: y,
+    head: [["Θέση", "Κωδικός", "Περιγραφή", "Παρτίδα", "Λήξη", "Στη θέση", "Να φύγει", "Παλ.", "Αδειάζει", "✓"]],
+    body: p.lines.map((l) => [l.pos, l.item, l.description ?? "", l.lot, l.expiry ? l.expiry.slice(0, 10).split("-").reverse().join("/") : "", q(l.posQty), `${q(l.moveQty)}${l.full ? "" : " (μέρος)"}`, l.pallets ?? "", l.freesPosition ? "ΝΑΙ" : "", ""]),
+    styles: { ...baseTable.styles, fontSize: 7.6, cellPadding: 1.3 },
+    columnStyles: {
+      0: { cellWidth: 24, fontStyle: "bold" },
+      1: { cellWidth: 18 },
+      2: { cellWidth: "auto" },
+      3: { cellWidth: 32 },
+      4: { cellWidth: 18 },
+      5: { cellWidth: 17, halign: "right" },
+      6: { cellWidth: 24, halign: "right", fontStyle: "bold" },
+      7: { cellWidth: 10, halign: "right" },
+      8: { cellWidth: 15 },
+      9: { cellWidth: 9 },
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    didParseCell: (d: any) => {
+      if (d.section === "body" && d.row.index % 2 === 1) d.cell.styles.fillColor = ZEBRA;
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    didDrawCell: (d: any) => {
+      if (d.section === "body" && d.column.index === 9) doc.rect(d.cell.x + 2.2, d.cell.y + 1.2, 3.6, 3.6);
+    },
+  });
+  footer(doc, "Λίστα μεταφοράς · Fagron Hellas");
+  return { doc, fileName: `metafora-${p.params.prefix}-${stamp(meta.generatedAt)}.pdf` };
+}
