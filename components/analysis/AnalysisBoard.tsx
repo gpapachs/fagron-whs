@@ -139,7 +139,7 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
     !a ? [] : v === "noConsumption" ? a.noConsumption : v === "expiring" ? a.expiring : v === "toCheck" ? a.toCheck : v === "old" ? a.old : v === "untouched" ? a.untouched : v === "partial" ? a.partial : [];
   const shownBatches = useMemo(() => batchesOf(view).filter((b) => match(b.item, b.description, b.lot, b.supplier)), [a, view, q]); // eslint-disable-line react-hooks/exhaustive-deps
   const shownCover = useMemo(() => (a?.overstock ?? []).filter((c) => match(c.item, c.description)), [a, q]); // eslint-disable-line react-hooks/exhaustive-deps
-  const shownExp = useMemo(() => (exp ?? []).filter((r) => match(r.item, r.description, r.lot, r.position)), [exp, q]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shownExp = useMemo(() => (exp ?? []).filter((r) => match(r.item, r.description, r.lot ?? "", r.position)), [exp, q]); // eslint-disable-line react-hooks/exhaustive-deps
   const shownFifo = useMemo(() => (a?.fifo ?? []).filter((f) => match(f.batch.item, f.batch.description, f.batch.lot)), [a, q]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const count = (v: View) => (!a ? 0 : v === "overstock" ? a.overstock.length : v === "fifo" ? a.fifo.length : v === "expiring" ? exp?.length ?? 0 : batchesOf(v).length);
