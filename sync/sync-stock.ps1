@@ -557,6 +557,44 @@ function Backfill-Moves {
   Log ("Κινήσεις (αναδρομικά από 01/01/2026): {0} γραμμές" -f $total)
 }
 
+# Ποσότητα ανά παλέτα / μονάδες συσκευασίας από το ms_Item + ms_ItemUnit (μία φορά την ώρα).
+function Sync-ItemPack {
+  $mark = Join-Path $Here 'itempack.last'
+  if ((Test-Path $mark) -and ((Get-Item $mark).LastWriteTime -gt (Get-Date).AddMinutes(-55))) { return }
+  $units = @{}
+  try {
+    $u = Invoke-Sql "select i.code as code, u.PackId as pack, u.Rel as rel from dbo.ms_ItemUnit u join dbo.ms_Item i on i.ID = u.ItemID where u.Rel > 1"
+    foreach ($r in $u.Rows) {
+      $c = (To-Str $r['code']).ToUpperInvariant(); if (-not $c) { continue }
+      $x = '{0}:{1}' -f (To-Str $r['pack']), ([double](To-Num $r['rel'])).ToString($Inv)
+      $units[$c] = if ($units.ContainsKey($c)) { $units[$c] + ';' + $x } else { $x }
+    }
+  } catch { Log ("Παλέτες (μονάδες): " + $_.Exception.Message) }
+  $t = Invoke-Sql "select i.code as code, i.PiecesPerPalete as ppp, i.PalPiecesToMu1 as p2m from dbo.ms_Item i where i.code is not null"
+  $rows = New-Object Collections.ArrayList
+  foreach ($r in $t.Rows) {
+    $c = (To-Str $r['code']).ToUpperInvariant(); if (-not $c) { continue }
+    $ppp = To-Num $r['ppp']; $p2m = To-Num $r['p2m']; $un = if ($units.ContainsKey($c)) { $units[$c] } else { '' }
+    if (($ppp -gt 1) -or ($p2m -gt 1) -or $un) {
+      [void]$rows.Add(@{ item = $c; ppp = $(if ($null -ne $ppp) { ([double]$ppp).ToString($Inv) } else { '' }); p2m = $(if ($null -ne $p2m) { ([double]$p2m).ToString($Inv) } else { '' }); units = $un })
+    }
+  }
+  $packs = @()
+  foreach ($tb in 'ms_Pack', 'ms_Packs', 'ms_PackType', 'ms_Unit') {
+    try {
+      $pt = Invoke-Sql "select top 200 * from dbo.$tb"
+      $cols = @($pt.Columns | ForEach-Object { $_.ColumnName })
+      if ($cols -notcontains 'ID') { continue }
+      $cc = @($cols | Where-Object { $_ -match '^(code|Code)$' }); $dc = @($cols | Where-Object { $_ -match '^(Descr|descr|Description)$' })
+      $packs = @($pt.Rows | ForEach-Object { @{ id = [int](To-Num $_['ID']); code = $(if ($cc.Count) { To-Str $_[$cc[0]] } else { '' }); descr = $(if ($dc.Count) { To-Str $_[$dc[0]] } else { '' }) } })
+      break
+    } catch { }
+  }
+  $n = Sb-Request 'POST' '/rest/v1/rpc/wms_item_pack_upload' @{ p_rows = [object[]]$rows.ToArray(); p_packs = [object[]]$packs }
+  Set-Content -Path $mark -Value (Get-Date -Format s) -Encoding UTF8
+  Log ("Παλέτες / συσκευασίες: {0} κωδικοί, {1} τύποι μονάδων" -f $n, $packs.Count)
+}
+
 function Convert-Moves($t) {
   $names = @($t.Columns | ForEach-Object { $_.ColumnName.ToLowerInvariant() })
   $has = @{}; foreach ($n in $names) { $has[$n] = $true }
@@ -999,6 +1037,7 @@ if ($general.stock.Count -gt 0) {
 
 Sync-Moves
 try { Backfill-Moves } catch { Log ("Κινήσεις (αναδρομικά): " + $_) }
+try { Sync-ItemPack } catch { Log ("Παλέτες / συσκευασίες: " + $_) }
 foreach ($oc in 'SALEXPORTCL', 'SALEXPORTLS') { try { Sync-Orders $oc } catch { Log ("Orders $($oc): " + $_) } }
 try { Sync-Collecting 'SALEXPORTLS' } catch { Log ("Σε συλλογή: " + $_) }
 try { Refresh-Completed 'SALEXPORTLS' } catch { Log ("Ολοκληρωμένες / διαγραμμένες: " + $_) }

@@ -1241,6 +1241,10 @@ function batchRow(b: BatchLike) {
     "Προμηθευτής": b.supplier ?? "",
     "Παραλήφθηκε": b.received,
     "Απόθεμα παρτίδας": b.stock,
+    "Ποσ./παλέτα": b.palQty ?? "",
+    "Πηγή ποσ./παλέτα": b.palSource === "manual" ? "χειροκίνητη" : b.palSource === "wms" ? "WMS" : "",
+    "Παλέτες (εκτίμηση)": b.pallets ?? "",
+    "Θέσεις παρτίδας": b.lot_positions,
     "Λήξη": dOnly(b.expiry),
     "Μήνες ως λήξη": b.monthsToExpiry ?? "",
     "Έξοδοι κωδικού": b.item_out_n,
@@ -1250,25 +1254,30 @@ function batchRow(b: BatchLike) {
     "Θέσεις": b.positions ?? "",
   };
 }
-const BATCH_W = [12, 40, 18, 11, 8, 28, 11, 12, 11, 9, 9, 12, 12, 9, 40];
+const BATCH_W = [12, 40, 18, 11, 8, 28, 11, 12, 11, 12, 11, 9, 11, 9, 9, 12, 12, 9, 40];
 
 export function analysisWorkbook(XLSX: XLSXLib, a: AnalysisLike, meta: StockExportMeta) {
   const wb = XLSX.utils.book_new();
   const qty = (bs: { stock: number }[]) => Math.round(bs.reduce((s, b) => s + b.stock, 0) * 1000) / 1000;
+  const pal = (bs: { pallets: number | null }[]) => {
+    const n = bs.reduce((s, b) => s + (b.pallets ?? 0), 0);
+    const miss = bs.filter((b) => b.pallets == null).length;
+    return miss ? `${n} (+${miss} χωρίς ποσ./παλέτα)` : n;
+  };
   const summary = [
-    { "Ομάδα": "Παρτίδες που παραλήφθηκαν", "Παρτίδες": a.batches.length, "Ποσότητα σήμερα": qty(a.batches) },
-    { "Ομάδα": "Ανέγγιχτες", "Παρτίδες": a.untouched.length, "Ποσότητα σήμερα": qty(a.untouched) },
-    { "Ομάδα": "  πρόσφατες (≤90 ημ.)", "Παρτίδες": a.recent.length, "Ποσότητα σήμερα": qty(a.recent) },
-    { "Ομάδα": "  παλαιότερες (>90 ημ.)", "Παρτίδες": a.old.length, "Ποσότητα σήμερα": qty(a.old) },
-    { "Ομάδα": "Μερικώς αναλωμένες", "Παρτίδες": a.partial.length, "Ποσότητα σήμερα": qty(a.partial) },
+    { "Ομάδα": "Παρτίδες που παραλήφθηκαν", "Παρτίδες": a.batches.length, "Ποσότητα σήμερα": qty(a.batches), "Παλέτες (εκτίμηση)": pal(a.batches) },
+    { "Ομάδα": "Ανέγγιχτες", "Παρτίδες": a.untouched.length, "Ποσότητα σήμερα": qty(a.untouched), "Παλέτες (εκτίμηση)": pal(a.untouched) },
+    { "Ομάδα": "  πρόσφατες (≤90 ημ.)", "Παρτίδες": a.recent.length, "Ποσότητα σήμερα": qty(a.recent), "Παλέτες (εκτίμηση)": pal(a.recent) },
+    { "Ομάδα": "  παλαιότερες (>90 ημ.)", "Παρτίδες": a.old.length, "Ποσότητα σήμερα": qty(a.old), "Παλέτες (εκτίμηση)": pal(a.old) },
+    { "Ομάδα": "Μερικώς αναλωμένες", "Παρτίδες": a.partial.length, "Ποσότητα σήμερα": qty(a.partial), "Παλέτες (εκτίμηση)": pal(a.partial) },
     { "Ομάδα": "Εξαντλήθηκαν", "Παρτίδες": a.gone.length, "Ποσότητα σήμερα": 0 },
-    { "Ομάδα": "Κωδικοί χωρίς κατανάλωση (ανέγγιχτες παρτίδες)", "Παρτίδες": a.noConsumption.length, "Ποσότητα σήμερα": qty(a.noConsumption) },
-    { "Ομάδα": "Κάλυψη > 24 μηνών (κωδικοί)", "Παρτίδες": a.overstock.length, "Ποσότητα σήμερα": Math.round(a.overstock.reduce((s, c) => s + c.stock, 0)) },
-    { "Ομάδα": "FIFO / FEFO", "Παρτίδες": a.fifo.length, "Ποσότητα σήμερα": qty(a.fifo.map((f) => f.batch)) },
-    { "Ομάδα": "Λήξεις < 6 μηνών (ανέγγιχτες)", "Παρτίδες": a.expiring.length, "Ποσότητα σήμερα": qty(a.expiring) },
-    { "Ομάδα": "Για έλεγχο (μοναδική παρτίδα, έξοδος πριν την παραλαβή)", "Παρτίδες": a.toCheck.length, "Ποσότητα σήμερα": qty(a.toCheck) },
+    { "Ομάδα": "Κωδικοί χωρίς κατανάλωση (ανέγγιχτες παρτίδες)", "Παρτίδες": a.noConsumption.length, "Ποσότητα σήμερα": qty(a.noConsumption), "Παλέτες (εκτίμηση)": pal(a.noConsumption) },
+    { "Ομάδα": "Κάλυψη > 24 μηνών (κωδικοί)", "Παρτίδες": a.overstock.length, "Ποσότητα σήμερα": Math.round(a.overstock.reduce((s, c) => s + c.stock, 0)), "Παλέτες (εκτίμηση)": pal(a.overstock) },
+    { "Ομάδα": "FIFO / FEFO", "Παρτίδες": a.fifo.length, "Ποσότητα σήμερα": qty(a.fifo.map((f) => f.batch)), "Παλέτες (εκτίμηση)": pal(a.fifo.map((f) => f.batch)) },
+    { "Ομάδα": "Λήξεις < 6 μηνών (ανέγγιχτες)", "Παρτίδες": a.expiring.length, "Ποσότητα σήμερα": qty(a.expiring), "Παλέτες (εκτίμηση)": pal(a.expiring) },
+    { "Ομάδα": "Για έλεγχο (μοναδική παρτίδα, έξοδος πριν την παραλαβή)", "Παρτίδες": a.toCheck.length, "Ποσότητα σήμερα": qty(a.toCheck), "Παλέτες (εκτίμηση)": pal(a.toCheck) },
   ];
-  XLSX.utils.book_append_sheet(wb, sheet(XLSX, summary, [58, 10, 16]), "Σύνοψη");
+  XLSX.utils.book_append_sheet(wb, sheet(XLSX, summary, [58, 10, 16, 30]), "Σύνοψη");
   XLSX.utils.book_append_sheet(wb, sheet(XLSX, a.noConsumption.map(batchRow), BATCH_W), "Χωρίς κατανάλωση");
   XLSX.utils.book_append_sheet(
     wb,
@@ -1278,13 +1287,16 @@ export function analysisWorkbook(XLSX: XLSXLib, a: AnalysisLike, meta: StockExpo
         "Κωδικός": c.item,
         "Περιγραφή": c.description ?? "",
         "Απόθεμα κωδικού": c.stock,
+        "Ποσ./παλέτα": c.palQty ?? "",
+        "Παλέτες (εκτίμηση)": c.pallets ?? "",
+        "Θέσεις": c.positions,
         "Έξοδοι περιόδου": c.outQty,
         "Μέση κατανάλωση / μήνα": Math.round(c.perMonth * 100) / 100,
         "Κάλυψη (μήνες)": c.months == null ? "χωρίς κατανάλωση" : Math.round(c.months),
         "Ανέγγιχτες παρτίδες": c.untouchedBatches,
         "Ποσότητα σε ανέγγιχτες": c.untouchedQty,
       })),
-      [12, 40, 14, 14, 14, 14, 12, 14]
+      [12, 40, 14, 11, 11, 8, 14, 14, 14, 12, 14]
     ),
     "Κάλυψη μηνών"
   );
@@ -1316,6 +1328,7 @@ export function analysisWorkbook(XLSX: XLSXLib, a: AnalysisLike, meta: StockExpo
         { "Στοιχείο": "Χρήστης", "Τιμή": meta.userEmail ? displayUser(meta.userEmail) : "" },
         { "Στοιχείο": "Ανέγγιχτη", "Τιμή": "σημερινό απόθεμα παρτίδας ≥ παραληφθείσα ποσότητα" },
         { "Στοιχείο": "Παραλαβή", "Τιμή": "κίνηση 12 από προμηθευτή προς θέση" },
+        { "Στοιχείο": "Παλέτες", "Τιμή": "απόθεμα ÷ ποσότητα ανά παλέτα, στρογγυλοποίηση προς τα πάνω· ποσότητα χειροκίνητη ή από το WMS" },
         { "Στοιχείο": "Έξοδος / ανάλωση", "Τιμή": "κίνηση 12 από θέση χωρίς «προς», 20, 22" },
       ],
       [22, 60]

@@ -306,7 +306,7 @@ if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) 
 
 // ανάλυση παραλαβών: ανέγγιχτη / μερικώς / εξαντλήθηκε, χωρίς κατανάλωση, FIFO, κάλυψη, λήξεις
 {
-  const R = (o) => normReceipt({ item: "60-00-001", description: "X", lot: "A", first_receipt: "2026-01-10T08:00:00Z", last_receipt: "2026-01-10T08:00:00Z", supplier: "S", received: 10, stock: 10, expiry: "2027-12-31", positions: "1.1 (10)", lot_out_n: 0, lot_out_last: null, item_out_n: 3, item_out_qty: 6, item_out_last: "2026-06-01T00:00:00Z", item_stock: 400, item_lots: 2, ...o });
+  const R = (o) => normReceipt({ item: "60-00-001", description: "X", lot: "A", first_receipt: "2026-01-10T08:00:00Z", last_receipt: "2026-01-10T08:00:00Z", supplier: "S", received: 10, stock: 10, expiry: "2027-12-31", positions: "1.1 (10)", lot_out_n: 0, lot_out_last: null, item_out_n: 3, item_out_qty: 6, item_out_last: "2026-06-01T00:00:00Z", item_stock: 400, item_lots: 2, lot_positions: 1, item_positions: 2, pal_manual: null, pal_wms_ppp: 1, ...o });
   const rows = [
     R({}),
     R({ lot: "B", first_receipt: "2026-03-01T08:00:00Z", stock: 4 }), // νεότερη σε χρήση -> FIFO για την A
@@ -319,6 +319,8 @@ if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) 
     console.error("ανάλυση παραλαβών: λάθος ομαδοποίηση", { u: a.untouched.length, p: a.partial.length, g: a.gone.length, nc: a.noConsumption.length, f: a.fifo.length, e: a.expiring.length, o: a.overstock.map((c) => c.months) });
     process.exitCode = 1;
   }
+  const b2 = analyse(rows.map((r) => (r.item === "60-00-001" ? { ...r, pal_manual: 3 } : r)), { prefix: "60", from: "2026-01-01", today: new Date("2026-11-06T10:00:00") });
+  if (b2.untouched[0].pallets !== 4 || b2.untouched[0].palSource !== "manual" || a.untouched[0].pallets !== null) { console.error("ανάλυση: παλέτες", b2.untouched[0].pallets, a.untouched[0].pallets); process.exitCode = 1; }
   const { wb } = analysisWorkbook(XLSX, a, { generatedAt: new Date(), userEmail: "alex@whs.local", filters: [], syncedAt: null });
   if (wb.SheetNames.length !== 9) { console.error("ανάλυση: φύλλα", wb.SheetNames); process.exitCode = 1; }
   console.log("ανάλυση παραλαβών: OK");

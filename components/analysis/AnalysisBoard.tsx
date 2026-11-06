@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import AppBar from "@/components/AppBar";
 import KpiTiles from "@/components/KpiTiles";
 import { createClient } from "@/lib/supabase/client";
-import { analyse, normReceipt, sumStock, type Analysis, type Batch, type Coverage, type FifoCase } from "@/lib/analysis";
+import { analyse, normReceipt, sumPallets, sumStock, withPallet, type Analysis, type Batch, type Coverage, type FifoCase, type PalSource, type ReceiptRow } from "@/lib/analysis";
+import { displayUser } from "@/lib/users";
 
 type View = "noConsumption" | "overstock" | "fifo" | "expiring" | "toCheck" | "old" | "untouched" | "partial";
 const LS = "analysis.v1";
@@ -27,7 +28,9 @@ const VIEWS: { key: View; label: string; hint: string }[] = [
 export default function AnalysisBoard({ userEmail, role }: { userEmail: string | null; role: "admin" | "staff" }) {
   const [prefix, setPrefix] = useState("60");
   const [from, setFrom] = useState(yearStart());
-  const [a, setA] = useState<Analysis | null>(null);
+  const [raw, setRaw] = useState<{ rows: ReceiptRow[]; prefix: string; from: string } | null>(null);
+  const a = useMemo<Analysis | null>(() => (raw ? analyse(raw.rows, { prefix: raw.prefix, from: raw.from }) : null), [raw]);
+  const [palErr, setPalErr] = useState<string | null>(null);
   const [view, setView] = useState<View>("noConsumption");
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(false);
@@ -59,7 +62,19 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
     const { data, error } = await createClient().rpc("wms_receipt_analysis", { p_prefix: clean, p_from: from });
     setLoading(false);
     if (error) return setError(`Η ανάλυση απέτυχε: ${error.message}`);
-    setA(analyse(((data as Record<string, unknown>[]) ?? []).map(normReceipt), { prefix: clean, from }));
+    setRaw({ rows: ((data as Record<string, unknown>[]) ?? []).map(normReceipt), prefix: clean, from });
+  }
+
+  // χειροκίνητη ποσότητα ανά παλέτα: αποθηκεύεται για όλους, ισχύει σε όλες τις αναλύσεις
+  async function savePallet(item: string, qty: number | null) {
+    setPalErr(null);
+    const prev = raw;
+    setRaw((r) => (r ? { ...r, rows: withPallet(r.rows, item, qty, userEmail) } : r));
+    const { error } = await createClient().rpc("item_pallet_set", { p_item: item, p_qty: qty ?? 0 });
+    if (error) {
+      setRaw(prev);
+      setPalErr(`Δεν αποθηκεύτηκε η ποσότητα/παλέτα για ${item}: ${error.message}`);
+    }
   }
 
   const excel = async () => {
@@ -142,22 +157,32 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
             <div className="an-overview">
               <b>{a.prefix}*</b> από {fd(a.from)}: <b>{a.batches.length}</b> παρτίδες παραλήφθηκαν — <b>{a.untouched.length}</b> ανέγγιχτες ({fq(sumStock(a.untouched), 0)}),{" "}
               <b>{a.partial.length}</b> μερικώς, <b>{a.gone.length}</b> εξαντλήθηκαν. Από τις ανέγγιχτες <b>{a.recent.length}</b> είναι των τελευταίων 90 ημερών (φυσιολογικό).
+              <PalletLine label="Ανέγγιχτες" bs={a.untouched} /> <PalletLine label="Μερικώς" bs={a.partial} />
             </div>
+            {palErr && <p className="rp-notice error">{palErr}</p>}
             <KpiTiles
               active={view}
               onPick={(k) => setView(k as View)}
               items={VIEWS.map((v) => ({ key: v.key, label: v.label, value: count(v.key), tone: tone[v.key], hint: v.hint }))}
             />
             <div className="an-bar">
-              <span className="dim">{VIEWS.find((v) => v.key === view)?.hint}</span>
+              <span className="dim">
+                {VIEWS.find((v) => v.key === view)?.hint}
+                {view !== "fifo" && (
+                  <>
+                    {" · "}
+                    <PalletLine label="Σε αυτή την ομάδα" bs={view === "overstock" ? shownCover : shownBatches} />
+                  </>
+                )}
+              </span>
               <input className="an-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Αναζήτηση κωδικού / περιγραφής / παρτίδας…" />
             </div>
             {view === "overstock" ? (
-              <CoverTable rows={shownCover} months={a.periodMonths} />
+              <CoverTable rows={shownCover} months={a.periodMonths} onPal={savePallet} />
             ) : view === "fifo" ? (
               <FifoTable rows={shownFifo} />
             ) : (
-              <BatchTable rows={shownBatches} partial={view === "partial"} />
+              <BatchTable rows={shownBatches} partial={view === "partial"} onPal={savePallet} />
             )}
           </>
         )}
@@ -166,13 +191,50 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
   );
 }
 
-function BatchTable({ rows, partial }: { rows: Batch[]; partial?: boolean }) {
+function PalletLine({ label, bs }: { label: string; bs: { pallets: number | null }[] }) {
+  const t = sumPallets(bs);
+  return (
+    <span className="an-palline">
+      {label}: <b>≈ {fq(t.pallets, 0)} παλέτες</b>
+      {t.missing > 0 && <span className="dim"> (+{t.missing} χωρίς ποσότητα/παλέτα)</span>}
+    </span>
+  );
+}
+
+/** Πεδίο ποσότητας ανά παλέτα: αποθηκεύεται όταν φύγεις από το πεδίο ή πατήσεις Enter. */
+function PalInput({ item, qty, source, by, onPal }: { item: string; qty: number | null; source: PalSource; by?: string | null; onPal: (item: string, q: number | null) => void }) {
+  const [v, setV] = useState(qty == null ? "" : String(qty));
+  useEffect(() => setV(qty == null ? "" : String(qty)), [qty]);
+  const commit = () => {
+    const n = v.trim() === "" ? null : Number(v.replace(",", "."));
+    if (n != null && (!isFinite(n) || n <= 0)) return setV(qty == null ? "" : String(qty));
+    if (source === "wms" && n === qty) return; // ίδια με του WMS: τίποτα
+    if ((n ?? null) !== (source === "manual" ? qty : null)) onPal(item, n);
+  };
+  return (
+    <span className="an-pal">
+      <input
+        value={v}
+        inputMode="decimal"
+        placeholder="—"
+        onChange={(e) => setV(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+        title={source === "manual" ? `Χειροκίνητη${by ? ` (${displayUser(by)})` : ""} — άδειασέ το για διαγραφή` : source === "wms" ? "Από το WMS — γράψε άλλη τιμή για να την αλλάξεις" : "Γράψε πόσα χωράει μία παλέτα"}
+        aria-label={`Ποσότητα ανά παλέτα ${item}`}
+      />
+      {source && <i className={`an-src ${source}`}>{source === "manual" ? "χειρ." : "WMS"}</i>}
+    </span>
+  );
+}
+
+function BatchTable({ rows, partial, onPal }: { rows: Batch[]; partial?: boolean; onPal: (item: string, q: number | null) => void }) {
   return (
     <div className="st-tablewrap">
       <table className="st-table st-cards">
         <thead>
           <tr>
-            {["Κωδικός", "Περιγραφή", "Παρτίδα", "Παραλαβή", "Ημ.", "Προμηθευτής", partial ? "Παραλ. / Υπόλ." : "Απόθεμα", "Λήξη", "Έξοδοι κωδ.", "Τελ. έξοδος κωδ.", "Θέσεις"].map((h) => (
+            {["Κωδικός", "Περιγραφή", "Παρτίδα", "Παραλαβή", "Ημ.", "Προμηθευτής", partial ? "Παραλ. / Υπόλ." : "Απόθεμα", "Ποσ./παλέτα", "Παλέτες", "Λήξη", "Έξοδοι κωδ.", "Τελ. έξοδος κωδ.", "Θέσεις"].map((h) => (
               <th key={h}>{h}</th>
             ))}
           </tr>
@@ -195,6 +257,12 @@ function BatchTable({ rows, partial }: { rows: Batch[]; partial?: boolean }) {
                   <b>{fq(b.stock)}</b>
                 )}
               </td>
+              <td data-label="Ποσ./παλέτα">
+                <PalInput item={b.item} qty={b.palQty} source={b.palSource} by={b.pal_manual_by} onPal={onPal} />
+              </td>
+              <td className="num" data-label="Παλέτες" title={`${b.lot_positions} θέσεις σήμερα`}>
+                {b.pallets == null ? <span className="dim">{b.lot_positions ? `(${b.lot_positions} θέσ.)` : ""}</span> : <b>{b.pallets}</b>}
+              </td>
               <td className={`mono ${b.monthsToExpiry != null && b.monthsToExpiry < 0 ? "st-expired" : b.monthsToExpiry != null && b.monthsToExpiry < 6 ? "st-soon" : ""}`} data-label="Λήξη">
                 {fd(b.expiry)}
               </td>
@@ -205,7 +273,7 @@ function BatchTable({ rows, partial }: { rows: Batch[]; partial?: boolean }) {
           ))}
           {!rows.length && (
             <tr>
-              <td colSpan={11} className="st-empty">Τίποτα σε αυτή την ομάδα.</td>
+              <td colSpan={13} className="st-empty">Τίποτα σε αυτή την ομάδα.</td>
             </tr>
           )}
         </tbody>
@@ -214,13 +282,13 @@ function BatchTable({ rows, partial }: { rows: Batch[]; partial?: boolean }) {
   );
 }
 
-function CoverTable({ rows, months }: { rows: Coverage[]; months: number }) {
+function CoverTable({ rows, months, onPal }: { rows: Coverage[]; months: number; onPal: (item: string, q: number | null) => void }) {
   return (
     <div className="st-tablewrap">
       <table className="st-table st-cards">
         <thead>
           <tr>
-            {["Κωδικός", "Περιγραφή", "Απόθεμα κωδικού", `Έξοδοι (${fq(months, 1)} μ.)`, "Ανά μήνα", "Κάλυψη", "Ανέγγιχτες παρτίδες"].map((h) => (
+            {["Κωδικός", "Περιγραφή", "Απόθεμα κωδικού", "Ποσ./παλέτα", "Παλέτες", `Έξοδοι (${fq(months, 1)} μ.)`, "Ανά μήνα", "Κάλυψη", "Ανέγγιχτες παρτίδες"].map((h) => (
               <th key={h}>{h}</th>
             ))}
           </tr>
@@ -231,6 +299,12 @@ function CoverTable({ rows, months }: { rows: Coverage[]; months: number }) {
               <td className="mono" data-label="Κωδικός">{c.item}</td>
               <td className="st-desc" data-label="Περιγραφή">{c.description}</td>
               <td className="num" data-label="Απόθεμα"><b>{fq(c.stock, 0)}</b></td>
+              <td data-label="Ποσ./παλέτα">
+                <PalInput item={c.item} qty={c.palQty} source={c.palSource} onPal={onPal} />
+              </td>
+              <td className="num" data-label="Παλέτες" title={`${c.positions} θέσεις σήμερα`}>
+                {c.pallets == null ? <span className="dim">{c.positions ? `(${c.positions} θέσ.)` : ""}</span> : <b>{c.pallets}</b>}
+              </td>
               <td className="num" data-label="Έξοδοι">{fq(c.outQty, 0)}</td>
               <td className="num" data-label="Ανά μήνα">{fq(c.perMonth, 1)}</td>
               <td className="num an-cover" data-label="Κάλυψη">
@@ -243,7 +317,7 @@ function CoverTable({ rows, months }: { rows: Coverage[]; months: number }) {
           ))}
           {!rows.length && (
             <tr>
-              <td colSpan={7} className="st-empty">Κανένας κωδικός με κάλυψη πάνω από 24 μήνες.</td>
+              <td colSpan={9} className="st-empty">Κανένας κωδικός με κάλυψη πάνω από 24 μήνες.</td>
             </tr>
           )}
         </tbody>
