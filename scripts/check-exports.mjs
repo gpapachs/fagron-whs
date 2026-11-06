@@ -10,7 +10,8 @@ import { jsPDF } from "jspdf";
 import { autoTable } from "jspdf-autotable";
 import * as XLSX from "xlsx";
 import { buildPlan, filterStockForRecipes, indexStock, picksByRecipe } from "../lib/repack.ts";
-import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkbook, stockPdf, stockWorkbook, movesPdf, movesWorkbook, ordersPdf, ordersWorkbook, salesListPdf } from "../lib/exports.ts";
+import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkbook, stockPdf, stockWorkbook, movesPdf, movesWorkbook, ordersPdf, ordersWorkbook, salesListPdf, analysisWorkbook } from "../lib/exports.ts";
+import { analyse, normReceipt } from "../lib/analysis.ts";
 import { buildReservations, evaluateOrders, orderColor } from "../lib/sales.ts";
 import * as jobsLib from "../lib/jobs.ts";
 import bwipjs from "bwip-js";
@@ -301,6 +302,26 @@ if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) 
     if (!/^[\x20-\x7E]*$/.test(got)) fail(`μετάφραση με μη-λατινικούς χαρακτήρες: ${got}`);
   }
   console.log(`αυτόματα αγγλικά: ${cases.length} περιπτώσεις OK`);
+}
+
+// ανάλυση παραλαβών: ανέγγιχτη / μερικώς / εξαντλήθηκε, χωρίς κατανάλωση, FIFO, κάλυψη, λήξεις
+{
+  const R = (o) => normReceipt({ item: "60-00-001", description: "X", lot: "A", first_receipt: "2026-01-10T08:00:00Z", last_receipt: "2026-01-10T08:00:00Z", supplier: "S", received: 10, stock: 10, expiry: "2027-12-31", positions: "1.1 (10)", lot_out_n: 0, lot_out_last: null, item_out_n: 3, item_out_qty: 6, item_out_last: "2026-06-01T00:00:00Z", item_stock: 400, item_lots: 2, ...o });
+  const rows = [
+    R({}),
+    R({ lot: "B", first_receipt: "2026-03-01T08:00:00Z", stock: 4 }), // νεότερη σε χρήση -> FIFO για την A
+    R({ lot: "C", first_receipt: "2026-02-01T08:00:00Z", stock: 0 }),
+    R({ item: "60-00-002", lot: "Z", item_out_n: 0, item_out_qty: 0, item_out_last: null, item_lots: 1, item_stock: 5, stock: 5, received: 5, expiry: "2026-12-01" }),
+  ];
+  const a = analyse(rows, { prefix: "60", from: "2026-01-01", today: new Date("2026-11-06T10:00:00") });
+  const ok = a.untouched.length === 2 && a.partial.length === 1 && a.gone.length === 1 && a.noConsumption.length === 1 && a.fifo.length === 1 && a.fifo[0].fefo === false && a.expiring.length === 1 && a.overstock.length === 1 && a.overstock[0].months > 24;
+  if (!ok) {
+    console.error("ανάλυση παραλαβών: λάθος ομαδοποίηση", { u: a.untouched.length, p: a.partial.length, g: a.gone.length, nc: a.noConsumption.length, f: a.fifo.length, e: a.expiring.length, o: a.overstock.map((c) => c.months) });
+    process.exitCode = 1;
+  }
+  const { wb } = analysisWorkbook(XLSX, a, { generatedAt: new Date(), userEmail: "alex@whs.local", filters: [], syncedAt: null });
+  if (wb.SheetNames.length !== 9) { console.error("ανάλυση: φύλλα", wb.SheetNames); process.exitCode = 1; }
+  console.log("ανάλυση παραλαβών: OK");
 }
 
 console.log(process.exitCode ? "ΑΠΕΤΥΧΕ" : "OK: όλες οι εξαγωγές δουλεύουν");

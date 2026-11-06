@@ -1223,3 +1223,105 @@ export function salesListPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: Pd
   const name = orders.length === 1 ? `lista-polisis-${orders[0].key}` : `listes-polisis-${orders.length}`;
   return { doc, fileName: `${name}-${stamp(meta.generatedAt)}.pdf` };
 }
+
+// ---------------------------------------------------------------------------
+// Ανάλυση παραλαβών (καρτέλα «Ανάλυση»)
+// ---------------------------------------------------------------------------
+type AnalysisLike = import("./analysis").Analysis;
+type BatchLike = import("./analysis").Batch;
+
+const dOnly = (s: string | null) => (s ? new Date(s.length <= 10 ? `${s}T00:00:00` : s) : "");
+function batchRow(b: BatchLike) {
+  return {
+    "Κωδικός": b.item,
+    "Περιγραφή": b.description ?? "",
+    "Παρτίδα": b.lot,
+    "Παραλαβή": dOnly(b.first_receipt),
+    "Ημέρες": b.ageDays,
+    "Προμηθευτής": b.supplier ?? "",
+    "Παραλήφθηκε": b.received,
+    "Απόθεμα παρτίδας": b.stock,
+    "Λήξη": dOnly(b.expiry),
+    "Μήνες ως λήξη": b.monthsToExpiry ?? "",
+    "Έξοδοι κωδικού": b.item_out_n,
+    "Τελ. έξοδος κωδικού": dOnly(b.item_out_last),
+    "Απόθεμα κωδικού": b.item_stock,
+    "Παρτίδες κωδικού": b.item_lots,
+    "Θέσεις": b.positions ?? "",
+  };
+}
+const BATCH_W = [12, 40, 18, 11, 8, 28, 11, 12, 11, 9, 9, 12, 12, 9, 40];
+
+export function analysisWorkbook(XLSX: XLSXLib, a: AnalysisLike, meta: StockExportMeta) {
+  const wb = XLSX.utils.book_new();
+  const qty = (bs: { stock: number }[]) => Math.round(bs.reduce((s, b) => s + b.stock, 0) * 1000) / 1000;
+  const summary = [
+    { "Ομάδα": "Παρτίδες που παραλήφθηκαν", "Παρτίδες": a.batches.length, "Ποσότητα σήμερα": qty(a.batches) },
+    { "Ομάδα": "Ανέγγιχτες", "Παρτίδες": a.untouched.length, "Ποσότητα σήμερα": qty(a.untouched) },
+    { "Ομάδα": "  πρόσφατες (≤90 ημ.)", "Παρτίδες": a.recent.length, "Ποσότητα σήμερα": qty(a.recent) },
+    { "Ομάδα": "  παλαιότερες (>90 ημ.)", "Παρτίδες": a.old.length, "Ποσότητα σήμερα": qty(a.old) },
+    { "Ομάδα": "Μερικώς αναλωμένες", "Παρτίδες": a.partial.length, "Ποσότητα σήμερα": qty(a.partial) },
+    { "Ομάδα": "Εξαντλήθηκαν", "Παρτίδες": a.gone.length, "Ποσότητα σήμερα": 0 },
+    { "Ομάδα": "Κωδικοί χωρίς κατανάλωση (ανέγγιχτες παρτίδες)", "Παρτίδες": a.noConsumption.length, "Ποσότητα σήμερα": qty(a.noConsumption) },
+    { "Ομάδα": "Κάλυψη > 24 μηνών (κωδικοί)", "Παρτίδες": a.overstock.length, "Ποσότητα σήμερα": Math.round(a.overstock.reduce((s, c) => s + c.stock, 0)) },
+    { "Ομάδα": "FIFO / FEFO", "Παρτίδες": a.fifo.length, "Ποσότητα σήμερα": qty(a.fifo.map((f) => f.batch)) },
+    { "Ομάδα": "Λήξεις < 6 μηνών (ανέγγιχτες)", "Παρτίδες": a.expiring.length, "Ποσότητα σήμερα": qty(a.expiring) },
+    { "Ομάδα": "Για έλεγχο (μοναδική παρτίδα, έξοδος πριν την παραλαβή)", "Παρτίδες": a.toCheck.length, "Ποσότητα σήμερα": qty(a.toCheck) },
+  ];
+  XLSX.utils.book_append_sheet(wb, sheet(XLSX, summary, [58, 10, 16]), "Σύνοψη");
+  XLSX.utils.book_append_sheet(wb, sheet(XLSX, a.noConsumption.map(batchRow), BATCH_W), "Χωρίς κατανάλωση");
+  XLSX.utils.book_append_sheet(
+    wb,
+    sheet(
+      XLSX,
+      a.coverage.map((c) => ({
+        "Κωδικός": c.item,
+        "Περιγραφή": c.description ?? "",
+        "Απόθεμα κωδικού": c.stock,
+        "Έξοδοι περιόδου": c.outQty,
+        "Μέση κατανάλωση / μήνα": Math.round(c.perMonth * 100) / 100,
+        "Κάλυψη (μήνες)": c.months == null ? "χωρίς κατανάλωση" : Math.round(c.months),
+        "Ανέγγιχτες παρτίδες": c.untouchedBatches,
+        "Ποσότητα σε ανέγγιχτες": c.untouchedQty,
+      })),
+      [12, 40, 14, 14, 14, 14, 12, 14]
+    ),
+    "Κάλυψη μηνών"
+  );
+  XLSX.utils.book_append_sheet(
+    wb,
+    sheet(
+      XLSX,
+      a.fifo.map((f) => ({ ...batchRow(f.batch), "Νεότερη σε χρήση": f.newer.lot, "Παραλαβή νεότερης": dOnly(f.newer.first_receipt), "Λήξη νεότερης": dOnly(f.newer.expiry), "FEFO": f.fefo ? "ΝΑΙ" : "όχι" })),
+      [...BATCH_W, 18, 11, 11, 7]
+    ),
+    "FIFO-FEFO"
+  );
+  XLSX.utils.book_append_sheet(wb, sheet(XLSX, a.expiring.map(batchRow), BATCH_W), "Λήξεις <6μ");
+  XLSX.utils.book_append_sheet(wb, sheet(XLSX, a.toCheck.map(batchRow), BATCH_W), "Για έλεγχο");
+  XLSX.utils.book_append_sheet(wb, sheet(XLSX, a.untouched.map(batchRow), BATCH_W), "Ανέγγιχτες");
+  XLSX.utils.book_append_sheet(
+    wb,
+    sheet(XLSX, a.partial.map((b) => ({ ...batchRow(b), "% υπόλοιπο": b.received ? Math.round((b.stock / b.received) * 100) : "" })), [...BATCH_W, 9]),
+    "Μερικώς αναλωμένες"
+  );
+  XLSX.utils.book_append_sheet(
+    wb,
+    sheet(
+      XLSX,
+      [
+        { "Στοιχείο": "Πρόθεμα κωδικών", "Τιμή": `${a.prefix}*` },
+        { "Στοιχείο": "Παραλαβές από", "Τιμή": a.from.split("-").reverse().join("/") },
+        { "Στοιχείο": "Δημιουργήθηκε", "Τιμή": meta.generatedAt.toLocaleString("el-GR") },
+        { "Στοιχείο": "Χρήστης", "Τιμή": meta.userEmail ? displayUser(meta.userEmail) : "" },
+        { "Στοιχείο": "Ανέγγιχτη", "Τιμή": "σημερινό απόθεμα παρτίδας ≥ παραληφθείσα ποσότητα" },
+        { "Στοιχείο": "Παραλαβή", "Τιμή": "κίνηση 12 από προμηθευτή προς θέση" },
+        { "Στοιχείο": "Έξοδος / ανάλωση", "Τιμή": "κίνηση 12 από θέση χωρίς «προς», 20, 22" },
+      ],
+      [22, 60]
+    ),
+    "Στοιχεία"
+  );
+  const fileName = `analysi-${a.prefix}-${a.from}.xlsx`;
+  return { wb, fileName };
+}

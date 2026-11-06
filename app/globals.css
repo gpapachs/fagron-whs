@@ -1404,3 +1404,15 @@ a.sl-open:hover { text-decoration: underline; }
   .st-cards td, .or-table tr:not(.or-head) td { background: transparent !important; box-shadow: none !important; position: static !important; }
   .or-table tr.or-on { background: var(--reserved-bg) !important; }
 }
+
+/* ---- Ανάλυση παραλαβών ---- */
+.an-filters { align-items: flex-end; }
+.an-filters > .btn { flex: 0 0 auto; min-width: 120px; }
+.an-quick { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12.5px; color: var(--ink-dim); margin-left: auto; }
+.an-quick .sl-chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.an-overview { font-size: 13.5px; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px 14px; }
+.an-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 12.5px; }
+.an-search { min-width: 280px; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: var(--ink); font: inherit; }
+.an-pos { font-size: 11.5px; max-width: 320px; }
+.an-cover { white-space: nowrap; }
+@media (max-width: 720px) { .an-quick { margin-left: 0; } .an-search { min-width: 0; width: 100%; } }
