@@ -3,7 +3,9 @@
 import FilterFold from "@/components/FilterFold";
 import { useEffect, useMemo, useState } from "react";
 import KpiTiles from "@/components/KpiTiles";
-import { sitesOf, type Site, type SiteFilter } from "@/lib/site";
+import { sitesOf, type Site } from "@/lib/site";
+import { assignSite, loadAssignments, type Assignments } from "@/lib/assignments";
+import { AssignBadge, AssignButtons } from "@/components/AssignControls";
 import { fullDate, relDate } from "@/lib/format";
 import AppBar from "@/components/AppBar";
 import LivePill from "@/components/LivePill";
@@ -47,7 +49,9 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
   const [stockF, setStockF] = useState<"all" | "some" | "none">("all");
   const [modeF, setModeF] = useState<"all" | "strict" | "partial">("all");
   const [collectingOnly, setCollectingOnly] = useState(false);
-  const [siteF, setSiteF] = useState<SiteFilter>("all");
+  const [siteF, setSiteF] = useState<"all" | Site | "none">("all");
+  const [assign, setAssign] = useState<Assignments>(new Map());
+  const [assignBusy, setAssignBusy] = useState(false);
   const [showExecuted, setShowExecuted] = useState(false);
   const [sortBy, setSortBy] = useState<"priority" | "newest" | "oldest">("priority");
   const [viewing, setViewing] = useState<string | null>(null); // λίστα ανοιχτή σε παράθυρο διαλόγου
@@ -160,7 +164,27 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
       );
     return m;
   }, [evals]);
-  const siteCount = (x: Site) => evals.filter((o) => siteMap.get(o.key)?.has(x)).length;
+  // χειροκίνητη ανάθεση συλλογής σε αποθήκη (ανά παραστατικό)
+  useEffect(() => {
+    if (!rows) return;
+    let off = false;
+    loadAssignments(rows.map((r) => r.doc_no)).then((m) => !off && setAssign(m));
+    return () => {
+      off = true;
+    };
+  }, [rows]);
+  const siteOfOrder = (o: OrderEval) => (o.head.doc_no ? assign.get(o.head.doc_no)?.site : undefined) ?? null;
+  const siteCount = (x: Site | "none") => evals.filter((o) => !o.completed && (x === "none" ? !siteOfOrder(o) : siteOfOrder(o) === x)).length;
+  async function doAssign(site: Site | null) {
+    const docs = [...new Set(evals.filter((o) => sel.has(o.key)).map((o) => o.head.doc_no).filter((d): d is string => !!d))];
+    if (!docs.length) return;
+    setAssignBusy(true);
+    const err = await assignSite(docs, site);
+    setAssignBusy(false);
+    if (err) return setError(`Η ανάθεση δεν αποθηκεύτηκε: ${err}`);
+    setAssign(await loadAssignments(evals.map((o) => o.head.doc_no)));
+    setSel(new Set());
+  }
   // προτεραιότητα: έτοιμες → μερικές → με έλλειψη, οι παλαιότερες πρώτα· ολοκληρωμένες στο τέλος
   const RANK: Record<string, number> = { green: 0, yellow: 1, red: 2 };
   const ts = (o: OrderEval) => (o.head.order_date ? new Date(o.head.order_date).getTime() : 0);
@@ -172,7 +196,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
         (stockF === "all" || (stockF === "some" ? hasStock(o) : !hasStock(o))) &&
         (modeF === "all" || (modeF === "strict" ? o.strict : !o.strict)) &&
         (!collectingOnly || o.collecting) &&
-        (siteF === "all" || !!siteMap.get(o.key)?.has(siteF))
+        (siteF === "all" || (siteF === "none" ? !siteOfOrder(o) : siteOfOrder(o) === siteF))
     )
     .sort((a, b) =>
       sortBy === "newest"
@@ -244,6 +268,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
             </p>
           </div>
           <div className="st-actions">
+{sel.size > 0 && <AssignButtons count={sel.size} busy={assignBusy} onAssign={doAssign} />}
 {sel.size > 0 && (
             <button type="button" className="btn ghost" disabled={!sel.size || !!busy} onClick={() => print(shown.filter((o) => sel.has(o.key)), "sel")}>
               {busy === "sel" ? "PDF…" : `Εκτύπωση επιλεγμένων (${sel.size})`}
@@ -332,12 +357,15 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
               </button>
             </div>
             <div className="sl-group">
-              <span className="sl-glabel">Αποθήκη</span>
-              <button type="button" className={`sl-chip ${siteF === "central" ? "on" : ""}`} onClick={() => setSiteF(siteF === "central" ? "all" : "central")} title="Λίστες με συλλογή από την κεντρική αποθήκη">
+              <span className="sl-glabel">Ανάθεση</span>
+              <button type="button" className={`sl-chip ${siteF === "central" ? "on" : ""}`} onClick={() => setSiteF(siteF === "central" ? "all" : "central")} title="Ανατέθηκαν στην κεντρική αποθήκη">
                 Κεντρική <b>{siteCount("central")}</b>
               </button>
-              <button type="button" className={`sl-chip ${siteF === "external" ? "on" : ""}`} onClick={() => setSiteF(siteF === "external" ? "all" : "external")} title="Λίστες με συλλογή από την εξωτερική (Μεγαλοχώρι / Νατσιόπουλος)">
+              <button type="button" className={`sl-chip ${siteF === "external" ? "on" : ""}`} onClick={() => setSiteF(siteF === "external" ? "all" : "external")} title="Ανατέθηκαν στην εξωτερική (Μεγαλοχώρι / Νατσιόπουλος)">
                 Εξωτερική <b>{siteCount("external")}</b>
+              </button>
+              <button type="button" className={`sl-chip ${siteF === "none" ? "on" : ""}`} onClick={() => setSiteF(siteF === "none" ? "all" : "none")} title="Ανοιχτές λίστες χωρίς ανάθεση">
+                Χωρίς ανάθεση <b>{siteCount("none")}</b>
               </button>
             </div>
             <div className="sl-group">
@@ -437,11 +465,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
                       <td className="st-desc">
                         {o.head.customer}
                         {o.head.is_abroad && <span className="sl-tag abroad">Εξωτερικό</span>}
-                        {siteMap.get(o.key)?.has("external") && (
-                          <span className="sl-tag site-ext" title="Συλλογή (και) από την εξωτερική αποθήκη">
-                            {siteMap.get(o.key)?.has("central") ? "Κεντρ. + Εξωτ. αποθ." : "Εξωτ. αποθήκη"}
-                          </span>
-                        )}
+                        <AssignBadge a={o.head.doc_no ? assign.get(o.head.doc_no) : undefined} auto={o.completed ? null : siteMap.get(o.key)} />
                         {o.head.comments && (
                           <div className="sl-comments" title={o.head.comments}>
                             {o.head.comments}

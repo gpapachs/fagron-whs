@@ -1491,3 +1491,11 @@ a.sl-open:hover { text-decoration: underline; }
 .pk-other { margin: -4px 0 0; font-size: 12.5px; }
 .sl-tag.site-ext { background: #e6f0ff; color: #2554c7; }
 .or-site { margin-right: 6px; }
+.as-btns { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.as-c { background: var(--accent); color: var(--accent-ink); }
+.as-e { background: #2554c7; color: #fff; }
+.as-badge { display: inline-block; margin-left: 6px; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; white-space: nowrap; vertical-align: middle; }
+.as-badge.central { background: var(--surface-2); color: var(--ink); border: 1px solid var(--ink-dim); }
+.as-badge.external { background: #2554c7; color: #fff; }
+.as-badge.auto { background: transparent; color: #2554c7; border: 1px dashed #2554c7; }
+.pk-unassigned { font-size: 13px; }

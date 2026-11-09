@@ -9,7 +9,9 @@ import { useCoalesced, useWmsLive } from "@/lib/live";
 import { fullDate, relDate } from "@/lib/format";
 import { displayUser } from "@/lib/users";
 import type { OrderRow } from "@/lib/exports";
-import { matchSite, type SiteFilter } from "@/lib/site";
+import { siteOf, type Site, type SiteFilter } from "@/lib/site";
+import { loadAssignments, type Assignments } from "@/lib/assignments";
+import { AssignBadge } from "@/components/AssignControls";
 
 // Pick list για κινητό / tablet: ο χρήστης διαλέγει λίστα από τις εκτελεσμένες (SALEXPORTCL) και
 // τσεκάρει ό,τι βγάζει. Το τσεκάρισμα είναι το ίδιο «Collected» της καρτέλας Εκτελεσμένες
@@ -46,6 +48,17 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
   // αποθήκη συσκευής: π.χ. το tablet του Μεγαλοχωρίου μένει στην «Εξωτερική»
   const [siteF, setSiteFState] = useState<SiteFilter>("all");
   const [allRows, setAllRows] = useState<OrderRow[]>([]);
+  const [assign, setAssign] = useState<Assignments>(new Map());
+  const [withUnassigned, setWithUnassigned] = useState(false); // + λίστες χωρίς ανάθεση με θέσεις της αποθήκης
+  const [doneF, setDoneF] = useState<"open" | "done" | "all">("open");
+  const aSite = (doc: string | null | undefined): Site | null => (doc ? assign.get(doc)?.site ?? null : null);
+  // γραμμή που αφορά την αποθήκη της συσκευής: ανατέθηκε εκεί όλη η λίστα, ή (χωρίς ανάθεση) η θέση είναι εκεί
+  const rowIn = (r: OrderRow, site: SiteFilter, unassigned: boolean) => {
+    if (site === "all") return true;
+    const a = aSite(r.doc_no);
+    if (a) return a === site;
+    return unassigned && siteOf(r.from_pos) === site;
+  };
   useEffect(() => {
     try {
       const v = window.localStorage.getItem("pick.site");
@@ -102,28 +115,33 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
       if (!data || data.length < 1000) break;
     }
     setAllRows(out);
+    setAssign(await loadAssignments(out.map((r) => r.doc_no)));
     setLists([]);
   }
   const lists2 = useMemo(() => {
     if (!lists) return null;
     const m = new Map<string, ListCard>();
     for (const r of allRows) {
-      if (!matchSite(siteF, r.from_pos)) continue;
+      if (!rowIn(r, siteF, withUnassigned)) continue;
       const k = r.list_no ?? "";
       const c = m.get(k) ?? { list: k, customer: r.customer ?? "", date: r.order_date, lines: 0, done: 0, picker: r.picker ?? "", doc: r.doc_no ?? "" };
       c.lines++;
       if (r.collected) c.done++;
       m.set(k, c);
     }
-    return [...m.values()].sort((x, y) => (x.done === x.lines ? 1 : 0) - (y.done === y.lines ? 1 : 0) || (y.date ?? "").localeCompare(x.date ?? ""));
-  }, [lists, allRows, siteF]);
+    return [...m.values()]
+      .filter((c) => doneF === "all" || (doneF === "done" ? c.done === c.lines : c.done < c.lines))
+      .sort((x, y) => (x.done === x.lines ? 1 : 0) - (y.done === y.lines ? 1 : 0) || (y.date ?? "").localeCompare(x.date ?? ""));
+  }, [lists, allRows, siteF, withUnassigned, doneF, assign]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadLines(l: string, silent = false) {
     if (!silent) setLines(null);
     setError(null);
     const { data, error } = await createClient().from("wms_orders_v").select(COLS).eq("doc_type", "SALEXPORTCL").eq("list_no", l).order("line_no");
     if (error) return setError(`Η λίστα δεν φορτώθηκε: ${error.message}`);
-    setLines(((data as OrderRow[]) ?? []).map((r) => ({ ...r, qty: r.qty == null ? null : Number(r.qty), init_qty: r.init_qty == null ? null : Number(r.init_qty) })));
+    const ls = ((data as OrderRow[]) ?? []).map((r) => ({ ...r, qty: r.qty == null ? null : Number(r.qty), init_qty: r.init_qty == null ? null : Number(r.init_qty) }));
+    setAssign(await loadAssignments(ls.map((r) => r.doc_no)));
+    setLines(ls);
   }
 
   useEffect(() => {
@@ -168,7 +186,7 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
     scanRef.current?.focus();
   }
 
-  const siteLines = useMemo(() => (lines ?? []).filter((r) => matchSite(siteF, r.from_pos)), [lines, siteF]);
+  const siteLines = useMemo(() => (lines ?? []).filter((r) => rowIn(r, siteF, true)), [lines, siteF, assign]); // eslint-disable-line react-hooks/exhaustive-deps
   const sorted = useMemo(
     () => [...siteLines].sort((a, b) => Number(a.collected) - Number(b.collected) || posKey(a.from_pos).localeCompare(posKey(b.from_pos)) || (a.line_no ?? 0) - (b.line_no ?? 0)),
     [siteLines]
@@ -209,6 +227,25 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
                 </button>
               ))}
             </div>
+            <div className="pk-ranges pk-sites" role="group" aria-label="Συλλογή">
+              {(
+                [
+                  ["open", "Εκκρεμούν"],
+                  ["done", "Συλλέχθηκαν"],
+                  ["all", "Όλες"],
+                ] as const
+              ).map(([k, l]) => (
+                <button key={k} type="button" className={`pk-chip ${doneF === k ? "on" : ""}`} onClick={() => setDoneF(k)}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            {siteF !== "all" && (
+              <label className="st-check pk-unassigned">
+                <input type="checkbox" checked={withUnassigned} onChange={(e) => setWithUnassigned(e.target.checked)} />
+                Και λίστες χωρίς ανάθεση με θέσεις {siteF === "external" ? "της εξωτερικής" : "της κεντρικής"}
+              </label>
+            )}
             <div className="pk-ranges">
               {(
                 [
@@ -251,7 +288,10 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
                         {c.done}/{c.lines}
                       </span>
                     </span>
-                    <span className="pk-cust">{c.customer}</span>
+                    <span className="pk-cust">
+                      {c.customer}
+                      <AssignBadge a={c.doc ? assign.get(c.doc) : undefined} />
+                    </span>
                     <span className="pk-meta">
                       {relDate(c.date)}
                       {c.picker && ` · ${c.picker}`}
@@ -277,6 +317,7 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
               {head && (
                 <p>
                   <b>{head.customer}</b>
+                  <AssignBadge a={head.doc_no ? assign.get(head.doc_no) : undefined} auto={new Set((lines ?? []).map((r) => siteOf(r.from_pos)).filter((x): x is Site => !!x))} />
                   <br />
                   <span className="dim" title={fullDate(head.order_date)}>
                     {[head.doc_no, head.erp_code && `ERP ${head.erp_code}`, relDate(head.order_date), head.picker && `Συλλογή WMS: ${head.picker}`].filter(Boolean).join(" · ")}
@@ -301,7 +342,7 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
             </div>
             {otherSite > 0 && (
               <p className="dim pk-other">
-                + {otherSite} γραμμές από {siteF === "central" ? "την εξωτερική" : "την κεντρική"} αποθήκη (κρυμμένες)
+                + {otherSite} γραμμές για {siteF === "central" ? "την εξωτερική" : "την κεντρική"} αποθήκη (κρυμμένες)
               </p>
             )}
             {error && <p className="rp-notice error">{error}</p>}

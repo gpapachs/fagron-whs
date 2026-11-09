@@ -6,7 +6,9 @@ import Link from "next/link";
 import KpiTiles from "@/components/KpiTiles";
 import { fullDate, relDate } from "@/lib/format";
 import { displayUser } from "@/lib/users";
-import { matchSite, siteOf, type SiteFilter } from "@/lib/site";
+import { sitesOf, type Site } from "@/lib/site";
+import { assignSite, loadAssignments, type Assignments } from "@/lib/assignments";
+import { AssignBadge, AssignButtons } from "@/components/AssignControls";
 import AppBar from "@/components/AppBar";
 import LivePill from "@/components/LivePill";
 import { createClient } from "@/lib/supabase/client";
@@ -121,10 +123,24 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
   }
 
   const pickers = (lines: OrderRow[]) => [...new Set(lines.map((l) => l.picker).filter(Boolean))].join(", ");
-  const [siteF, setSiteF] = useState<SiteFilter>("all");
-  // κεντρική / εξωτερική: φαίνονται μόνο οι γραμμές από θέσεις της επιλεγμένης αποθήκης
-  const siteRows = useMemo(() => (rows ?? []).filter((r) => matchSite(siteF, r.from_pos)), [rows, siteF]);
-  const siteLists = (x: "central" | "external") => new Set((rows ?? []).filter((r) => siteOf(r.from_pos) === x).map((r) => r.list_no)).size;
+  // χειροκίνητη ανάθεση συλλογής σε αποθήκη (ανά παραστατικό — ίδια με τις «Παραγγελίες»)
+  const [siteF, setSiteF] = useState<"all" | Site | "none">("all");
+  const [assign, setAssign] = useState<Assignments>(new Map());
+  const [assignBusy, setAssignBusy] = useState(false);
+  useEffect(() => {
+    if (!rows) return;
+    let off = false;
+    loadAssignments(rows.map((r) => r.doc_no)).then((m) => !off && setAssign(m));
+    return () => {
+      off = true;
+    };
+  }, [rows]);
+  const siteOfRow = (r: OrderRow) => (r.doc_no ? assign.get(r.doc_no)?.site : undefined) ?? null;
+  const siteRows = useMemo(
+    () => (rows ?? []).filter((r) => siteF === "all" || (siteF === "none" ? !siteOfRow(r) : siteOfRow(r) === siteF)),
+    [rows, siteF, assign] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const siteLists = (x: Site | "none") => new Set((rows ?? []).filter((r) => (x === "none" ? !siteOfRow(r) : siteOfRow(r) === x)).map((r) => r.list_no)).size;
   const allGroups = useMemo(() => groupOrdersByList(siteRows), [siteRows]);
   const groups = useMemo(
     () =>
@@ -147,6 +163,15 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
   const allOn = allIds.length > 0 && allIds.every((id) => sel.has(id));
   const selRows = (rows ?? []).filter((r) => sel.has(r.id));
   const selLists = new Set(selRows.map((r) => r.list_no || r.order_id));
+  async function doAssign(site: Site | null) {
+    const docs = [...new Set(selRows.map((r) => r.doc_no).filter((d): d is string => !!d))];
+    if (!docs.length) return;
+    setAssignBusy(true);
+    const err = await assignSite(docs, site);
+    setAssignBusy(false);
+    if (err) return setError(`Η ανάθεση δεν αποθηκεύτηκε: ${err}`);
+    setAssign(await loadAssignments((rows ?? []).map((r) => r.doc_no)));
+  }
 
   async function setCollected(value: boolean) {
     if (!sel.size) return;
@@ -289,12 +314,24 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
         {rows !== null && (
           <div className="or-bar">
             <span className="sl-group or-site">
-              <span className="sl-glabel">Αποθήκη</span>
+              <span className="sl-glabel">Ανάθεση</span>
               <button type="button" className={`sl-chip ${siteF === "central" ? "on" : ""}`} onClick={() => setSiteF(siteF === "central" ? "all" : "central")}>
                 Κεντρική <b>{siteLists("central")}</b>
               </button>
-              <button type="button" className={`sl-chip ${siteF === "external" ? "on" : ""}`} onClick={() => setSiteF(siteF === "external" ? "all" : "external")} title="Μεγαλοχώρι / Νατσιόπουλος (θέσεις 80, 90, 99, 100+)">
+              <button type="button" className={`sl-chip ${siteF === "external" ? "on" : ""}`} onClick={() => setSiteF(siteF === "external" ? "all" : "external")}>
                 Εξωτερική <b>{siteLists("external")}</b>
+              </button>
+              <button type="button" className={`sl-chip ${siteF === "none" ? "on" : ""}`} onClick={() => setSiteF(siteF === "none" ? "all" : "none")}>
+                Χωρίς <b>{siteLists("none")}</b>
+              </button>
+            </span>
+            <span className="sl-group or-site">
+              <span className="sl-glabel">Συλλογή</span>
+              <button type="button" className={`sl-chip ${viewF === "open" ? "on" : ""}`} onClick={() => setViewF(viewF === "open" ? "all" : "open")} title="Λίστες με γραμμές που δεν έχουν τσεκαριστεί">
+                Εκκρεμεί
+              </button>
+              <button type="button" className={`sl-chip ${viewF === "collected" ? "on" : ""}`} onClick={() => setViewF(viewF === "collected" ? "all" : "collected")} title="Λίστες με όλες τις γραμμές collected">
+                Έγινε
               </button>
             </span>
             <label className="st-check">
@@ -324,6 +361,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
               >
                 Εκτύπωση {selLists.size || ""} λιστ{selLists.size === 1 ? "ας" : "ών"}
               </button>
+              <AssignButtons count={selLists.size} busy={assignBusy} onAssign={doAssign} />
             </span>
           </div>
         )}
@@ -355,6 +393,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
                       <td colSpan={6}>
                         <span className="or-list">Λίστα {g.list}</span>
                         <span className="or-cust">{h.customer || "—"}</span>
+                        <AssignBadge a={h.doc_no ? assign.get(h.doc_no) : undefined} auto={sitesOf(g.lines.map((l) => l.from_pos))} />
                         <span className="or-meta">
                           <span title={fullDate(h.order_date)}>{relDate(h.order_date)}</span>
                           {[h.doc_no && `Παρ. ${h.doc_no}`, h.erp_code && `ERP ${h.erp_code}`, `${g.lines.length} γρ.`].filter(Boolean).map((x) => ` · ${x}`).join("")}
