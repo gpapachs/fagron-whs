@@ -1487,3 +1487,7 @@ a.sl-open:hover { text-decoration: underline; }
 .an-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
 .an-seg button { font: inherit; font-size: 12.5px; font-weight: 600; padding: 6px 12px; border: none; background: var(--surface); color: var(--ink-dim); cursor: pointer; }
 .an-seg button.on { background: var(--accent); color: var(--accent-ink); }
+.pk-sites .pk-chip { font-size: 13px; padding: 9px 4px; }
+.pk-other { margin: -4px 0 0; font-size: 12.5px; }
+.sl-tag.site-ext { background: #e6f0ff; color: #2554c7; }
+.or-site { margin-right: 6px; }

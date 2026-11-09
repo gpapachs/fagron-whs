@@ -6,6 +6,7 @@ import Link from "next/link";
 import KpiTiles from "@/components/KpiTiles";
 import { fullDate, relDate } from "@/lib/format";
 import { displayUser } from "@/lib/users";
+import { matchSite, siteOf, type SiteFilter } from "@/lib/site";
 import AppBar from "@/components/AppBar";
 import LivePill from "@/components/LivePill";
 import { createClient } from "@/lib/supabase/client";
@@ -120,7 +121,11 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
   }
 
   const pickers = (lines: OrderRow[]) => [...new Set(lines.map((l) => l.picker).filter(Boolean))].join(", ");
-  const allGroups = useMemo(() => groupOrdersByList(rows ?? []), [rows]);
+  const [siteF, setSiteF] = useState<SiteFilter>("all");
+  // κεντρική / εξωτερική: φαίνονται μόνο οι γραμμές από θέσεις της επιλεγμένης αποθήκης
+  const siteRows = useMemo(() => (rows ?? []).filter((r) => matchSite(siteF, r.from_pos)), [rows, siteF]);
+  const siteLists = (x: "central" | "external") => new Set((rows ?? []).filter((r) => siteOf(r.from_pos) === x).map((r) => r.list_no)).size;
+  const allGroups = useMemo(() => groupOrdersByList(siteRows), [siteRows]);
   const groups = useMemo(
     () =>
       viewF === "all"
@@ -128,7 +133,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
         : allGroups.filter((g) => (viewF === "collected" ? g.lines.every((l) => l.collected) : g.lines.some((l) => !l.collected))),
     [allGroups, viewF]
   );
-  const nColl = (rows ?? []).filter((r) => r.collected).length;
+  const nColl = siteRows.filter((r) => r.collected).length;
   const toggle = (ids: string[], on: boolean) =>
     setSel((cur) => {
       const n = new Set(cur);
@@ -138,7 +143,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
       }
       return n;
     });
-  const allIds = (rows ?? []).map((r) => r.id);
+  const allIds = siteRows.map((r) => r.id);
   const allOn = allIds.length > 0 && allIds.every((id) => sel.has(id));
   const selRows = (rows ?? []).filter((r) => sel.has(r.id));
   const selLists = new Set(selRows.map((r) => r.list_no || r.order_id));
@@ -185,7 +190,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
     setBusy("xlsx");
     try {
       const [XLSX, ex] = await Promise.all([import("xlsx"), import("@/lib/exports")]);
-      const { wb, fileName } = ex.ordersWorkbook(XLSX, rows ?? [], meta());
+      const { wb, fileName } = ex.ordersWorkbook(XLSX, siteRows, meta());
       XLSX.writeFile(wb, fileName);
     } catch (e) {
       setError(`Η εξαγωγή απέτυχε: ${(e as Error).message}`);
@@ -219,7 +224,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
             <button type="button" className="btn ghost" onClick={excel} disabled={!!busy || !rows?.length}>
               Excel
             </button>
-            <button type="button" className="btn primary" onClick={() => printLists(rows ?? [], "all")} disabled={!!busy || !rows?.length} title="Όλες οι λίστες της αναζήτησης, μία ανά σελίδα">
+            <button type="button" className="btn primary" onClick={() => printLists(siteRows, "all")} disabled={!!busy || !siteRows.length} title="Όλες οι λίστες της αναζήτησης, μία ανά σελίδα">
               {busy === "all" ? "PDF…" : `Εκτύπωση όλων (${groups.length})`}
             </button>
           </div>
@@ -274,22 +279,31 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
             onPick={(k) => setViewF(k === viewF || k === "lists" || k === "lines" ? "all" : (k as "collected" | "open"))}
             items={[
               { key: "lists", label: "Λίστες", value: allGroups.length, tone: "blue" },
-              { key: "lines", label: "Γραμμές", value: rows.length, tone: "neutral" },
+              { key: "lines", label: "Γραμμές", value: siteRows.length, tone: "neutral" },
               { key: "collected", label: "Collected (γραμμές)", value: nColl, tone: "green", hint: "Δείξε μόνο λίστες πλήρως collected" },
-              { key: "open", label: "Non Collected (γραμμές)", value: rows.length - nColl, tone: "red", hint: "Δείξε λίστες με γραμμές non collected" },
+              { key: "open", label: "Non Collected (γραμμές)", value: siteRows.length - nColl, tone: "red", hint: "Δείξε λίστες με γραμμές non collected" },
             ]}
           />
         )}
 
         {rows !== null && (
           <div className="or-bar">
+            <span className="sl-group or-site">
+              <span className="sl-glabel">Αποθήκη</span>
+              <button type="button" className={`sl-chip ${siteF === "central" ? "on" : ""}`} onClick={() => setSiteF(siteF === "central" ? "all" : "central")}>
+                Κεντρική <b>{siteLists("central")}</b>
+              </button>
+              <button type="button" className={`sl-chip ${siteF === "external" ? "on" : ""}`} onClick={() => setSiteF(siteF === "external" ? "all" : "external")} title="Μεγαλοχώρι / Νατσιόπουλος (θέσεις 80, 90, 99, 100+)">
+                Εξωτερική <b>{siteLists("external")}</b>
+              </button>
+            </span>
             <label className="st-check">
               <input type="checkbox" checked={allOn} onChange={(e) => toggle(allIds, e.target.checked)} />
               Όλες
             </label>
             <span className="st-summary">
               <span>
-                <b>{groups.length.toLocaleString("el-GR")}</b> λίστες · <b>{rows.length.toLocaleString("el-GR")}</b> γραμμές
+                <b>{groups.length.toLocaleString("el-GR")}</b> λίστες · <b>{siteRows.length.toLocaleString("el-GR")}</b> γραμμές
                 {total !== null && total > rows.length && ` (από ${total.toLocaleString("el-GR")} — στενέψτε τα φίλτρα)`}
               </span>
             </span>
@@ -305,7 +319,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
                 type="button"
                 className="btn ghost sm"
                 disabled={!sel.size || !!busy}
-                onClick={() => printLists((rows ?? []).filter((r) => selLists.has(r.list_no || r.order_id)), "sel")}
+                onClick={() => printLists(siteRows.filter((r) => selLists.has(r.list_no || r.order_id)), "sel")}
                 title="Εκτύπωση των λιστών που έχουν επιλεγμένες γραμμές"
               >
                 Εκτύπωση {selLists.size || ""} λιστ{selLists.size === 1 ? "ας" : "ών"}

@@ -9,6 +9,7 @@ import { useCoalesced, useWmsLive } from "@/lib/live";
 import { fullDate, relDate } from "@/lib/format";
 import { displayUser } from "@/lib/users";
 import type { OrderRow } from "@/lib/exports";
+import { matchSite, type SiteFilter } from "@/lib/site";
 
 // Pick list για κινητό / tablet: ο χρήστης διαλέγει λίστα από τις εκτελεσμένες (SALEXPORTCL) και
 // τσεκάρει ό,τι βγάζει. Το τσεκάρισμα είναι το ίδιο «Collected» της καρτέλας Εκτελεσμένες
@@ -42,6 +43,25 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ text: string; ok: boolean } | null>(null);
   const [scan, setScan] = useState("");
+  // αποθήκη συσκευής: π.χ. το tablet του Μεγαλοχωρίου μένει στην «Εξωτερική»
+  const [siteF, setSiteFState] = useState<SiteFilter>("all");
+  const [allRows, setAllRows] = useState<OrderRow[]>([]);
+  useEffect(() => {
+    try {
+      const v = window.localStorage.getItem("pick.site");
+      if (v === "central" || v === "external") setSiteFState(v);
+    } catch {
+      /* τίποτα */
+    }
+  }, []);
+  const setSiteF = (v: SiteFilter) => {
+    setSiteFState(v);
+    try {
+      window.localStorage.setItem("pick.site", v);
+    } catch {
+      /* τίποτα */
+    }
+  };
   const scanRef = useRef<HTMLInputElement>(null);
 
   // ?list=544527 για άμεσο άνοιγμα (π.χ. από την καρτέλα Εκτελεσμένες)
@@ -71,7 +91,7 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
     for (let from = 0; ; from += 1000) {
       const { data, error } = await sb
         .from("wms_orders_v")
-        .select("list_no, customer, order_date, collected, picker, doc_no")
+        .select("list_no, customer, order_date, collected, picker, doc_no, from_pos")
         .eq("doc_type", "SALEXPORTCL")
         .gte("order_date", a.toISOString())
         .lt("order_date", b.toISOString())
@@ -81,16 +101,22 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
       out.push(...((data as OrderRow[]) ?? []));
       if (!data || data.length < 1000) break;
     }
+    setAllRows(out);
+    setLists([]);
+  }
+  const lists2 = useMemo(() => {
+    if (!lists) return null;
     const m = new Map<string, ListCard>();
-    for (const r of out) {
+    for (const r of allRows) {
+      if (!matchSite(siteF, r.from_pos)) continue;
       const k = r.list_no ?? "";
       const c = m.get(k) ?? { list: k, customer: r.customer ?? "", date: r.order_date, lines: 0, done: 0, picker: r.picker ?? "", doc: r.doc_no ?? "" };
       c.lines++;
       if (r.collected) c.done++;
       m.set(k, c);
     }
-    setLists([...m.values()].sort((x, y) => (x.done === x.lines ? 1 : 0) - (y.done === y.lines ? 1 : 0) || (y.date ?? "").localeCompare(x.date ?? "")));
-  }
+    return [...m.values()].sort((x, y) => (x.done === x.lines ? 1 : 0) - (y.done === y.lines ? 1 : 0) || (y.date ?? "").localeCompare(x.date ?? ""));
+  }, [lists, allRows, siteF]);
 
   async function loadLines(l: string, silent = false) {
     if (!silent) setLines(null);
@@ -130,7 +156,7 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
     setScan("");
     if (!raw || !lines) return;
     const [code, lot, sn] = raw.split("#").map((x) => (x ?? "").trim().toUpperCase());
-    const cand = lines.filter(
+    const cand = siteLines.filter(
       (r) => (r.item ?? "").toUpperCase() === code && (!lot || !r.lot || r.lot.toUpperCase() === lot) && (!sn || !r.sn || r.sn.toUpperCase() === sn)
     );
     const open = cand.find((r) => !r.collected);
@@ -142,15 +168,17 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
     scanRef.current?.focus();
   }
 
+  const siteLines = useMemo(() => (lines ?? []).filter((r) => matchSite(siteF, r.from_pos)), [lines, siteF]);
   const sorted = useMemo(
-    () => [...(lines ?? [])].sort((a, b) => Number(a.collected) - Number(b.collected) || posKey(a.from_pos).localeCompare(posKey(b.from_pos)) || (a.line_no ?? 0) - (b.line_no ?? 0)),
-    [lines]
+    () => [...siteLines].sort((a, b) => Number(a.collected) - Number(b.collected) || posKey(a.from_pos).localeCompare(posKey(b.from_pos)) || (a.line_no ?? 0) - (b.line_no ?? 0)),
+    [siteLines]
   );
   const shown = hideDone ? sorted.filter((r) => !r.collected) : sorted;
-  const done = (lines ?? []).filter((r) => r.collected).length;
-  const total = lines?.length ?? 0;
+  const done = siteLines.filter((r) => r.collected).length;
+  const total = siteLines.length;
+  const otherSite = (lines?.length ?? 0) - total;
   const head = lines?.[0];
-  const shownLists = (lists ?? []).filter((c) => {
+  const shownLists = (lists2 ?? []).filter((c) => {
     const t = find.trim().toLowerCase();
     return !t || c.list.includes(t) || c.customer.toLowerCase().includes(t) || c.doc.toLowerCase().includes(t);
   });
@@ -167,6 +195,19 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
                 <p className="dim">Διάλεξε λίστα εκτελεσμένης παραγγελίας και τσέκαρε ό,τι βγάζεις.</p>
               </div>
               <LivePill connected={live.connected} lastAt={live.lastAt} />
+            </div>
+            <div className="pk-ranges pk-sites" role="group" aria-label="Αποθήκη">
+              {(
+                [
+                  ["all", "Όλες"],
+                  ["central", "Κεντρική"],
+                  ["external", "Εξωτερική"],
+                ] as const
+              ).map(([k, l]) => (
+                <button key={k} type="button" className={`pk-chip ${siteF === k ? "on" : ""}`} onClick={() => setSiteF(k)}>
+                  {l}
+                </button>
+              ))}
             </div>
             <div className="pk-ranges">
               {(
@@ -198,7 +239,7 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
             </form>
             {error && <p className="rp-notice error">{error}</p>}
             {lists === null && !error && <p className="dim">Φόρτωση…</p>}
-            {lists && !shownLists.length && <p className="dim">Καμία λίστα σε αυτό το διάστημα.</p>}
+            {lists2 && !shownLists.length && <p className="dim">Καμία λίστα σε αυτό το διάστημα{siteF !== "all" ? " για αυτή την αποθήκη" : ""}.</p>}
             <div className="pk-lists">
               {shownLists.map((c) => {
                 const pct = c.lines ? Math.round((c.done / c.lines) * 100) : 0;
@@ -245,6 +286,24 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
               {head?.comments && <div className="sl-comments">Σχόλια: {head.comments}</div>}
             </div>
 
+            <div className="pk-ranges pk-sites" role="group" aria-label="Αποθήκη">
+              {(
+                [
+                  ["all", "Όλες"],
+                  ["central", "Κεντρική"],
+                  ["external", "Εξωτερική"],
+                ] as const
+              ).map(([k, l]) => (
+                <button key={k} type="button" className={`pk-chip ${siteF === k ? "on" : ""}`} onClick={() => setSiteF(k)}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            {otherSite > 0 && (
+              <p className="dim pk-other">
+                + {otherSite} γραμμές από {siteF === "central" ? "την εξωτερική" : "την κεντρική"} αποθήκη (κρυμμένες)
+              </p>
+            )}
             {error && <p className="rp-notice error">{error}</p>}
             {lines === null && !error && <p className="dim">Φόρτωση…</p>}
             {lines && !lines.length && <p className="rp-notice">Η λίστα {list} δεν βρέθηκε στις εκτελεσμένες.</p>}
@@ -280,12 +339,12 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
                     <button
                       type="button"
                       className="btn ghost sm"
-                      onClick={() => window.confirm(`Τσεκάρισμα και των ${total - done} γραμμών που απομένουν;`) && setCollected(lines.filter((r) => !r.collected).map((r) => r.id), true)}
+                      onClick={() => window.confirm(`Τσεκάρισμα και των ${total - done} γραμμών που απομένουν;`) && setCollected(siteLines.filter((r) => !r.collected).map((r) => r.id), true)}
                     >
                       Όλα ✓
                     </button>
                   ) : (
-                    <button type="button" className="btn ghost sm" onClick={() => window.confirm("Ξετσεκάρισμα όλων των γραμμών;") && setCollected(lines.map((r) => r.id), false)}>
+                    <button type="button" className="btn ghost sm" onClick={() => window.confirm("Ξετσεκάρισμα όλων των γραμμών;") && setCollected(siteLines.map((r) => r.id), false)}>
                       Ξετσεκάρισμα όλων
                     </button>
                   )}

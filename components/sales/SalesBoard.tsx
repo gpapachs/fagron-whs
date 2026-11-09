@@ -3,6 +3,7 @@
 import FilterFold from "@/components/FilterFold";
 import { useEffect, useMemo, useState } from "react";
 import KpiTiles from "@/components/KpiTiles";
+import { sitesOf, type Site, type SiteFilter } from "@/lib/site";
 import { fullDate, relDate } from "@/lib/format";
 import AppBar from "@/components/AppBar";
 import LivePill from "@/components/LivePill";
@@ -46,6 +47,7 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
   const [stockF, setStockF] = useState<"all" | "some" | "none">("all");
   const [modeF, setModeF] = useState<"all" | "strict" | "partial">("all");
   const [collectingOnly, setCollectingOnly] = useState(false);
+  const [siteF, setSiteF] = useState<SiteFilter>("all");
   const [showExecuted, setShowExecuted] = useState(false);
   const [sortBy, setSortBy] = useState<"priority" | "newest" | "oldest">("priority");
   const [viewing, setViewing] = useState<string | null>(null); // λίστα ανοιχτή σε παράθυρο διαλόγου
@@ -148,6 +150,17 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
   }, [evals]);
   // «με απόθεμα» = τουλάχιστον ένα είδος μπορεί να συλλεχθεί τώρα· «χωρίς» = κανένα
   const hasStock = (o: OrderEval) => o.lines.some((l) => l.covered > 0);
+  // από ποια αποθήκη θα γίνει η συλλογή: θέσεις των προτεινόμενων picks (και της ανασυσκευασίας)
+  const siteMap = useMemo(() => {
+    const m = new Map<string, Set<Site>>();
+    for (const o of evals)
+      m.set(
+        o.key,
+        sitesOf(o.lines.filter((l) => l.state !== "done").flatMap((l) => [...l.picks.map((p) => p.position), ...(l.repack?.picks ?? []).map((p) => p.position)]))
+      );
+    return m;
+  }, [evals]);
+  const siteCount = (x: Site) => evals.filter((o) => siteMap.get(o.key)?.has(x)).length;
   // προτεραιότητα: έτοιμες → μερικές → με έλλειψη, οι παλαιότερες πρώτα· ολοκληρωμένες στο τέλος
   const RANK: Record<string, number> = { green: 0, yellow: 1, red: 2 };
   const ts = (o: OrderEval) => (o.head.order_date ? new Date(o.head.order_date).getTime() : 0);
@@ -158,7 +171,8 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
         (!repackOnly || o.needsRepack) &&
         (stockF === "all" || (stockF === "some" ? hasStock(o) : !hasStock(o))) &&
         (modeF === "all" || (modeF === "strict" ? o.strict : !o.strict)) &&
-        (!collectingOnly || o.collecting)
+        (!collectingOnly || o.collecting) &&
+        (siteF === "all" || !!siteMap.get(o.key)?.has(siteF))
     )
     .sort((a, b) =>
       sortBy === "newest"
@@ -318,6 +332,15 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
               </button>
             </div>
             <div className="sl-group">
+              <span className="sl-glabel">Αποθήκη</span>
+              <button type="button" className={`sl-chip ${siteF === "central" ? "on" : ""}`} onClick={() => setSiteF(siteF === "central" ? "all" : "central")} title="Λίστες με συλλογή από την κεντρική αποθήκη">
+                Κεντρική <b>{siteCount("central")}</b>
+              </button>
+              <button type="button" className={`sl-chip ${siteF === "external" ? "on" : ""}`} onClick={() => setSiteF(siteF === "external" ? "all" : "external")} title="Λίστες με συλλογή από την εξωτερική (Μεγαλοχώρι / Νατσιόπουλος)">
+                Εξωτερική <b>{siteCount("external")}</b>
+              </button>
+            </div>
+            <div className="sl-group">
               <span className="sl-glabel">Συλλογή</span>
               <button type="button" className={`sl-chip ${modeF === "strict" ? "on" : ""}`} onClick={() => setModeF(modeF === "strict" ? "all" : "strict")}>
                 Αυστηρή <b>{nStrict}</b>
@@ -414,6 +437,11 @@ export default function SalesBoard({ userEmail, role }: { userEmail: string | nu
                       <td className="st-desc">
                         {o.head.customer}
                         {o.head.is_abroad && <span className="sl-tag abroad">Εξωτερικό</span>}
+                        {siteMap.get(o.key)?.has("external") && (
+                          <span className="sl-tag site-ext" title="Συλλογή (και) από την εξωτερική αποθήκη">
+                            {siteMap.get(o.key)?.has("central") ? "Κεντρ. + Εξωτ. αποθ." : "Εξωτ. αποθήκη"}
+                          </span>
+                        )}
                         {o.head.comments && (
                           <div className="sl-comments" title={o.head.comments}>
                             {o.head.comments}
