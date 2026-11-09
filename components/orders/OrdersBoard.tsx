@@ -2,6 +2,7 @@
 
 import FilterFold from "@/components/FilterFold";
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import KpiTiles from "@/components/KpiTiles";
 import { fullDate, relDate } from "@/lib/format";
 import { displayUser } from "@/lib/users";
@@ -208,7 +209,7 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
           <div className="titleblock">
             <h1>Κινήσεις Εκτελεσμένων Παραγγελιών</h1>
             <p>
-              <LivePill connected={live.connected} lastAt={live.lastAt ?? last ?? null} /> Γραμμές πωλήσεων του WMS (salexportcl), ανά λίστα. Δεν φορτώνεται
+              <LivePill connected={live.connected} lastAt={live.lastAt ?? last ?? null} /> <Link className="or-picklink" href="/orders/pick/">📱 Pick list</Link> Γραμμές πωλήσεων του WMS (salexportcl), ανά λίστα. Δεν φορτώνεται
               τίποτα μέχρι να πατήσεις <b>Αναζήτηση</b>.{" "}
               {last === null && "Δεν έχουν συγχρονιστεί ακόμα παραγγελίες."}
               {last && <span title={fullDate(last)}>Τελευταία: {relDate(last)}.</span>}
@@ -351,6 +352,9 @@ export default function OrdersBoard({ userEmail, role }: { userEmail: string | n
                         <span className={`or-status ${done === g.lines.length ? "on" : done ? "part" : ""}`}>
                           {done === g.lines.length ? "Collected" : done ? `Collected ${done}/${g.lines.length}` : "Non Collected"}
                         </span>
+                        <Link className="st-link or-print" href={`/orders/pick/?list=${encodeURIComponent(g.list)}`} title="Pick list για κινητό / tablet">
+                          Pick list
+                        </Link>
                         <button type="button" className="st-link or-print" onClick={() => printLists(g.lines, `l${g.list}`)} disabled={!!busy}>
                           {busy === `l${g.list}` ? "…" : "Εκτύπωση"}
                         </button>

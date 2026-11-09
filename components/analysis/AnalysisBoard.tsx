@@ -40,6 +40,7 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
   const [view, setView] = useState<View>("noConsumption");
   const [q, setQ] = useState("");
   const [exp, setExp] = useState<ExpRow[] | null>(null);
+  const [byItem, setByItem] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -256,14 +257,28 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
                   </>
                 )}
               </span>
-              <input className="an-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Αναζήτηση κωδικού / περιγραφής / παρτίδας…" />
+              <span className="an-right">
+                {view !== "overstock" && view !== "fifo" && (
+                  <span className="an-seg" role="group" aria-label="Ομαδοποίηση">
+                    <button type="button" className={!byItem ? "on" : ""} onClick={() => setByItem(false)}>
+                      Ανά παρτίδα
+                    </button>
+                    <button type="button" className={byItem ? "on" : ""} onClick={() => setByItem(true)}>
+                      Ανά κωδικό
+                    </button>
+                  </span>
+                )}
+                <input className="an-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Αναζήτηση κωδικού / περιγραφής / παρτίδας…" />
+              </span>
             </div>
             {view === "overstock" ? (
               <CoverTable rows={shownCover} months={a.periodMonths} onPal={savePallet} />
             ) : view === "fifo" ? (
               <FifoTable rows={shownFifo} />
             ) : view === "expiring" ? (
-              <ExpTable rows={shownExp} />
+              byItem ? <ExpItemTable rows={shownExp} /> : <ExpTable rows={shownExp} />
+            ) : byItem ? (
+              <ItemGroupTable rows={shownBatches} partial={view === "partial"} onPal={savePallet} />
             ) : (
               <BatchTable rows={shownBatches} partial={view === "partial"} onPal={savePallet} />
             )}
@@ -376,6 +391,164 @@ function CoverTable({ rows, months, onPal }: { rows: Coverage[]; months: number;
           {!rows.length && (
             <tr>
               <td colSpan={9} className="st-empty">Κανένας κωδικός με κάλυψη πάνω από 24 μήνες.</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+type ItemGroup = {
+  item: string;
+  description: string | null;
+  batches: number;
+  received: number;
+  stock: number;
+  pallets: number | null;
+  palQty: number | null;
+  palSource: Batch["palSource"];
+  palBy: string | null;
+  firstReceipt: string;
+  lastReceipt: string;
+  expiry: string | null;
+  outN: number;
+  outLast: string | null;
+  itemStock: number;
+  positions: string[];
+};
+
+/** Ομαδοποίηση παρτίδων ανά κωδικό (σύνολα, νωρίτερη λήξη, όλες οι θέσεις). */
+function groupByItem(rows: Batch[]): ItemGroup[] {
+  const m = new Map<string, ItemGroup>();
+  for (const b of rows) {
+    const g = m.get(b.item);
+    const pos = (b.positions ?? "").split(", ").filter(Boolean);
+    if (!g) {
+      m.set(b.item, {
+        item: b.item,
+        description: b.description,
+        batches: 1,
+        received: b.received,
+        stock: b.stock,
+        pallets: b.pallets,
+        palQty: b.palQty,
+        palSource: b.palSource,
+        palBy: b.pal_manual_by,
+        firstReceipt: b.first_receipt,
+        lastReceipt: b.last_receipt,
+        expiry: b.expiry,
+        outN: b.item_out_n,
+        outLast: b.item_out_last,
+        itemStock: b.item_stock,
+        positions: pos,
+      });
+      continue;
+    }
+    g.batches++;
+    g.received += b.received;
+    g.stock += b.stock;
+    g.pallets = g.pallets == null || b.pallets == null ? null : g.pallets + b.pallets;
+    if (b.first_receipt < g.firstReceipt) g.firstReceipt = b.first_receipt;
+    if (b.last_receipt > g.lastReceipt) g.lastReceipt = b.last_receipt;
+    if (b.expiry && (!g.expiry || b.expiry < g.expiry)) g.expiry = b.expiry;
+    g.positions.push(...pos);
+  }
+  return [...m.values()].sort((a, b) => b.stock - a.stock);
+}
+
+function ItemGroupTable({ rows, partial, onPal }: { rows: Batch[]; partial?: boolean; onPal: (item: string, q: number | null) => void }) {
+  const groups = useMemo(() => groupByItem(rows), [rows]);
+  return (
+    <div className="st-tablewrap">
+      <table className="st-table st-cards">
+        <thead>
+          <tr>
+            {["Κωδικός", "Περιγραφή", "Παρτίδες", "Παραλαβές", partial ? "Παραλ. / Υπόλ." : "Απόθεμα", "Ποσ./παλέτα", "Παλέτες", "Νωρίτερη λήξη", "Έξοδοι κωδ.", "Τελ. έξοδος", "Θέσεις"].map((h) => (
+              <th key={h}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {groups.map((g) => (
+            <tr key={g.item}>
+              <td className="mono" data-label="Κωδικός">{g.item}</td>
+              <td className="st-desc" data-label="Περιγραφή">{g.description}</td>
+              <td className="num" data-label="Παρτίδες">{g.batches}</td>
+              <td className="mono" data-label="Παραλαβές">
+                {fd(g.firstReceipt)}
+                {g.lastReceipt.slice(0, 10) !== g.firstReceipt.slice(0, 10) && ` – ${fd(g.lastReceipt)}`}
+              </td>
+              <td className="num" data-label={partial ? "Παραλ. / Υπόλ." : "Απόθεμα"}>
+                {partial ? (
+                  <>
+                    {fq(g.received)} / <b>{fq(g.stock)}</b> <span className="dim">({Math.round((g.stock / (g.received || 1)) * 100)}%)</span>
+                  </>
+                ) : (
+                  <b>{fq(g.stock)}</b>
+                )}
+              </td>
+              <td data-label="Ποσ./παλέτα">
+                <PalInput item={g.item} qty={g.palQty} source={g.palSource} by={g.palBy} onPal={onPal} />
+              </td>
+              <td className="num" data-label="Παλέτες">{g.pallets == null ? <span className="dim">({new Set(g.positions.map((p) => p.split(" (")[0])).size} θέσ.)</span> : <b>{g.pallets}</b>}</td>
+              <td className="mono" data-label="Νωρίτερη λήξη">{fd(g.expiry)}</td>
+              <td className="num" data-label="Έξοδοι κωδικού">{g.outN || "—"}</td>
+              <td className="mono" data-label="Τελ. έξοδος">{fd(g.outLast)}</td>
+              <td className="dim an-pos" data-label="Θέσεις">{g.positions.join(", ")}</td>
+            </tr>
+          ))}
+          {!groups.length && (
+            <tr>
+              <td colSpan={11} className="st-empty">Τίποτα σε αυτή την ομάδα.</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ExpItemTable({ rows }: { rows: ExpRow[] }) {
+  const today = isoDate(new Date());
+  const groups = useMemo(() => {
+    const m = new Map<string, { item: string; description: string | null; qty: number; expiry: string; expiredQty: number; lots: Set<string>; pos: string[] }>();
+    for (const r of rows) {
+      const g = m.get(r.item) ?? { item: r.item, description: r.description, qty: 0, expiry: r.expiry, expiredQty: 0, lots: new Set<string>(), pos: [] };
+      g.qty += r.qty;
+      if (r.expiry < today) g.expiredQty += r.qty;
+      if (r.expiry < g.expiry) g.expiry = r.expiry;
+      if (r.lot) g.lots.add(r.lot);
+      g.pos.push(`${r.position} (${fq(r.qty)})`);
+      m.set(r.item, g);
+    }
+    return [...m.values()].sort((a, b) => a.expiry.localeCompare(b.expiry));
+  }, [rows, today]);
+  return (
+    <div className="st-tablewrap">
+      <table className="st-table st-cards">
+        <thead>
+          <tr>
+            {["Κωδικός", "Περιγραφή", "Παρτίδες", "Νωρίτερη λήξη", "Ποσότητα", "Ληγμένη", "Θέσεις"].map((h) => (
+              <th key={h}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {groups.map((g) => (
+            <tr key={g.item}>
+              <td className="mono" data-label="Κωδικός">{g.item}</td>
+              <td className="st-desc" data-label="Περιγραφή">{g.description}</td>
+              <td className="mono" data-label="Παρτίδες">{[...g.lots].join(", ")}</td>
+              <td className={`mono ${g.expiry < today ? "st-expired" : "st-soon"}`} data-label="Νωρίτερη λήξη">{fd(g.expiry)}</td>
+              <td className="num" data-label="Ποσότητα"><b>{fq(g.qty)}</b></td>
+              <td className="num st-expired" data-label="Ληγμένη">{g.expiredQty ? fq(g.expiredQty) : ""}</td>
+              <td className="dim an-pos" data-label="Θέσεις">{g.pos.join(", ")}</td>
+            </tr>
+          ))}
+          {!groups.length && (
+            <tr>
+              <td colSpan={7} className="st-empty">Καμία λήξη μέσα σε 6 μήνες.</td>
             </tr>
           )}
         </tbody>
