@@ -19,25 +19,35 @@ import { AssignBadge } from "@/components/AssignControls";
 
 const COLS =
   "id, order_id, list_no, doc_type, doc_no, erp_code, order_date, customer, item, description, lot, sn, qty, init_qty, from_pos, to_pos, wms_status, line_no, collected, collected_at, collected_by, picker, comments";
-type Range = "today" | "yesterday" | "7";
+type Range = "today" | "yesterday" | "7" | "30";
 type ListCard = { list: string; customer: string; date: string | null; lines: number; done: number; picker: string; doc: string };
 
 const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const fq = (n: number | null) => (n == null ? "" : n.toLocaleString("el-GR", { maximumFractionDigits: 3 }));
 const posKey = (p: string | null) => (p ?? "").replace(/\d+/g, (d) => d.padStart(4, "0"));
 
-function rangeOf(r: Range): [Date, Date] {
+/** γρήγορες επιλογές -> [από, έως] (συμπεριλαμβάνονται και οι δύο ημέρες) */
+function rangeOf(r: Range): [string, string] {
   const t = new Date();
-  const start = new Date(t.getFullYear(), t.getMonth(), t.getDate());
-  const end = new Date(start.getTime() + 86400000);
-  if (r === "yesterday") return [new Date(start.getTime() - 86400000), start];
-  if (r === "7") return [new Date(start.getTime() - 6 * 86400000), end];
-  return [start, end];
+  const d = (n: number) => iso(new Date(t.getFullYear(), t.getMonth(), t.getDate() - n));
+  if (r === "yesterday") return [d(1), d(1)];
+  if (r === "7") return [d(6), d(0)];
+  if (r === "30") return [d(29), d(0)];
+  return [d(0), d(0)];
 }
 
 export default function PickBoard({ userEmail, role }: { userEmail: string | null; role: "admin" | "staff" }) {
   const [list, setList] = useState<string | null>(null);
-  const [range, setRange] = useState<Range>("today");
+  const [dFrom, setDFrom] = useState(() => rangeOf("today")[0]);
+  const [dTo, setDTo] = useState(() => rangeOf("today")[1]);
+  const setRange = (r: Range) => {
+    const [a, b] = rangeOf(r);
+    setDFrom(a);
+    setDTo(b);
+  };
+  const range = (["today", "yesterday", "7", "30"] as Range[]).find((r) => rangeOf(r)[0] === dFrom && rangeOf(r)[1] === dTo) ?? null;
+  const [selL, setSelL] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [find, setFind] = useState("");
   const [lists, setLists] = useState<ListCard[] | null>(null);
   const [lines, setLines] = useState<OrderRow[] | null>(null);
@@ -98,13 +108,19 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
   async function loadLists(silent = false) {
     if (!silent) setLists(null);
     setError(null);
-    const [a, b] = rangeOf(range);
+    const a = new Date(`${dFrom || dTo}T00:00:00`);
+    const b = new Date(new Date(`${dTo || dFrom}T00:00:00`).getTime() + 86400000);
+    if (!(a < b)) {
+      setLists([]);
+      setAllRows([]);
+      return setError("Η ημερομηνία «από» είναι μετά την «έως».");
+    }
     const sb = createClient();
     const out: OrderRow[] = [];
     for (let from = 0; ; from += 1000) {
       const { data, error } = await sb
         .from("wms_orders_v")
-        .select("list_no, customer, order_date, collected, picker, doc_no, from_pos")
+        .select("id, list_no, customer, order_date, collected, picker, doc_no, from_pos")
         .eq("doc_type", "SALEXPORTCL")
         .gte("order_date", a.toISOString())
         .lt("order_date", b.toISOString())
@@ -147,7 +163,7 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
   useEffect(() => {
     if (list) loadLines(list);
     else loadLists();
-  }, [list, range]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [list, dFrom, dTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // αλλαγές από άλλες συσκευές / το sync
   const refresh = useCoalesced(() => (list ? loadLines(list, true) : loadLists(true)), 1200);
@@ -165,6 +181,24 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
       setLines(prev);
       setFlash({ text: `Δεν αποθηκεύτηκε: ${error.message}`, ok: false });
     }
+  }
+
+  // μαζικό collected / not collected για τις επιλεγμένες λίστες (μόνο οι γραμμές της αποθήκης της συσκευής)
+  async function bulkCollected(value: boolean) {
+    const ids = allRows.filter((r) => selL.has(r.list_no ?? "") && rowIn(r, siteF, withUnassigned)).map((r) => r.id);
+    if (!ids.length) return;
+    if (!window.confirm(`${value ? "Collected" : "Not collected"} για ${ids.length} γραμμές σε ${selL.size} λίστες;`)) return;
+    setBulkBusy(true);
+    const sb = createClient();
+    let err: string | null = null;
+    for (let i = 0; i < ids.length && !err; i += 500) {
+      const { error } = await sb.rpc("wms_orders_set_collected", { p_ids: ids.slice(i, i + 500), p_value: value });
+      if (error) err = error.message;
+    }
+    setBulkBusy(false);
+    if (err) setError(`Δεν αποθηκεύτηκε: ${err}`);
+    setSelL(new Set());
+    loadLists(true);
   }
 
   // σάρωση: κωδικός είδους ή DataMatrix ετικέτας (κωδικός#παρτίδα#serial#ποσότητα)
@@ -251,13 +285,24 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
                 [
                   ["today", "Σήμερα"],
                   ["yesterday", "Χθες"],
-                  ["7", "7 ημέρες"],
+                  ["7", "7 ημ."],
+                  ["30", "30 ημ."],
                 ] as const
               ).map(([k, l]) => (
                 <button key={k} type="button" className={`pk-chip ${range === k ? "on" : ""}`} onClick={() => setRange(k)}>
                   {l}
                 </button>
               ))}
+            </div>
+            <div className="pk-dates">
+              <label>
+                Από
+                <input type="date" value={dFrom} onChange={(e) => setDFrom(e.target.value)} />
+              </label>
+              <label>
+                Έως
+                <input type="date" value={dTo} onChange={(e) => setDTo(e.target.value)} />
+              </label>
             </div>
             <input className="pk-find" value={find} onChange={(e) => setFind(e.target.value)} placeholder="Αριθμός λίστας, πελάτης ή παραστατικό…" inputMode="search" />
             <form
@@ -277,13 +322,51 @@ export default function PickBoard({ userEmail, role }: { userEmail: string | nul
             {error && <p className="rp-notice error">{error}</p>}
             {lists === null && !error && <p className="dim">Φόρτωση…</p>}
             {lists2 && !shownLists.length && <p className="dim">Καμία λίστα σε αυτό το διάστημα{siteF !== "all" ? " για αυτή την αποθήκη" : ""}.</p>}
+            {shownLists.length > 0 && (
+              <div className="pk-bulk">
+                <label className="st-check">
+                  <input
+                    type="checkbox"
+                    checked={shownLists.every((c) => selL.has(c.list))}
+                    onChange={(e) => setSelL(e.target.checked ? new Set(shownLists.map((c) => c.list)) : new Set())}
+                  />
+                  Επιλογή όλων ({shownLists.length})
+                </label>
+                {selL.size > 0 && (
+                  <span className="pk-bulk-btns">
+                    <span className="dim">{selL.size} λίστες</span>
+                    <button type="button" className="btn sm or-c1" disabled={bulkBusy} onClick={() => bulkCollected(true)}>
+                      Collected
+                    </button>
+                    <button type="button" className="btn ghost sm" disabled={bulkBusy} onClick={() => bulkCollected(false)}>
+                      Not collected
+                    </button>
+                  </span>
+                )}
+              </div>
+            )}
             <div className="pk-lists">
               {shownLists.map((c) => {
                 const pct = c.lines ? Math.round((c.done / c.lines) * 100) : 0;
                 return (
-                  <button key={c.list} type="button" className={`pk-card ${c.done === c.lines ? "done" : c.done ? "part" : ""}`} onClick={() => openList(c.list)}>
+                  <button key={c.list} type="button" className={`pk-card ${c.done === c.lines ? "done" : c.done ? "part" : ""} ${selL.has(c.list) ? "sel" : ""}`} onClick={() => openList(c.list)}>
                     <span className="pk-card-top">
-                      <b className="pk-list">{c.list}</b>
+                      <span className="pk-sel" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selL.has(c.list)}
+                          aria-label={`Επιλογή λίστας ${c.list}`}
+                          onChange={(e) =>
+                            setSelL((cur) => {
+                              const n = new Set(cur);
+                              if (e.target.checked) n.add(c.list);
+                              else n.delete(c.list);
+                              return n;
+                            })
+                          }
+                        />
+                        <b className="pk-list">{c.list}</b>
+                      </span>
                       <span className="pk-count">
                         {c.done}/{c.lines}
                       </span>
