@@ -10,7 +10,7 @@ import { relDate } from "@/lib/format";
 import { displayUser } from "@/lib/users";
 import { evaluateShipments, isoWeek, parseShipments, weekRank, type CustomerEval, type ExecLine, type LineState, type ShipRow, type StockPos } from "@/lib/shipments";
 
-type Upload = { file_name: string | null; rows: number | null; source: string | null; uploaded_by: string | null; uploaded_at: string };
+type Upload = { file_name: string | null; rows: number | null; source: string | null; uploaded_by: string | null; uploaded_at: string; file_mtime?: string | null };
 type Scope = "current" | "all" | number;
 const LS = "shipments.v1";
 const STATE_TXT: Record<LineState, string> = { done: "Εκτελέστηκε", ok: "Διαθέσιμο", partial: "Μερικώς", none: "Χωρίς απόθεμα" };
@@ -127,16 +127,26 @@ export default function ShipmentsBoard({ userEmail, role }: { userEmail: string 
   const loadAll = useCallback(async () => {
     setError(null);
     const sb = createClient();
-    const [l, u] = await Promise.all([
+    const [l, u, raw] = await Promise.all([
       sb.from("shipment_lines").select(SHIP_COLS).order("sheet").order("row_no").range(0, 9999),
       sb.from("shipment_uploads").select("file_name, rows, source, uploaded_by, uploaded_at").order("uploaded_at", { ascending: false }).limit(1),
+      sb.from("shipment_raw").select("file_name, file_mtime, sheets, uploaded_by, uploaded_at").limit(1),
     ]);
     if (l.error) {
       setLoading(false);
       return setError(`Οι αποστολές δεν φορτώθηκαν: ${l.error.message}`);
     }
-    const r = ((l.data as Record<string, unknown>[]) ?? []).map(normLine);
-    setUpload(((u.data as Upload[] | null) ?? [])[0] ?? null);
+    // πηγή: ό,τι είναι πιο πρόσφατο — το Excel από το OneDrive (συγχρονισμός, live) ή το χειροκίνητο ανέβασμα
+    const up = ((u.data as Upload[] | null) ?? [])[0] ?? null;
+    const rw = ((raw.data as (Upload & { sheets: { name: string; rows: (string | number | null)[][] }[] })[] | null) ?? [])[0] ?? null;
+    let r: ShipRow[];
+    if (rw && (!up || rw.uploaded_at >= up.uploaded_at)) {
+      r = parseShipments(rw.sheets ?? []);
+      setUpload({ file_name: rw.file_name, rows: r.length, source: "onedrive", uploaded_by: null, uploaded_at: rw.uploaded_at, file_mtime: rw.file_mtime });
+    } else {
+      r = ((l.data as Record<string, unknown>[]) ?? []).map(normLine);
+      setUpload(up);
+    }
     const [st, ex] = await Promise.allSettled([loadStockFor(codesOf(r)), loadExec(docsOf(r))]);
     if (st.status === "fulfilled") setStock(st.value);
     else setError(`Το απόθεμα δεν φορτώθηκε: ${(st.reason as Error).message}`);
@@ -282,8 +292,17 @@ export default function ShipmentsBoard({ userEmail, role }: { userEmail: string 
             </p>
             {upload && (
               <p className="dim sh-src">
-                Πηγή: <b>{upload.file_name ?? "Excel"}</b> · {upload.rows ?? 0} γραμμές · {relDate(upload.uploaded_at)}
-                {upload.uploaded_by ? ` · ${displayUser(upload.uploaded_by)}` : ""}
+                Πηγή: <b>{upload.file_name ?? "Excel"}</b> · {upload.rows ?? 0} γραμμές ·{" "}
+                {upload.source === "onedrive" ? (
+                  <>
+                    <span className="sh-auto">αυτόματα από OneDrive</span> · τελευταία αλλαγή {relDate(upload.file_mtime ?? upload.uploaded_at)}
+                  </>
+                ) : (
+                  <>
+                    {upload.source === "upload" ? "ανέβασμα" : upload.source} {relDate(upload.uploaded_at)}
+                    {upload.uploaded_by ? ` · ${displayUser(upload.uploaded_by)}` : ""}
+                  </>
+                )}
               </p>
             )}
           </div>

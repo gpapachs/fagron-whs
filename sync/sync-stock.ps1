@@ -19,6 +19,8 @@
   ΝΕΕΣ κινήσεις (από την τελευταία που υπάρχει στην εφαρμογή, αρχικά MOVES_DAYS ημέρες).
 
   Ρυθμίσεις: rythmiseis.txt (ή .env) στον ίδιο φάκελο. Ο κωδικός μένει εκεί.
+  Προαιρετικά SHIPMENTS_XLSX=<διαδρομή του FSSE SHIPMENTS .xlsx στο OneDrive> (αλλιώς αναζήτηση
+  στους φακέλους OneDrive*). Στο -Live ανεβαίνει μέσα σε ~10" από κάθε αλλαγή του αρχείου.
 #>
 param([switch]$Test, [switch]$DryRun, [switch]$Force, [string]$Describe, [string]$Probe, [string]$Find, [switch]$Moves, [switch]$Live, [switch]$Orders)
 
@@ -264,6 +266,146 @@ function Sb-FetchAll([string]$table, [string]$columns) {
     $offset += 1000
   }
   return ,$all
+}
+
+# ------------------------------------------------------------------ Αποστολές FSSE (Excel από OneDrive)
+# Το κοινόχρηστο Excel συγχρονίζεται από το OneDrive σε τοπικό φάκελο. Όταν αλλάξει, διαβάζονται
+# τα κελιά όλων των φύλλων (χωρίς Excel εγκατεστημένο: το .xlsx είναι zip με xml) και ανεβαίνουν
+# όπως είναι· η εφαρμογή τα ερμηνεύει με την ίδια λογική με το «Ανέβασμα Excel».
+Add-Type -AssemblyName System.IO.Compression, System.Web
+$script:ShipPath = $null; $script:ShipSearchAt = [datetime]::MinValue
+$script:ShipSent = $null
+
+function Find-ShipmentsFile {
+  $p = Opt 'SHIPMENTS_XLSX'
+  if ($p) { if (Test-Path -LiteralPath $p) { return $p } else { return $null } }
+  # χωρίς ρύθμιση: αναζήτηση στους φακέλους OneDrive (μία φορά ανά 10 λεπτά αν δεν βρεθεί)
+  if (((Get-Date) - $script:ShipSearchAt).TotalMinutes -lt 10) { return $script:ShipPath }
+  $script:ShipSearchAt = Get-Date
+  $roots = @(Get-ChildItem -LiteralPath $env:USERPROFILE -Directory -Filter 'OneDrive*' -ErrorAction SilentlyContinue)
+  foreach ($r in $roots) {
+    $f = Get-ChildItem -LiteralPath $r.FullName -Recurse -File -Filter 'FSSE SHIPMENTS*.xlsx' -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -notlike '~$*' } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    if ($f) { return $f.FullName }
+  }
+  return $null
+}
+
+function Js([string]$s) { return '"' + [Web.HttpUtility]::JavaScriptStringEncode($s) + '"' }
+function Col-Index([string]$ref) {
+  $n = 0
+  foreach ($ch in ($ref -replace '[0-9]', '').ToUpper().ToCharArray()) { $n = $n * 26 + ([int]$ch - 64) }
+  return $n - 1
+}
+
+# .xlsx -> JSON [{ "name": "...", "rows": [[κελιά], ...] }] (γραμμή i = γραμμή i+1 του Excel)
+function Read-XlsxJson([string]$path) {
+  $fs = [IO.File]::Open($path, 'Open', 'Read', 'ReadWrite')
+  try { $ms = New-Object IO.MemoryStream; $fs.CopyTo($ms) } finally { $fs.Dispose() }
+  $ms.Position = 0
+  $zip = New-Object IO.Compression.ZipArchive($ms, [IO.Compression.ZipArchiveMode]::Read)
+  try {
+    $getXml = {
+      param([string]$name)
+      $e = $zip.GetEntry($name)
+      if (-not $e) { return $null }
+      $sr = New-Object IO.StreamReader($e.Open(), [Text.Encoding]::UTF8)
+      try { $x = New-Object Xml.XmlDocument; $x.LoadXml($sr.ReadToEnd()); return $x } finally { $sr.Dispose() }
+    }
+    $ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    $rel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    $ss = New-Object Collections.Generic.List[string]
+    $sx = & $getXml 'xl/sharedStrings.xml'
+    if ($sx) {
+      foreach ($si in $sx.DocumentElement.ChildNodes) {
+        if ($si.LocalName -ne 'si') { continue }
+        $t = ''
+        foreach ($node in $si.GetElementsByTagName('t', $ns)) { if ($node.ParentNode.LocalName -ne 'rPh') { $t += $node.InnerText } }
+        $ss.Add($t)
+      }
+    }
+    $wb = & $getXml 'xl/workbook.xml'
+    $rels = & $getXml 'xl/_rels/workbook.xml.rels'
+    $target = @{}
+    foreach ($r in $rels.DocumentElement.ChildNodes) { if ($r.Id) { $target[$r.Id] = $r.Target } }
+    $inv = [Globalization.CultureInfo]::InvariantCulture
+    $sheetsJson = New-Object Collections.Generic.List[string]
+    foreach ($sh in $wb.GetElementsByTagName('sheet', $ns)) {
+      $t = [string]$target[$sh.GetAttribute('id', $rel)]
+      if (-not $t) { continue }
+      $t = $t.TrimStart('/'); if (-not $t.StartsWith('xl/')) { $t = 'xl/' + $t }
+      $x = & $getXml $t
+      if (-not $x) { continue }
+      $rows = @{}; $maxRow = 0
+      foreach ($row in $x.GetElementsByTagName('row', $ns)) {
+        $ri = [int]$row.GetAttribute('r')
+        $cells = @{}; $maxCol = -1
+        foreach ($c in $row.ChildNodes) {
+          if ($c.LocalName -ne 'c') { continue }
+          $ty = $c.GetAttribute('t'); $val = $null
+          $v = $null; foreach ($ch in $c.ChildNodes) { if ($ch.LocalName -eq 'v') { $v = $ch.InnerText } }
+          if ($ty -eq 's') { if ($null -ne $v) { $val = Js $ss[[int]$v] } }
+          elseif ($ty -eq 'inlineStr') { $val = Js $c.InnerText }
+          elseif ($ty -eq 'str') { if ($null -ne $v) { $val = Js $v } }
+          elseif ($ty -eq 'e') { $val = $null }
+          elseif ($ty -eq 'b') { if ($null -ne $v) { $val = $(if ($v -eq '1') { 'true' } else { 'false' }) } }
+          elseif ($null -ne $v -and $v -ne '') {
+            $d = 0.0
+            if ([double]::TryParse($v, [Globalization.NumberStyles]::Float, $inv, [ref]$d)) { $val = $d.ToString('R', $inv) } else { $val = Js $v }
+          }
+          if ($null -eq $val) { continue }
+          $ref = $c.GetAttribute('r')
+          $ci = if ($ref) { Col-Index $ref } else { $maxCol + 1 }
+          $cells[$ci] = $val; if ($ci -gt $maxCol) { $maxCol = $ci }
+        }
+        if ($maxCol -lt 0) { continue }
+        $parts = for ($i = 0; $i -le $maxCol; $i++) { if ($cells.ContainsKey($i)) { $cells[$i] } else { 'null' } }
+        $rows[$ri] = '[' + ($parts -join ',') + ']'
+        if ($ri -gt $maxRow) { $maxRow = $ri }
+      }
+      $lines = for ($i = 1; $i -le $maxRow; $i++) { if ($rows.ContainsKey($i)) { $rows[$i] } else { '[]' } }
+      $sheetsJson.Add('{"name":' + (Js $sh.GetAttribute('name')) + ',"rows":[' + ($lines -join ',') + ']}')
+    }
+    return '[' + ($sheetsJson -join ',') + ']'
+  } finally { $zip.Dispose(); $ms.Dispose() }
+}
+
+function Sb-PostJson([string]$path, [string]$json) {
+  $h = @{ apikey = $SbKey }
+  if ($script:Token) { $h['Authorization'] = "Bearer $($script:Token)" }
+  try {
+    $res = Invoke-WebRequest -Method POST -Uri "$SbUrl$path" -Headers $h -UseBasicParsing -TimeoutSec 120 `
+      -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json; charset=utf-8'
+  } catch {
+    $detail = $_.Exception.Message
+    try { $detail += ' ' + (New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())).ReadToEnd() } catch {}
+    throw "Supabase POST ${path}: $detail"
+  }
+  return [Text.Encoding]::UTF8.GetString($res.RawContentStream.ToArray())
+}
+
+# Κάθε κύκλο: αν άλλαξε το αρχείο (και δεν γράφεται αυτή τη στιγμή από το OneDrive), το ανεβάζει.
+# $force: ανέβασμα ακόμη κι αν δεν άλλαξε.
+function Sync-Shipments([switch]$force) {
+  $p = Find-ShipmentsFile
+  if (-not $p) { return }
+  if ($p -ne $script:ShipPath) { Log ("Αποστολές: αρχείο " + $p); $script:ShipPath = $p }
+  $fi = Get-Item -LiteralPath $p
+  $stamp = '{0}|{1}' -f $fi.LastWriteTimeUtc.Ticks, $fi.Length
+  if ($null -eq $script:ShipSent -and -not $force) {
+    # μετά από επανεκκίνηση: αν η εφαρμογή έχει ήδη αυτή την έκδοση, τίποτα
+    try {
+      $m = Sb-Request 'POST' '/rest/v1/rpc/shipments_raw_mtime' @{}
+      if ($m -and ([datetime]$m).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss') -eq $fi.LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ss')) { $script:ShipSent = $stamp }
+    } catch {}
+  }
+  if ($stamp -eq $script:ShipSent -and -not $force) { return }
+  if (((Get-Date).ToUniversalTime() - $fi.LastWriteTimeUtc).TotalSeconds -lt 4) { return }   # ακόμη γράφεται
+  $json = Read-XlsxJson $p
+  $body = '{"p_sheets":' + $json + ',"p_file":' + (Js $fi.Name) + ',"p_mtime":' + (Js $fi.LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ssZ')) + ',"p_bytes":' + $fi.Length + '}'
+  [void](Sb-PostJson '/rest/v1/rpc/shipments_raw_put' $body)
+  $script:ShipSent = $stamp
+  Log ("Αποστολές: ανέβηκε το Excel ({0:N0} KB, αλλαγή {1:dd/MM HH:mm:ss})" -f ($fi.Length / 1KB), $fi.LastWriteTime)
 }
 
 # ------------------------------------------------------------------ μετατροπή
@@ -706,6 +848,7 @@ function Run-Live {
     } catch { Log ("Live (Orders): " + $_) }
     try { Sync-Collecting 'SALEXPORTLS' } catch { Log ("Live (σε συλλογή): " + $_) }
     try { Refresh-Collecting 'SALEXPORTLS' } catch { Log ("Live (γραμμές σε συλλογή): " + $_) }
+    try { Sync-Shipments } catch { Log ("Live (αποστολές): " + $_) }
     # κάθε ~2 λεπτά: λίστες ανοιχτές στην εφαρμογή που ολοκληρώθηκαν στο WMS
     $cycle++
     if ($cycle % [math]::Max(1, [int](120 / $secs)) -eq 0) { try { Refresh-Completed 'SALEXPORTLS' } catch { Log ("Live (ολοκληρωμένες): " + $_) } }
@@ -1041,5 +1184,6 @@ try { Sync-ItemPack } catch { Log ("Παλέτες / συσκευασίες: " +
 foreach ($oc in 'SALEXPORTCL', 'SALEXPORTLS') { try { Sync-Orders $oc } catch { Log ("Orders $($oc): " + $_) } }
 try { Sync-Collecting 'SALEXPORTLS' } catch { Log ("Σε συλλογή: " + $_) }
 try { Refresh-Completed 'SALEXPORTLS' } catch { Log ("Ολοκληρωμένες / διαγραμμένες: " + $_) }
+try { Sync-Shipments } catch { Log ("Αποστολές: " + $_) }
 
 if (-not (Test-Path (Join-Path $Here 'wms-orders.txt'))) { try { Discover-Orders } catch { Log ("Παραγγελίες (εύρεση): " + $_) } }
