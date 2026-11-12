@@ -176,9 +176,20 @@ export function weekRank(w: number | null, current: number) {
 }
 
 export type StockPos = { item: string; position: string; area: string | null; lot: string | null; expiry: string | null; qty: number };
-export type LineState = "ok" | "partial" | "none";
+/** Γραμμή λίστας WMS για το ίδιο παραστατικό (ΠΑΡ) και κωδικό: CL = εκτελεσμένη, LS = προς εκτέλεση */
+export type ExecLine = { type: "CL" | "LS"; doc: string; item: string; qty: number; list_no: string; date: string | null; collected: boolean; collected_by: string | null };
+export type LineState = "done" | "ok" | "partial" | "none";
 export type ShipEval = ShipRow & {
   need: number;
+  /** εκτελέστηκε (λίστες SALEXPORTCL του ίδιου ΠΑΡ/κωδικού) */
+  executed: number;
+  execLists: ExecLine[];
+  /** ανοιχτές λίστες προς εκτέλεση (SALEXPORTLS) του ίδιου ΠΑΡ/κωδικού με υπόλοιπο > 0 */
+  pendingLists: ExecLine[];
+  /** υπόλοιπο της παραγγελίας στο WMS (null = άγνωστο) */
+  orderOpen: number | null;
+  /** ό,τι μένει να εκτελεστεί */
+  remaining: number;
   allocated: number;
   state: LineState;
   itemStock: number;
@@ -186,16 +197,75 @@ export type ShipEval = ShipRow & {
   positions: StockPos[];
   rank: number | null; // εβδομάδα ως προς την τρέχουσα (0 = τρέχουσα)
 };
-export type CustomerEval = { sheet: string; customer: string; lines: ShipEval[]; ok: number; partial: number; none: number; weeks: number[]; color: "green" | "yellow" | "red" };
+export type CustomerEval = { sheet: string; customer: string; lines: ShipEval[]; done: number; ok: number; partial: number; none: number; weeks: number[]; color: "green" | "yellow" | "red" };
+
+const DAY = 86400000;
+const t0 = (iso: string | null) => (iso ? new Date(iso.length <= 10 ? `${iso}T00:00:00Z` : iso).getTime() : NaN);
+/** ημερομηνία αναφοράς γραμμής: DATE του Excel, αλλιώς Δευτέρα της εβδομάδας αποστολής */
+function refTime(r: ShipRow, currentWeek: number, today: number) {
+  const d = t0(r.ship_date);
+  if (!isNaN(d)) return d;
+  const rank = weekRank(r.week, currentWeek);
+  return today + (rank ?? -4) * 7 * DAY - 7 * DAY;
+}
+
+/**
+ * Αντιστοίχιση με τις λίστες του WMS (ίδιο ΠΑΡ + κωδικός). Οι εκτελεσμένες (CL) ποσότητες
+ * μοιράζονται στις γραμμές του Excel από την πιο πρόσφατη προς την παλαιότερη: κάθε γραμμή
+ * παίρνει εκτελέσεις από 3 ημέρες πριν την ημερομηνία της και μετά — έτσι μια εκτέλεση της
+ * W46 δεν «κλείνει» και τη γραμμή της W45 με τον ίδιο ΠΑΡ.
+ */
+export function matchExecutions(rows: ShipRow[], exec: ExecLine[], currentWeek: number, today = Date.now()) {
+  const key = (d: string, i: string) => `${d.replace(/\s+/g, "").toUpperCase()}|${i}`;
+  const cl = new Map<string, (ExecLine & { left: number })[]>();
+  const ls = new Map<string, ExecLine[]>();
+  for (const e of exec) {
+    const k = key(e.doc, e.item);
+    if (e.type === "CL") cl.set(k, [...(cl.get(k) ?? []), { ...e, left: e.qty }]);
+    else ls.set(k, [...(ls.get(k) ?? []), e]);
+  }
+  const out = new Map<ShipRow, { executed: number; lists: ExecLine[]; pending: ExecLine[]; open: number | null }>();
+  const byKey = new Map<string, ShipRow[]>();
+  for (const r of rows) if (r.doc) byKey.set(key(r.doc, r.item), [...(byKey.get(key(r.doc, r.item)) ?? []), r]);
+  for (const [k, rs] of byKey) {
+    const pool = (cl.get(k) ?? []).sort((a, b) => t0(a.date) - t0(b.date));
+    const sorted = [...rs].sort((a, b) => refTime(b, currentWeek, today) - refTime(a, currentWeek, today) || b.row_no - a.row_no);
+    for (const r of sorted) {
+      const need = needOf(r);
+      const from = refTime(r, currentWeek, today) - 3 * DAY;
+      let got = 0;
+      const lists: ExecLine[] = [];
+      for (const e of pool) {
+        if (got >= need - 1e-9) break;
+        if (e.left <= 1e-9 || !(t0(e.date) >= from)) continue;
+        const take = Math.min(e.left, need - got);
+        e.left -= take;
+        got += take;
+        lists.push({ ...e, qty: take });
+      }
+      // η λίστα «προς εκτέλεση» του ΠΑΡ κρατά το υπόλοιπο της παραγγελίας (0 = εκτελέστηκε όλη)
+      const pending = ls.get(k) ?? [];
+      const open = pending.length ? pending.reduce((t, e) => t + e.qty, 0) : null;
+      out.set(r, { executed: got, lists, pending: pending.filter((e) => e.qty > 0), open });
+    }
+  }
+  return out;
+}
 
 /**
  * Κατανομή αποθέματος: ανά κωδικό, οι γραμμές παίρνουν απόθεμα με σειρά εβδομάδας αποστολής
  * (νωρίτερη πρώτα), μετά φύλλο και γραμμή — έτσι το ίδιο απόθεμα δεν μετράει δύο φορές.
+ * Ό,τι έχει ήδη εκτελεστεί (CL) δεν χρειάζεται απόθεμα.
  */
-export function evaluateShipments(rows: ShipRow[], stock: StockPos[], opts: { currentWeek: number; scope: "current" | "all" | number; includeNoWeek: boolean }): CustomerEval[] {
+export function evaluateShipments(
+  rows: ShipRow[],
+  stock: StockPos[],
+  opts: { currentWeek: number; scope: "current" | "all" | number; includeNoWeek: boolean; exec?: ExecLine[]; today?: number }
+): CustomerEval[] {
   const byItem = new Map<string, StockPos[]>();
   for (const s of stock) byItem.set(s.item, [...(byItem.get(s.item) ?? []), s]);
   const sum = (code: string) => (byItem.get(code) ?? []).reduce((t, s) => t + s.qty, 0);
+  const ex = matchExecutions(rows, opts.exec ?? [], opts.currentWeek, opts.today);
 
   const open = rows.filter((r) => {
     const rank = weekRank(r.week, opts.currentWeek);
@@ -211,15 +281,24 @@ export function evaluateShipments(rows: ShipRow[], stock: StockPos[], opts: { cu
   const evals = new Map<ShipRow, ShipEval>();
   for (const r of order) {
     const need = needOf(r);
+    const m = ex.get(r) ?? { executed: 0, lists: [], pending: [], open: null };
+    // κλειστή παραγγελία στο WMS (υπόλοιπο 0) με εκτέλεση = ολοκληρώθηκε, ακόμη κι αν η ποσότητα
+    // της γραμμής του Excel διαφέρει (π.χ. η γραμμή 4242 που στάλθηκε σε δύο δόσεις)
+    const remaining = m.open === 0 && m.executed > 0 ? 0 : Math.max(0, need - m.executed);
     const total = sum(r.item);
     const rem = left.has(r.item) ? (left.get(r.item) as number) : total;
-    const allocated = Math.max(0, Math.min(need, rem));
+    const allocated = Math.max(0, Math.min(remaining, rem));
     left.set(r.item, rem - allocated);
     evals.set(r, {
       ...r,
       need,
+      executed: m.executed,
+      execLists: m.lists,
+      pendingLists: m.pending,
+      orderOpen: m.open,
+      remaining,
       allocated,
-      state: need <= 0 || allocated >= need - 1e-9 ? "ok" : allocated > 0 ? "partial" : "none",
+      state: need > 0 && remaining <= 1e-9 && m.executed > 0 ? "done" : remaining <= 1e-9 || allocated >= remaining - 1e-9 ? "ok" : allocated > 0 || m.executed > 0 ? "partial" : "none",
       itemStock: total,
       bulkStock: r.bulk ? sum(r.bulk) : null,
       positions: (byItem.get(r.item) ?? []).slice().sort((x, y) => (x.expiry ?? "9").localeCompare(y.expiry ?? "9")),
@@ -230,7 +309,7 @@ export function evaluateShipments(rows: ShipRow[], stock: StockPos[], opts: { cu
   const custs = new Map<string, CustomerEval>();
   for (const r of open) {
     const e = evals.get(r) as ShipEval;
-    const c = custs.get(r.sheet) ?? { sheet: r.sheet, customer: r.customer, lines: [], ok: 0, partial: 0, none: 0, weeks: [], color: "green" as const };
+    const c = custs.get(r.sheet) ?? { sheet: r.sheet, customer: r.customer, lines: [], done: 0, ok: 0, partial: 0, none: 0, weeks: [], color: "green" as const };
     c.lines.push(e);
     c[e.state]++;
     if (e.week != null && !c.weeks.includes(e.week)) c.weeks.push(e.week);
@@ -239,7 +318,7 @@ export function evaluateShipments(rows: ShipRow[], stock: StockPos[], opts: { cu
   for (const c of custs.values()) {
     c.lines.sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99) || a.row_no - b.row_no);
     c.weeks.sort((a, b) => (weekRank(a, opts.currentWeek) ?? 0) - (weekRank(b, opts.currentWeek) ?? 0));
-    c.color = c.none === 0 && c.partial === 0 ? "green" : c.ok + c.partial > 0 ? "yellow" : "red";
+    c.color = c.none === 0 && c.partial === 0 ? "green" : c.ok + c.partial + c.done > 0 ? "yellow" : "red";
   }
   return [...custs.values()].sort((a, b) => a.sheet.localeCompare(b.sheet));
 }

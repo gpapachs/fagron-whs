@@ -360,6 +360,14 @@ if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) 
   const rows = parseShipments(sheets);
   const stock = [{ item: "26-90-001", position: "01.01.01.01", area: "ΠΑΡΑΓΩΓΗ", lot: "L1", expiry: "2028-01-01", qty: 50 }, { item: "60-90-001", position: "11.01.01.01", area: "ΚΕΝΤΡΙΚΗ", lot: "B1", expiry: null, qty: 7 }];
   const ev = evaluateShipments(rows, stock, { currentWeek: 46, scope: "current", includeNoWeek: true });
+  // αντιστοίχιση με λίστες WMS: η γραμμή W446 (26-90-002, 5) εκτελέστηκε με CL, η παραγγελία έκλεισε (LS 0)
+  const ex = [
+    { type: "CL", doc: "00ΠΑΡ0000001", item: "26-90-002", qty: 5, list_no: "900001", date: "2026-11-10T09:00:00Z", collected: true, collected_by: "alex@whs.local" },
+    { type: "LS", doc: "00ΠΑΡ0000001", item: "26-90-002", qty: 0, list_no: "500001", date: "2026-08-10T00:00:00Z", collected: false, collected_by: null },
+  ];
+  const ev2 = evaluateShipments(rows, stock, { currentWeek: 46, scope: "current", includeNoWeek: true, exec: ex, today: Date.parse("2026-11-12") });
+  const d = ev2.find((c) => c.sheet === "ΠΕΛΑΤΗΣ Α").lines.find((l) => l.item === "26-90-002");
+  if (!(d.state === "done" && d.executed === 5 && d.execLists[0].list_no === "900001")) { console.error("αποστολές: εκτέλεση λάθος", d.state, d.executed); process.exitCode = 1; }
   const a = ev.find((c) => c.sheet === "ΠΕΛΑΤΗΣ Α");
   const b = ev.find((c) => c.sheet === "ΠΕΛΑΤΗΣ Β");
   const l1 = a?.lines.find((l) => l.item === "26-90-001");
@@ -367,8 +375,8 @@ if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) 
   const ok = rows.length === 5 && a.lines.length === 2 && l1.need === 40 && l1.state === "ok" && l1.comments.includes("KARANTINA") && l1.bulkStock === 7 && l2.allocated === 10 && l2.state === "partial" && a.lines.find((l) => l.item === "26-90-002").week === 46 && b.lines.some((l) => l.week == null && l.need === 1);
   if (!ok) { console.error("αποστολές: λάθος", rows.length, a?.lines.map((l) => [l.item, l.week, l.need, l.state]), l2 && [l2.allocated, l2.state]); process.exitCode = 1; }
   const m = { generatedAt: new Date(), userEmail: "alex@whs.local", filters: [], syncedAt: null, scope: "Εβδομάδα 46 και μετά" };
-  const { wb } = shipmentsWorkbook(XLSX, ev, m);
-  const { doc } = shipmentsPdf(jsPDF, autoTable, fonts, ev, m);
+  const { wb } = shipmentsWorkbook(XLSX, ev2, m);
+  const { doc } = shipmentsPdf(jsPDF, autoTable, fonts, ev2, m);
   fs.writeFileSync(path.join(outDir, "apostoles.pdf"), Buffer.from(doc.output("arraybuffer")));
   if (!wb.SheetNames.includes("Αποστολές")) process.exitCode = 1;
   console.log("αποστολές: OK");

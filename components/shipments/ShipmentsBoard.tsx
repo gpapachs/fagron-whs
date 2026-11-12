@@ -8,12 +8,12 @@ import { createClient } from "@/lib/supabase/client";
 import { useCoalesced, useWmsLive } from "@/lib/live";
 import { relDate } from "@/lib/format";
 import { displayUser } from "@/lib/users";
-import { evaluateShipments, isoWeek, parseShipments, weekRank, type CustomerEval, type LineState, type ShipRow, type StockPos } from "@/lib/shipments";
+import { evaluateShipments, isoWeek, parseShipments, weekRank, type CustomerEval, type ExecLine, type LineState, type ShipRow, type StockPos } from "@/lib/shipments";
 
 type Upload = { file_name: string | null; rows: number | null; source: string | null; uploaded_by: string | null; uploaded_at: string };
 type Scope = "current" | "all" | number;
 const LS = "shipments.v1";
-const STATE_TXT: Record<LineState, string> = { ok: "Διαθέσιμο", partial: "Μερικώς", none: "Χωρίς απόθεμα" };
+const STATE_TXT: Record<LineState, string> = { done: "Εκτελέστηκε", ok: "Διαθέσιμο", partial: "Μερικώς", none: "Χωρίς απόθεμα" };
 const fq = (n: number | null | undefined) => (n == null ? "" : n.toLocaleString("el-GR", { maximumFractionDigits: 3 }));
 const fexp = (s: string | null) => (s ? `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(2, 4)}` : "");
 const SHIP_COLS = "sheet, row_no, customer, ship_date, week, order_date, doc, po, item, bulk, product, sku, qty_ordered, qty_initial, qty_confirmed, requirements, comments";
@@ -58,11 +58,40 @@ async function loadStockFor(codes: string[]): Promise<StockPos[]> {
   return out;
 }
 
+/** λίστες WMS (CL εκτελεσμένες / LS προς εκτέλεση) των ίδιων ΠΑΡ */
+async function loadExec(docs: string[]): Promise<ExecLine[]> {
+  const sb = createClient();
+  const out: ExecLine[] = [];
+  for (let i = 0; i < docs.length; i += 100) {
+    const { data, error } = await sb
+      .from("wms_orders_v")
+      .select("doc_type, doc_no, item, qty, list_no, order_date, collected, collected_by")
+      .in("doc_type", ["SALEXPORTCL", "SALEXPORTLS"])
+      .in("doc_no", docs.slice(i, i + 100))
+      .range(0, 9999);
+    if (error) throw new Error(error.message);
+    for (const r of (data as Record<string, unknown>[]) ?? [])
+      out.push({
+        type: r.doc_type === "SALEXPORTCL" ? "CL" : "LS",
+        doc: String(r.doc_no ?? ""),
+        item: String(r.item ?? ""),
+        qty: Number(r.qty) || 0,
+        list_no: String(r.list_no ?? ""),
+        date: (r.order_date as string) ?? null,
+        collected: !!r.collected,
+        collected_by: (r.collected_by as string) || null,
+      });
+  }
+  return out;
+}
+const docsOf = (rows: ShipRow[]) => [...new Set(rows.map((r) => r.doc.replace(/\s+/g, "")).filter((d) => /ΠΑΡ/.test(d)))];
+
 const codesOf = (rows: ShipRow[]) => [...new Set(rows.flatMap((r) => [r.item, r.bulk].filter(Boolean)))];
 
 export default function ShipmentsBoard({ userEmail, role }: { userEmail: string | null; role: "admin" | "staff" }) {
   const [rows, setRows] = useState<ShipRow[] | null>(null);
   const [stock, setStock] = useState<StockPos[]>([]);
+  const [exec, setExec] = useState<ExecLine[]>([]);
   const [upload, setUpload] = useState<Upload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -108,11 +137,11 @@ export default function ShipmentsBoard({ userEmail, role }: { userEmail: string 
     }
     const r = ((l.data as Record<string, unknown>[]) ?? []).map(normLine);
     setUpload(((u.data as Upload[] | null) ?? [])[0] ?? null);
-    try {
-      setStock(await loadStockFor(codesOf(r)));
-    } catch (e) {
-      setError(`Το απόθεμα δεν φορτώθηκε: ${(e as Error).message}`);
-    }
+    const [st, ex] = await Promise.allSettled([loadStockFor(codesOf(r)), loadExec(docsOf(r))]);
+    if (st.status === "fulfilled") setStock(st.value);
+    else setError(`Το απόθεμα δεν φορτώθηκε: ${(st.reason as Error).message}`);
+    if (ex.status === "fulfilled") setExec(ex.value);
+    else setError(`Οι λίστες του WMS δεν φορτώθηκαν: ${(ex.reason as Error).message}`);
     setRows(r);
     setLoading(false);
   }, []);
@@ -123,12 +152,16 @@ export default function ShipmentsBoard({ userEmail, role }: { userEmail: string 
   // live: αλλαγή αποθέματος κωδικών που μας αφορούν, πλήρης συγχρονισμός ή νέο Excel
   const pending = useRef<Set<string>>(new Set());
   const full = useRef(false);
+  const orders = useRef(false);
   const flush = useCoalesced(async () => {
     const items = [...pending.current];
     const all = full.current;
+    const ord = orders.current;
     pending.current = new Set();
     full.current = false;
+    orders.current = false;
     try {
+      if (ord && !all && rows) setExec(await loadExec(docsOf(rows)));
       if (all) await loadAll();
       else if (items.length) {
         const fresh = await loadStockFor(items);
@@ -145,6 +178,9 @@ export default function ShipmentsBoard({ userEmail, role }: { userEmail: string 
     if (sig.key === "shipments" || sig.key === "stock_full") {
       full.current = true;
       flush();
+    } else if (sig.key === "orders" || sig.key === "orders_sync") {
+      orders.current = true;
+      flush();
     } else if (sig.key === "stock") {
       const mine = sig.items.filter((i) => codeSet.has(i));
       if (!mine.length) return;
@@ -153,7 +189,7 @@ export default function ShipmentsBoard({ userEmail, role }: { userEmail: string 
     }
   });
 
-  const evals = useMemo<CustomerEval[]>(() => (rows ? evaluateShipments(rows, stock, { currentWeek: current, scope, includeNoWeek: noWeek }) : []), [rows, stock, current, scope, noWeek]);
+  const evals = useMemo<CustomerEval[]>(() => (rows ? evaluateShipments(rows, stock, { currentWeek: current, scope, includeNoWeek: noWeek, exec }) : []), [rows, stock, exec, current, scope, noWeek]);
   const weeks = useMemo(
     () => [...new Set((rows ?? []).map((r) => r.week).filter((w): w is number => w != null))].sort((a, b) => (weekRank(a, current) ?? 0) - (weekRank(b, current) ?? 0)),
     [rows, current]
@@ -175,7 +211,7 @@ export default function ShipmentsBoard({ userEmail, role }: { userEmail: string 
   );
   const tot = evals
     .filter((c) => !cust || c.sheet === cust)
-    .reduce((a, c) => ({ lines: a.lines + c.lines.length, ok: a.ok + c.ok, partial: a.partial + c.partial, none: a.none + c.none }), { lines: 0, ok: 0, partial: 0, none: 0 });
+    .reduce((a, c) => ({ lines: a.lines + c.lines.length, done: a.done + c.done, ok: a.ok + c.ok, partial: a.partial + c.partial, none: a.none + c.none }), { lines: 0, done: 0, ok: 0, partial: 0, none: 0 });
 
   const scopeTxt = scope === "current" ? `Εβδομάδα ${current} και μετά` : scope === "all" ? "Όλες οι εβδομάδες" : `Εβδομάδα ${scope}`;
 
@@ -330,6 +366,7 @@ export default function ShipmentsBoard({ userEmail, role }: { userEmail: string 
               onPick={(k) => setState((cur) => (cur === k ? "all" : (k as LineState)))}
               items={[
                 { key: "all", label: `Γραμμές · ${shown.length} πελάτες`, value: tot.lines, tone: "neutral" },
+                { key: "done", label: "Εκτελέστηκαν", value: tot.done, tone: "blue", hint: "Υπάρχει εκτελεσμένη λίστα (SALEXPORTCL) του ίδιου ΠΑΡ για όλη την ποσότητα" },
                 { key: "ok", label: "Διαθέσιμες", value: tot.ok, tone: "green", hint: "Το απόθεμα του κωδικού καλύπτει την ποσότητα" },
                 { key: "partial", label: "Μερικώς", value: tot.partial, tone: "yellow", hint: "Υπάρχει απόθεμα αλλά λιγότερο από την ποσότητα" },
                 { key: "none", label: "Χωρίς απόθεμα", value: tot.none, tone: "red", hint: "Ο κωδικός δεν έχει απόθεμα (δες το bulk)" },
@@ -358,6 +395,7 @@ export default function ShipmentsBoard({ userEmail, role }: { userEmail: string 
                   </span>
                   <span className="sh-weeks">{c.weeks.map((w) => `W${w}`).join(" ")}</span>
                   <span className="sh-counts">
+                    <span className="sh-badge done" title="Εκτελέστηκαν">{c.done}</span>
                     <span className="sh-badge ok">{c.ok}</span>
                     <span className="sh-badge partial">{c.partial}</span>
                     <span className="sh-badge none">{c.none}</span>
@@ -376,6 +414,7 @@ export default function ShipmentsBoard({ userEmail, role }: { userEmail: string 
                           <th className="num">Ποσότητα</th>
                           <th className="num">Απόθεμα</th>
                           <th>Κατάσταση</th>
+                          <th>Εκτέλεση WMS</th>
                           <th>Θέσεις</th>
                           <th>Bulk</th>
                           <th>Σημειώσεις</th>
@@ -401,14 +440,29 @@ export default function ShipmentsBoard({ userEmail, role }: { userEmail: string 
                             </td>
                             <td className="num" data-label="Απόθεμα">
                               {fq(l.itemStock)}
-                              {l.state !== "ok" && l.allocated > 0 && l.allocated < l.need ? <div className="dim">λείπουν {fq(l.need - l.allocated)}</div> : null}
+                              {l.state === "partial" && l.remaining - l.allocated > 0 ? <div className="dim">λείπουν {fq(l.remaining - l.allocated)}</div> : null}
                               {l.state === "none" && l.itemStock > 0 ? <div className="dim">δεσμευμένο σε προηγούμενες</div> : null}
                             </td>
                             <td data-label="Κατάσταση">
                               <span className={`sh-state ${l.state}`}>{STATE_TXT[l.state]}</span>
                             </td>
+                            <td data-label="Εκτέλεση WMS" className="sh-exec">
+                              {l.execLists.map((e, i) => (
+                                <div key={i}>
+                                  <b>{e.list_no}</b> · {fq(e.qty)} · {fexp(e.date)}{" "}
+                                  {e.collected ? <span className="sh-col on" title={e.collected_by ? `Συλλογή: ${displayUser(e.collected_by)}` : "Συλλέχθηκε"}>✓ Collected</span> : <span className="sh-col">Not collected</span>}
+                                </div>
+                              ))}
+                              {l.state !== "done" && l.executed > 0 && <div className="dim">μένουν {fq(l.remaining)}</div>}
+                              {l.state !== "done" && l.pendingLists.map((e, i) => (
+                                <div key={`p${i}`} className="dim">
+                                  ανοιχτό {e.list_no}: {fq(e.qty)}
+                                </div>
+                              ))}
+                              {!l.execLists.length && !l.pendingLists.length && <span className="dim">—</span>}
+                            </td>
                             <td data-label="Θέσεις" className="sh-pos">
-                              {l.positions.length ? (
+                              {l.state !== "done" && l.positions.length ? (
                                 l.positions.map((p, i) => (
                                   <div key={i}>
                                     <span className="rack">{p.position}</span> {fq(p.qty)}

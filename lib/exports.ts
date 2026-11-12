@@ -1482,8 +1482,13 @@ export function relocationPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: P
 
 
 // ---- Αποστολές FSSE (ανά πελάτη) ----
-const SHIP_STATE: Record<string, string> = { ok: "OK", partial: "Partial", none: "No" };
+const SHIP_STATE: Record<string, string> = { done: "Del", ok: "OK", partial: "Partial", none: "No" };
 const shipNeedTxt = (n: number) => q(n);
+const shipExec = (l: CustomerEval["lines"][number]) =>
+  [
+    ...l.execLists.map((e) => `${e.list_no} · ${q(e.qty)}${e.collected ? " ✓" : ""}`),
+    ...(l.state !== "done" && l.executed > 0 ? [`μένουν ${q(l.remaining)}`] : []),
+  ].join("\n");
 const shipPos = (l: CustomerEval["lines"][number]) =>
   l.positions
     .filter((p) => p.qty > 0)
@@ -1506,6 +1511,9 @@ export function shipmentsWorkbook(XLSX: XLSXLib, custs: CustomerEval[], meta: St
       "Ordered": l.qty_ordered ?? "",
       "Initial": l.qty_initial ?? "",
       "Confirmed": l.qty_confirmed ?? "",
+      "Εκτελέστηκε": l.executed,
+      "Λίστες CL": l.execLists.map((e) => `${e.list_no} (${q(e.qty)}${e.collected ? ", collected" : ""})`).join(" | "),
+      "Μένει": l.remaining,
       "Καλύπτεται": l.allocated,
       "Απόθεμα κωδικού": l.itemStock,
       "Κατάσταση": SHIP_STATE[l.state],
@@ -1516,13 +1524,13 @@ export function shipmentsWorkbook(XLSX: XLSXLib, custs: CustomerEval[], meta: St
       "Σχόλια": l.comments,
     }))
   );
-  XLSX.utils.book_append_sheet(wb, sheet(XLSX, rows, [18, 6, 14, 14, 11, 40, 9, 10, 9, 9, 9, 10, 10, 9, 11, 10, 40, 30, 30]), "Αποστολές");
+  XLSX.utils.book_append_sheet(wb, sheet(XLSX, rows, [18, 6, 14, 14, 11, 40, 9, 10, 9, 9, 9, 10, 24, 8, 10, 10, 9, 11, 10, 40, 30, 30]), "Αποστολές");
   XLSX.utils.book_append_sheet(
     wb,
     sheet(
       XLSX,
-      custs.map((c) => ({ "Πελάτης": c.sheet, "Όνομα": c.customer, "Εβδομάδες": c.weeks.map((w) => `W${w}`).join(" "), "Γραμμές": c.lines.length, "OK": c.ok, "Partial": c.partial, "No": c.none })),
-      [20, 36, 14, 8, 6, 8, 6]
+      custs.map((c) => ({ "Πελάτης": c.sheet, "Όνομα": c.customer, "Εβδομάδες": c.weeks.map((w) => `W${w}`).join(" "), "Γραμμές": c.lines.length, "Del": c.done, "OK": c.ok, "Partial": c.partial, "No": c.none })),
+      [20, 36, 14, 8, 6, 6, 8, 6]
     ),
     "Σύνοψη"
   );
@@ -1531,14 +1539,14 @@ export function shipmentsWorkbook(XLSX: XLSXLib, custs: CustomerEval[], meta: St
 
 export function shipmentsPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFonts, custs: CustomerEval[], meta: StockExportMeta & { scope: string; source?: string }) {
   const doc = newDoc(jsPDF, fonts, "landscape");
-  const tot = custs.reduce((t, c) => ({ l: t.l + c.lines.length, ok: t.ok + c.ok, p: t.p + c.partial, n: t.n + c.none }), { l: 0, ok: 0, p: 0, n: 0 });
+  const tot = custs.reduce((t, c) => ({ l: t.l + c.lines.length, d: t.d + c.done, ok: t.ok + c.ok, p: t.p + c.partial, n: t.n + c.none }), { l: 0, d: 0, ok: 0, p: 0, n: 0 });
   let y = header(
     doc,
     "Αποστολές FSSE ανά πελάτη",
     [
       `Δημιουργήθηκε: ${when(meta.generatedAt)}${meta.userEmail ? ` · ${displayUser(meta.userEmail)}` : ""}`,
       `${meta.scope}${meta.source ? ` · ${meta.source}` : ""}`,
-      `${custs.length} πελάτες · ${tot.l} γραμμές · OK ${tot.ok} · Partial ${tot.p} · No ${tot.n}`,
+      `${custs.length} πελάτες · ${tot.l} γραμμές · Del ${tot.d} · OK ${tot.ok} · Partial ${tot.p} · No ${tot.n}`,
     ],
     "Fagron Hellas · Αποθήκη"
   );
@@ -1548,11 +1556,11 @@ export function shipmentsPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: Pd
       doc.addPage();
       y = 18;
     }
-    y = sectionTitle(doc, `${c.sheet} — ${c.customer}   (OK ${c.ok} · Partial ${c.partial} · No ${c.none})`, y);
+    y = sectionTitle(doc, `${c.sheet} — ${c.customer}   (Del ${c.done} · OK ${c.ok} · Partial ${c.partial} · No ${c.none})`, y);
     autoTable(doc, {
       ...baseTable,
       startY: y + 1,
-      head: [["Εβδ.", "ΠΑΡ / PO", "Κωδικός", "Περιγραφή", "Ποσ.", "Απόθ.", "Κατ.", "Θέσεις (παρτίδα · λήξη)", "Bulk", "Σημειώσεις", "✓"]],
+      head: [["Εβδ.", "ΠΑΡ / PO", "Κωδικός", "Περιγραφή", "Ποσ.", "Απόθ.", "Κατ.", "Λίστα CL", "Θέσεις (παρτίδα · λήξη)", "Bulk", "Σημειώσεις", "✓"]],
       body: c.lines.map((l) => [
         l.week ? `W${l.week}` : "—",
         `${l.doc}${l.po ? `\n${l.po}` : ""}`,
@@ -1561,7 +1569,8 @@ export function shipmentsPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: Pd
         shipNeedTxt(l.need),
         q(l.itemStock),
         SHIP_STATE[l.state],
-        shipPos(l),
+        shipExec(l),
+        l.state === "done" ? "" : shipPos(l),
         l.bulk ? `${l.bulk}\n${q(l.bulkStock ?? 0)}` : "",
         [l.requirements, l.comments].filter(Boolean).join(" · "),
         "",
@@ -1575,10 +1584,11 @@ export function shipmentsPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: Pd
         4: { cellWidth: 13, halign: "right", fontStyle: "bold" },
         5: { cellWidth: 13, halign: "right" },
         6: { cellWidth: 13, fontStyle: "bold" },
-        7: { cellWidth: 52 },
-        8: { cellWidth: 17 },
-        9: { cellWidth: 44 },
-        10: { cellWidth: 7 },
+        7: { cellWidth: 24 },
+        8: { cellWidth: 46 },
+        9: { cellWidth: 17 },
+        10: { cellWidth: 36 },
+        11: { cellWidth: 7 },
       },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       didParseCell: (d: any) => {
@@ -1586,7 +1596,7 @@ export function shipmentsPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: Pd
       },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       didDrawCell: (d: any) => {
-        if (d.section === "body" && d.column.index === 10) doc.rect(d.cell.x + 1.6, d.cell.y + 1.2, 3.6, 3.6);
+        if (d.section === "body" && d.column.index === 11) doc.rect(d.cell.x + 1.6, d.cell.y + 1.2, 3.6, 3.6);
       },
     });
   });
