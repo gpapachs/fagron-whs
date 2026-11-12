@@ -1507,3 +1507,31 @@ a.sl-open:hover { text-decoration: underline; }
 .pk-sel { display: inline-flex; align-items: center; gap: 10px; }
 .pk-sel input { width: 22px; height: 22px; }
 .pk-card.sel { outline: 2px solid var(--focus); }
+
+/* ---- Αποστολές FSSE ---- */
+.sh-src { margin-top: 4px; font-size: 12.5px; }
+.sh-cust { border: 1px solid var(--border); border-left: 5px solid var(--border); border-radius: 12px; background: var(--surface); margin-top: 12px; overflow: hidden; }
+.sh-cust.green { border-left-color: var(--free); }
+.sh-cust.yellow { border-left-color: #d29a06; }
+.sh-cust.red { border-left-color: var(--occupied); }
+.sh-head { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 14px; background: none; border: 0; color: var(--ink); font: inherit; text-align: left; cursor: pointer; flex-wrap: wrap; }
+.sh-name { flex: 1 1 260px; font-size: 15px; }
+.sh-weeks { font-size: 12.5px; font-weight: 700; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+.sh-counts { display: inline-flex; gap: 4px; }
+.sh-badge { min-width: 26px; text-align: center; font-size: 12px; font-weight: 800; padding: 2px 7px; border-radius: 999px; font-variant-numeric: tabular-nums; }
+.sh-badge.ok, .sh-state.ok { background: var(--free-bg); color: var(--free); }
+.sh-badge.partial, .sh-state.partial { background: rgba(210, 154, 6, 0.15); color: #a16207; }
+.sh-badge.none, .sh-state.none { background: var(--occupied-bg); color: var(--occupied); }
+.sh-caret { font-size: 14px; color: var(--ink-dim); }
+.sh-cust .st-tablewrap { border-top: 1px solid var(--border); margin: 0; border-radius: 0; }
+.sh-state { display: inline-block; font-size: 12px; font-weight: 800; padding: 2px 8px; border-radius: 6px; white-space: nowrap; }
+.sh-pos > div { white-space: nowrap; margin-bottom: 2px; }
+.sh-area { font-size: 11px; white-space: normal; }
+.sh-notes { font-size: 12px; max-width: 260px; }
+.sh-req { font-weight: 700; color: var(--occupied); }
+.sh-table td { vertical-align: top; }
+.sh-table th { white-space: nowrap; padding: 8px 8px; font-size: 10.5px; font-weight: 700; color: var(--ink-dim); text-transform: uppercase; letter-spacing: 0.02em; }
+.sh-table td:nth-child(3), .sh-table td:nth-child(1) { white-space: nowrap; }
+.sh-table th.num { text-align: right; }
+.sh-cust .st-tablewrap { overflow-x: auto; max-width: 100%; }
+.st-actions .btn { white-space: nowrap; }

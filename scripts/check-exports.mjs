@@ -10,7 +10,8 @@ import { jsPDF } from "jspdf";
 import { autoTable } from "jspdf-autotable";
 import * as XLSX from "xlsx";
 import { buildPlan, filterStockForRecipes, indexStock, picksByRecipe } from "../lib/repack.ts";
-import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkbook, stockPdf, stockWorkbook, movesPdf, movesWorkbook, ordersPdf, ordersWorkbook, salesListPdf, analysisWorkbook, relocationWorkbook, relocationPdf } from "../lib/exports.ts";
+import { availablePdf, availableWorkbook, jobsWorkbook, picklistPdf, planWorkbook, stockPdf, stockWorkbook, movesPdf, movesWorkbook, ordersPdf, ordersWorkbook, salesListPdf, analysisWorkbook, relocationWorkbook, relocationPdf, shipmentsWorkbook, shipmentsPdf } from "../lib/exports.ts";
+import { evaluateShipments, parseShipments } from "../lib/shipments.ts";
 import { analyse, normReceipt } from "../lib/analysis.ts";
 import { normRel, planRelocation } from "../lib/relocation.ts";
 import { buildReservations, evaluateOrders, orderColor } from "../lib/sales.ts";
@@ -345,6 +346,32 @@ if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) 
   relocationWorkbook(XLSX, p, { generatedAt: new Date(), userEmail: "alex@whs.local", filters: [], syncedAt: null });
   relocationPdf(jsPDF, autoTable, fonts, p, { generatedAt: new Date(), userEmail: "alex@whs.local", filters: [], syncedAt: null });
   console.log("πλάνο μεταφοράς: OK");
+}
+
+// ---- Αποστολές FSSE: ανάγνωση φύλλων + κατανομή αποθέματος
+{
+  const H = ["DATE", "WEEK TO BE SHIPPED ", "ORDER DATE ", "ΠΑΡ DOCUMENT", "CUSTOMER NAME", "CUSTOMER ADDRESS ", "PO NUMBER ", "SO NUMBER ", "ITEM CODE", "BULK CODE", "PRODUCT NAME ", "SKU", "QUANTITY ORDERED ", "INITIAL QUANTITY TO BE SHIPPED ", "CONFIRMED QUANTITY TO BE SHIPPED ", "SHIPMENT REQUIREMENTS FROM CUSTOMER", "GENERAL COMMENTS", "PRICE", ""];
+  const row = (wk, item, ordered, initial, confirmed = "", extra = "") => ["9/11/2026", wk, "10/08/2026", "00ΠΑΡ0000001", "ΠΕΛΑΤΗΣ ΔΟΚΙΜΗΣ", "", "PO1", "", item, "60-90-001", "ΠΡΟΪΟΝ ΔΟΚΙΜΗΣ", "1 KG", ordered, initial, confirmed, "", "IN PRODUCTION", "1,00", extra];
+  const sheets = [
+    { name: "ΣΥΝΟΨΗ", rows: [["WAVE ID", "DATE"], ["X", "1/1/2026"]] },
+    { name: "ΠΕΛΑΤΗΣ Α", rows: [H, row("W45", "26-90-001", "10 PCS", "10 PCS"), row("W46", "26-90-001", "60 PCS", "50 PCS", "40 PCS", "KARANTINA"), row("W446", "26-90-002", "5", "5"), [], ["*σημείωση"]] },
+    { name: "ΠΕΛΑΤΗΣ Β", rows: [H, row("W47", "26-90-001", "30 PCS", "30 PCS"), row("", "26-90-003", "1 pc", "")] },
+  ];
+  const rows = parseShipments(sheets);
+  const stock = [{ item: "26-90-001", position: "01.01.01.01", area: "ΠΑΡΑΓΩΓΗ", lot: "L1", expiry: "2028-01-01", qty: 50 }, { item: "60-90-001", position: "11.01.01.01", area: "ΚΕΝΤΡΙΚΗ", lot: "B1", expiry: null, qty: 7 }];
+  const ev = evaluateShipments(rows, stock, { currentWeek: 46, scope: "current", includeNoWeek: true });
+  const a = ev.find((c) => c.sheet === "ΠΕΛΑΤΗΣ Α");
+  const b = ev.find((c) => c.sheet === "ΠΕΛΑΤΗΣ Β");
+  const l1 = a?.lines.find((l) => l.item === "26-90-001");
+  const l2 = b?.lines.find((l) => l.item === "26-90-001");
+  const ok = rows.length === 5 && a.lines.length === 2 && l1.need === 40 && l1.state === "ok" && l1.comments.includes("KARANTINA") && l1.bulkStock === 7 && l2.allocated === 10 && l2.state === "partial" && a.lines.find((l) => l.item === "26-90-002").week === 46 && b.lines.some((l) => l.week == null && l.need === 1);
+  if (!ok) { console.error("αποστολές: λάθος", rows.length, a?.lines.map((l) => [l.item, l.week, l.need, l.state]), l2 && [l2.allocated, l2.state]); process.exitCode = 1; }
+  const m = { generatedAt: new Date(), userEmail: "alex@whs.local", filters: [], syncedAt: null, scope: "Εβδομάδα 46 και μετά" };
+  const { wb } = shipmentsWorkbook(XLSX, ev, m);
+  const { doc } = shipmentsPdf(jsPDF, autoTable, fonts, ev, m);
+  fs.writeFileSync(path.join(outDir, "apostoles.pdf"), Buffer.from(doc.output("arraybuffer")));
+  if (!wb.SheetNames.includes("Αποστολές")) process.exitCode = 1;
+  console.log("αποστολές: OK");
 }
 
 console.log(process.exitCode ? "ΑΠΕΤΥΧΕ" : "OK: όλες οι εξαγωγές δουλεύουν");

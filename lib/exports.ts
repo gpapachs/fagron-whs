@@ -8,6 +8,7 @@
 import type { ComponentNeed, PickLine, ProductSettings, RecipeAnalysis, RecipePick, StockIndex } from "./repack";
 import type { Job, JobStats } from "./jobs";
 import type { OrderEval } from "./sales";
+import type { CustomerEval } from "./shipments";
 
 // όπως lib/users.ts (χωρίς import σε runtime): «alex@whs.local» → «alex»
 const displayUser = (e: string) => e.replace(/@whs\.local$/i, "");
@@ -1477,4 +1478,118 @@ export function relocationPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: P
   });
   footer(doc, "Λίστα μεταφοράς · Fagron Hellas");
   return { doc, fileName: `metafora-${p.params.prefix}-${stamp(meta.generatedAt)}.pdf` };
+}
+
+
+// ---- Αποστολές FSSE (ανά πελάτη) ----
+const SHIP_STATE: Record<string, string> = { ok: "OK", partial: "Partial", none: "No" };
+const shipNeedTxt = (n: number) => q(n);
+const shipPos = (l: CustomerEval["lines"][number]) =>
+  l.positions
+    .filter((p) => p.qty > 0)
+    .slice(0, 4)
+    .map((p) => `${p.position} ${q(p.qty)}${p.lot ? ` · ${p.lot}` : ""}${p.expiry ? ` · ${exp(p.expiry)}` : ""}`)
+    .join("\n") + (l.positions.length > 4 ? `\n+${l.positions.length - 4} θέσεις` : "");
+
+export function shipmentsWorkbook(XLSX: XLSXLib, custs: CustomerEval[], meta: StockExportMeta & { scope: string }) {
+  const wb = XLSX.utils.book_new();
+  const rows = custs.flatMap((c) =>
+    c.lines.map((l) => ({
+      "Πελάτης": c.sheet,
+      "Εβδ.": l.week ?? "",
+      "ΠΑΡ": l.doc,
+      "PO": l.po,
+      "Κωδικός": l.item,
+      "Περιγραφή": l.product,
+      "SKU": l.sku,
+      "Ποσότητα": l.need,
+      "Ordered": l.qty_ordered ?? "",
+      "Initial": l.qty_initial ?? "",
+      "Confirmed": l.qty_confirmed ?? "",
+      "Καλύπτεται": l.allocated,
+      "Απόθεμα κωδικού": l.itemStock,
+      "Κατάσταση": SHIP_STATE[l.state],
+      "Bulk": l.bulk,
+      "Απόθεμα bulk": l.bulkStock ?? "",
+      "Θέσεις": l.positions.map((p) => `${p.position} ${q(p.qty)}${p.lot ? ` ${p.lot}` : ""}`).join(" | "),
+      "Απαιτήσεις": l.requirements,
+      "Σχόλια": l.comments,
+    }))
+  );
+  XLSX.utils.book_append_sheet(wb, sheet(XLSX, rows, [18, 6, 14, 14, 11, 40, 9, 10, 9, 9, 9, 10, 10, 9, 11, 10, 40, 30, 30]), "Αποστολές");
+  XLSX.utils.book_append_sheet(
+    wb,
+    sheet(
+      XLSX,
+      custs.map((c) => ({ "Πελάτης": c.sheet, "Όνομα": c.customer, "Εβδομάδες": c.weeks.map((w) => `W${w}`).join(" "), "Γραμμές": c.lines.length, "OK": c.ok, "Partial": c.partial, "No": c.none })),
+      [20, 36, 14, 8, 6, 8, 6]
+    ),
+    "Σύνοψη"
+  );
+  return { wb, fileName: `apostoles-fsse-${stamp(meta.generatedAt)}.xlsx` };
+}
+
+export function shipmentsPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFonts, custs: CustomerEval[], meta: StockExportMeta & { scope: string; source?: string }) {
+  const doc = newDoc(jsPDF, fonts, "landscape");
+  const tot = custs.reduce((t, c) => ({ l: t.l + c.lines.length, ok: t.ok + c.ok, p: t.p + c.partial, n: t.n + c.none }), { l: 0, ok: 0, p: 0, n: 0 });
+  let y = header(
+    doc,
+    "Αποστολές FSSE ανά πελάτη",
+    [
+      `Δημιουργήθηκε: ${when(meta.generatedAt)}${meta.userEmail ? ` · ${displayUser(meta.userEmail)}` : ""}`,
+      `${meta.scope}${meta.source ? ` · ${meta.source}` : ""}`,
+      `${custs.length} πελάτες · ${tot.l} γραμμές · OK ${tot.ok} · Partial ${tot.p} · No ${tot.n}`,
+    ],
+    "Fagron Hellas · Αποθήκη"
+  );
+  custs.forEach((c, i) => {
+    if (i > 0) y = (doc.lastAutoTable?.finalY ?? y) + 8;
+    if (y > doc.internal.pageSize.getHeight() - 40) {
+      doc.addPage();
+      y = 18;
+    }
+    y = sectionTitle(doc, `${c.sheet} — ${c.customer}   (OK ${c.ok} · Partial ${c.partial} · No ${c.none})`, y);
+    autoTable(doc, {
+      ...baseTable,
+      startY: y + 1,
+      head: [["Εβδ.", "ΠΑΡ / PO", "Κωδικός", "Περιγραφή", "Ποσ.", "Απόθ.", "Κατ.", "Θέσεις (παρτίδα · λήξη)", "Bulk", "Σημειώσεις", "✓"]],
+      body: c.lines.map((l) => [
+        l.week ? `W${l.week}` : "—",
+        `${l.doc}${l.po ? `\n${l.po}` : ""}`,
+        l.item,
+        `${l.product}${l.sku ? ` · ${l.sku}` : ""}`,
+        shipNeedTxt(l.need),
+        q(l.itemStock),
+        SHIP_STATE[l.state],
+        shipPos(l),
+        l.bulk ? `${l.bulk}\n${q(l.bulkStock ?? 0)}` : "",
+        [l.requirements, l.comments].filter(Boolean).join(" · "),
+        "",
+      ]),
+      styles: { ...baseTable.styles, fontSize: 7.2, cellPadding: 1.2 },
+      columnStyles: {
+        0: { cellWidth: 10 },
+        1: { cellWidth: 24 },
+        2: { cellWidth: 17, fontStyle: "bold" },
+        3: { cellWidth: "auto" },
+        4: { cellWidth: 13, halign: "right", fontStyle: "bold" },
+        5: { cellWidth: 13, halign: "right" },
+        6: { cellWidth: 13, fontStyle: "bold" },
+        7: { cellWidth: 52 },
+        8: { cellWidth: 17 },
+        9: { cellWidth: 44 },
+        10: { cellWidth: 7 },
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      didParseCell: (d: any) => {
+        if (d.section === "body" && d.row.index % 2 === 1) d.cell.styles.fillColor = ZEBRA;
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      didDrawCell: (d: any) => {
+        if (d.section === "body" && d.column.index === 10) doc.rect(d.cell.x + 1.6, d.cell.y + 1.2, 3.6, 3.6);
+      },
+    });
+  });
+  footer(doc, "Αποστολές FSSE · Fagron Hellas");
+  return { doc, fileName: `apostoles-fsse-${stamp(meta.generatedAt)}.pdf` };
 }
