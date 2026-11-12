@@ -282,9 +282,17 @@ function Find-ShipmentsFile {
   # χωρίς ρύθμιση: αναζήτηση στους φακέλους OneDrive (μία φορά ανά 10 λεπτά αν δεν βρεθεί)
   if (((Get-Date) - $script:ShipSearchAt).TotalMinutes -lt 10) { return $script:ShipPath }
   $script:ShipSearchAt = Get-Date
-  $roots = @(Get-ChildItem -LiteralPath $env:USERPROFILE -Directory -Filter 'OneDrive*' -ErrorAction SilentlyContinue)
+  # φάκελοι OneDrive: του λογαριασμού εργασίας (μητρώο / μεταβλητές) και όσοι λέγονται OneDrive*
+  $paths = New-Object Collections.Generic.List[string]
+  foreach ($v in @($env:OneDriveCommercial, $env:OneDrive)) { if ($v) { $paths.Add($v) } }
+  foreach ($k in @(Get-ChildItem 'HKCU:\Software\Microsoft\OneDrive\Accounts' -ErrorAction SilentlyContinue)) {
+    $uf = (Get-ItemProperty -LiteralPath $k.PSPath -ErrorAction SilentlyContinue).UserFolder
+    if ($uf) { $paths.Add([string]$uf) }
+  }
+  foreach ($d in @(Get-ChildItem -LiteralPath $env:USERPROFILE -Directory -Filter 'OneDrive*' -ErrorAction SilentlyContinue)) { $paths.Add($d.FullName) }
+  $roots = @($paths | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique)
   foreach ($r in $roots) {
-    $f = Get-ChildItem -LiteralPath $r.FullName -Recurse -File -Filter 'FSSE SHIPMENTS*.xlsx' -ErrorAction SilentlyContinue |
+    $f = Get-ChildItem -LiteralPath $r -Recurse -File -Filter 'FSSE SHIPMENTS*.xlsx' -ErrorAction SilentlyContinue |
       Where-Object { $_.Name -notlike '~$*' } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
     if ($f) { return $f.FullName }
   }
