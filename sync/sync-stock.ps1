@@ -296,6 +296,7 @@ function Find-ShipmentsFile {
       Where-Object { $_.Name -notlike '~$*' } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
     if ($f) { return $f.FullName }
   }
+  if (-not $script:ShipWarned) { Log ("Αποστολές: δεν βρέθηκε ακόμη το «FSSE SHIPMENTS*.xlsx» σε: " + ($roots -join ' | ')); $script:ShipWarned = $true }
   return $null
 }
 
