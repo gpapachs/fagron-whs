@@ -57,7 +57,7 @@ export function buildPlan(positions: WmsPos[], stock: (PosStock & { position: st
   for (const [code, area] of all) {
     const seg = code.split(".");
     const room = seg[0] || "—";
-    const r = rooms.get(room) ?? { areas: new Map(), aisles: new Map(), loose: [] };
+    const r: RoomAcc = rooms.get(room) ?? { areas: new Map(), aisles: new Map(), loose: [] };
     rooms.set(room, r);
     if (area) r.areas.set(area, (r.areas.get(area) ?? 0) + 1);
     const stockHere = (byPos.get(code) ?? []).sort((a, b) => a.item.localeCompare(b.item) || (a.expiry ?? "9").localeCompare(b.expiry ?? "9"));
