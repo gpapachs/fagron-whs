@@ -746,6 +746,41 @@ function Sync-ItemPack {
   Log ("Παλέτες / συσκευασίες: {0} κωδικοί, {1} τύποι μονάδων" -f $n, $packs.Count)
 }
 
+# Όλες οι θέσεις του WMS (και οι άδειες) για το live «Πλάνο Αποθήκης». Αλλάζουν σπάνια: κάθε 6 ώρες.
+function Sync-Positions([switch]$force) {
+  $mark = Join-Path $Here 'positions.last'
+  if (-not $force -and (Test-Path $mark) -and ((Get-Item $mark).LastWriteTime -gt (Get-Date).AddHours(-6))) { return }
+  $t = Invoke-Sql "select * from dbo.ms_Pos"
+  $cols = @($t.Columns | ForEach-Object { $_.ColumnName })
+  $codeCol = @($cols | Where-Object { $_ -match '^code$' })[0]
+  $descCol = @($cols | Where-Object { $_ -match '^descr$' })[0]
+  if (-not $codeCol) { throw ("ms_Pos χωρίς στήλη code (στήλες: " + ($cols -join ', ') + ")") }
+  $rows = New-Object Collections.ArrayList
+  foreach ($r in $t.Rows) {
+    $c = To-Str $r[$codeCol]; if (-not $c) { continue }
+    $attrs = [ordered]@{}
+    foreach ($cn in $cols) {
+      if ($cn -eq $codeCol -or $cn -eq $descCol) { continue }
+      $v = $r[$cn]
+      if ($null -eq $v -or $v -is [DBNull] -or $v -is [byte[]]) { continue }
+      if ($v -is [DateTime]) { $attrs[$cn] = $v.ToString('yyyy-MM-ddTHH:mm:ss', $Inv) }
+      elseif ($v -is [bool]) { $attrs[$cn] = $v }
+      elseif ($null -ne (To-Num $v) -and -not ($v -is [string])) { $attrs[$cn] = [double](To-Num $v) }
+      else { $s = To-Str $v; if ($s) { $attrs[$cn] = $s } }
+    }
+    [void]$rows.Add(@{ code = $c; descr = $(if ($descCol) { To-Str $r[$descCol] } else { '' }); attrs = $attrs })
+  }
+  $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+  $size = 1000
+  for ($i = 0; $i -lt $rows.Count; $i += $size) {
+    $chunk = $rows.GetRange($i, [math]::Min($size, $rows.Count - $i)).ToArray()
+    [void](Sb-Request 'POST' '/rest/v1/rpc/wms_positions_upload' @{ p_rows = [object[]]$chunk; p_stamp = $stamp })
+  }
+  $gone = Sb-Request 'POST' '/rest/v1/rpc/wms_positions_prune' @{ p_stamp = $stamp }
+  Set-Content -Path $mark -Value (Get-Date -Format s) -Encoding UTF8
+  Log ("Θέσεις WMS: {0} (στήλες: {1}){2}" -f $rows.Count, ($cols -join ', '), $(if ($gone) { " · αφαιρέθηκαν $gone" } else { '' }))
+}
+
 function Convert-Moves($t) {
   $names = @($t.Columns | ForEach-Object { $_.ColumnName.ToLowerInvariant() })
   $has = @{}; foreach ($n in $names) { $has[$n] = $true }
@@ -858,6 +893,7 @@ function Run-Live {
     try { Sync-Collecting 'SALEXPORTLS' } catch { Log ("Live (σε συλλογή): " + $_) }
     try { Refresh-Collecting 'SALEXPORTLS' } catch { Log ("Live (γραμμές σε συλλογή): " + $_) }
     try { Sync-Shipments } catch { Log ("Live (αποστολές): " + $_) }
+    try { Sync-Positions } catch { Log ("Live (θέσεις): " + $_) }
     # κάθε ~2 λεπτά: λίστες ανοιχτές στην εφαρμογή που ολοκληρώθηκαν στο WMS
     $cycle++
     if ($cycle % [math]::Max(1, [int](120 / $secs)) -eq 0) { try { Refresh-Completed 'SALEXPORTLS' } catch { Log ("Live (ολοκληρωμένες): " + $_) } }
@@ -1190,6 +1226,7 @@ if ($general.stock.Count -gt 0) {
 Sync-Moves
 try { Backfill-Moves } catch { Log ("Κινήσεις (αναδρομικά): " + $_) }
 try { Sync-ItemPack } catch { Log ("Παλέτες / συσκευασίες: " + $_) }
+try { Sync-Positions } catch { Log ("Θέσεις WMS: " + $_) }
 foreach ($oc in 'SALEXPORTCL', 'SALEXPORTLS') { try { Sync-Orders $oc } catch { Log ("Orders $($oc): " + $_) } }
 try { Sync-Collecting 'SALEXPORTLS' } catch { Log ("Σε συλλογή: " + $_) }
 try { Refresh-Completed 'SALEXPORTLS' } catch { Log ("Ολοκληρωμένες / διαγραμμένες: " + $_) }
