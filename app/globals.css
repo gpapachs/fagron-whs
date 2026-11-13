@@ -1541,3 +1541,10 @@ a.sl-open:hover { text-decoration: underline; }
 .sh-col.on { color: var(--free); }
 .sh-row.done td { opacity: 0.8; }
 .sh-auto { font-weight: 700; color: var(--free); }
+
+/* ---- Ανασυσκευασία: πηγή live / Excel ---- */
+.rp-src { display: inline-flex; margin-left: 8px; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; vertical-align: middle; }
+.rp-src button { border: 0; background: none; font: inherit; font-size: 11.5px; font-weight: 700; padding: 3px 10px; color: var(--ink-dim); cursor: pointer; }
+.rp-src button.on { background: var(--ink); color: var(--surface); }
+.rp-src button:disabled { opacity: 0.4; cursor: default; }
+.rp-source .meta .live-pill { margin-right: 4px; }

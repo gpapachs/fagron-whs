@@ -5,6 +5,9 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { closePlanOrder, loadPlanOrders, planOrderTotals, type PlanOrder } from "@/lib/planOrders";
 import AppBar from "@/components/AppBar";
+import LivePill from "@/components/LivePill";
+import { useCoalesced, useWmsLive } from "@/lib/live";
+import { loadLiveReserved, loadLiveStock, recipeCodes, type LiveReserved } from "@/lib/repackLive";
 import type { ExportMeta, PdfFonts } from "@/lib/exports";
 import { estimateTotal, fmtDuration, ratesByRecipe, type Job, type Rate } from "@/lib/jobs";
 import { FinishDialog, LiveClock, PlayIcon, RunningJobs, TimesView, type FinishFields } from "@/components/repack/Jobs";
@@ -38,6 +41,8 @@ type Notice = { tone: "ok" | "warn" | "error"; text: string; details?: string[] 
 
 const LS_PLAN = "repack.plan.v1";
 const LS_AREAS = "repack.excludedAreas.v1";
+const LS_SRC = "repack.sources.v1";
+type Src = "live" | "excel";
 
 function loadLS<T>(key: string, fallback: T): T {
   try {
@@ -91,7 +96,15 @@ export default function RepackBoard({
   role: "admin" | "staff";
 }) {
   const [recipes, setRecipes] = useState(initialRecipes);
-  const [stock, setStock] = useState(initialStock);
+  // απόθεμα: live από το WMS (προεπιλογή) ή το τελευταίο Excel που ανέβηκε
+  const [excelStock, setStock] = useState(initialStock);
+  const [stockSrc, setStockSrc] = useState<Src>("live");
+  const [reservedSrc, setReservedSrc] = useState<Src>("live");
+  const [liveStock, setLiveStock] = useState<StockRow[] | null>(null);
+  const [liveReserved, setLiveReserved] = useState<Map<string, LiveReserved> | null>(null);
+  const [liveErr, setLiveErr] = useState<string | null>(null);
+  const [flash, setFlash] = useState(0);
+  const stock = stockSrc === "live" ? liveStock ?? [] : excelStock;
   const [uploads, setUploads] = useState(initialUploads);
   const [planned, setPlanned] = useState<Record<string, number>>({});
   const [excluded, setExcluded] = useState<string[]>([]);
@@ -99,7 +112,7 @@ export default function RepackBoard({
   const [tab, setTab] = useState<"plan" | "specs" | "times">("plan");
   const [jobs, setJobs] = useState<Job[]>(initialJobs);
   const [finishing, setFinishing] = useState<Job | null>(null);
-  const [settings, setSettings] = useState<Record<string, ProductSettings>>(() =>
+  const [storedSettings, setSettings] = useState<Record<string, ProductSettings>>(() =>
     Object.fromEntries(initialSettings.map((x) => [x.product_code, x]))
   );
   const [onlyReserved, setOnlyReserved] = useState(false);
@@ -116,6 +129,9 @@ export default function RepackBoard({
   useEffect(() => {
     setPlanned(loadLS(LS_PLAN, {}));
     setExcluded(loadLS(LS_AREAS, []));
+    const src = loadLS<{ stock?: Src; reserved?: Src }>(LS_SRC, {});
+    if (src.stock) setStockSrc(src.stock);
+    if (src.reserved) setReservedSrc(src.reserved);
     setHydrated(true);
   }, []);
   useEffect(() => {
@@ -124,6 +140,90 @@ export default function RepackBoard({
   useEffect(() => {
     if (hydrated) saveLS(LS_AREAS, excluded);
   }, [excluded, hydrated]);
+  useEffect(() => {
+    if (hydrated) saveLS(LS_SRC, { stock: stockSrc, reserved: reservedSrc });
+  }, [stockSrc, reservedSrc, hydrated]);
+
+  // ---------------------------------------------------------------- live από WMS
+  const codes = useMemo(() => recipeCodes(recipes), [recipes]);
+  const codeSet = useMemo(() => new Set(codes), [codes]);
+  const finals = useMemo(() => [...new Set(recipes.map((r) => r.product_code))], [recipes]);
+  const finalSet = useMemo(() => new Set(finals), [finals]);
+  const reloadStock = async (items?: string[]) => {
+    if (!codes.length) return setLiveStock([]);
+    try {
+      if (!items) setLiveStock(await loadLiveStock(codes));
+      else {
+        const fresh = await loadLiveStock(items);
+        const set = new Set(items);
+        setLiveStock((cur) => [...(cur ?? []).filter((r) => !set.has(r.item)), ...fresh]);
+      }
+      setLiveErr(null);
+    } catch (e) {
+      setLiveErr(`Το live απόθεμα δεν φορτώθηκε: ${(e as Error).message}`);
+    }
+  };
+  const reloadReserved = async () => {
+    if (!finals.length) return setLiveReserved(new Map());
+    try {
+      setLiveReserved(await loadLiveReserved(finals));
+    } catch (e) {
+      setLiveErr(`Τα δεσμευμένα από παραγγελίες δεν φορτώθηκαν: ${(e as Error).message}`);
+    }
+  };
+  useEffect(() => {
+    if (stockSrc === "live") reloadStock();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stockSrc, codes]);
+  useEffect(() => {
+    if (reservedSrc === "live") reloadReserved();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reservedSrc, finals]);
+  const pendingItems = useRef<Set<string>>(new Set());
+  const pendingFull = useRef(false);
+  const pendingOrders = useRef(false);
+  const flushLive = useCoalesced(async () => {
+    const items = [...pendingItems.current];
+    const full = pendingFull.current;
+    const ord = pendingOrders.current;
+    pendingItems.current = new Set();
+    pendingFull.current = false;
+    pendingOrders.current = false;
+    if (stockSrc === "live" && (full || items.length)) await reloadStock(full ? undefined : items);
+    if (reservedSrc === "live" && (ord || full)) await reloadReserved();
+    setFlash((x) => x + 1);
+  });
+  const live = useWmsLive((sig) => {
+    if (sig.key === "stock_full") pendingFull.current = true;
+    else if (sig.key === "stock") {
+      const mine = (sig.items ?? []).filter((i) => codeSet.has(i));
+      if (!mine.length) return;
+      mine.forEach((i) => pendingItems.current.add(i));
+    } else if (sig.key === "orders" || sig.key === "orders_sync") {
+      const mine = (sig.items ?? []).filter((i) => finalSet.has(i));
+      if (sig.items?.length && !mine.length) return;
+      pendingOrders.current = true;
+    } else return;
+    flushLive();
+  });
+
+  // ρυθμίσεις ανά τελικό + δεσμευμένα: live από τις ανοιχτές λίστες ή όπως αποθηκεύτηκαν
+  const settings = useMemo(() => {
+    if (reservedSrc !== "live" || !liveReserved) return storedSettings;
+    const out: Record<string, ProductSettings> = {};
+    for (const [k, v] of Object.entries(storedSettings)) out[k] = { ...v, reserved: 0, reserved_note: "", reserved_live: true };
+    for (const code of finals) out[code] ??= { product_code: code, units_per_package: null, reserved: 0, reserved_note: "", reserved_live: true };
+    for (const [code, r] of liveReserved) {
+      const lists = r.lists.length > 3 ? `${r.lists.slice(0, 3).join(", ")} +${r.lists.length - 3}` : r.lists.join(", ");
+      out[code] = {
+        ...(out[code] ?? { product_code: code, units_per_package: null }),
+        reserved: r.qty,
+        reserved_note: `${r.lists.length === 1 ? "λίστα" : "λίστες"} ${lists}${r.customers.length ? ` · ${r.customers.slice(0, 3).join(", ")}${r.customers.length > 3 ? "…" : ""}` : ""}`,
+        reserved_live: true,
+      } as ProductSettings;
+    }
+    return out;
+  }, [storedSettings, liveReserved, reservedSrc, finals]);
 
   // ---------------------------------------------------------------- εργασίες (έναρξη / λήξη)
   // ζωντανή ενημέρωση: όταν κάποιος ξεκινά/τελειώνει, φαίνεται σε όλους
@@ -207,7 +307,11 @@ export default function RepackBoard({
   }, []);
 
   async function saveSetting(productCode: string, patch: Partial<Pick<ProductSettings, "units_per_package" | "reserved">>) {
-    const prev = settings[productCode];
+    if (reservedSrc === "live" && "reserved" in patch) {
+      setNotice({ tone: "warn", text: "Τα δεσμευμένα έρχονται live από τις ανοιχτές λίστες του WMS. Για χειροκίνητη τιμή, γύρισε τα «Δεσμευμένα» σε Excel / χειροκίνητα." });
+      return;
+    }
+    const prev = storedSettings[productCode];
     const optimistic: ProductSettings = {
       product_code: productCode,
       units_per_package: prev?.units_per_package ?? null,
@@ -402,6 +506,7 @@ export default function RepackBoard({
         return;
       }
       setStock(f.kept);
+      setStockSrc("excel");
       setUploads((u) => ({ ...u, stock: { file_name: file.name, row_count: f.kept.length, uploaded_at: new Date().toISOString(), uploaded_by_email: userEmail } }));
       const n = (x: number) => x.toLocaleString("el-GR");
       setNotice({
@@ -442,6 +547,7 @@ export default function RepackBoard({
         setNotice({ tone: "error", text: `Η αποθήκευση απέτυχε: ${error.message}` });
         return;
       }
+      setReservedSrc("excel");
       // τοπική ενημέρωση: μηδένισε όλα, βάλε τα νέα (τα τμχ/συσκ. μένουν)
       setSettings((prev) => {
         const next: Record<string, ProductSettings> = {};
@@ -502,8 +608,8 @@ export default function RepackBoard({
     return {
       generatedAt: new Date(),
       userEmail,
-      stockFile: uploads.stock?.file_name ?? null,
-      stockUploadedAt: uploads.stock?.uploaded_at ?? null,
+      stockFile: stockSrc === "live" ? "WMS live" : uploads.stock?.file_name ?? null,
+      stockUploadedAt: stockSrc === "live" ? new Date().toISOString() : uploads.stock?.uploaded_at ?? null,
       excludedAreas: excluded,
     };
   }
@@ -642,40 +748,55 @@ export default function RepackBoard({
         </div>
         <div className="rp-source">
           <div>
-            <div className="rp-source-title">Απόθεμα</div>
+            <div className="rp-source-title">
+              Απόθεμα <SrcToggle value={stockSrc} onChange={setStockSrc} excelOk={excelStock.length > 0} />
+            </div>
             <div className="meta">
-              {uploads.stock
-                ? `${uploads.stock.file_name || "Excel"} · ${fmtDate(uploads.stock.uploaded_at)}${uploads.stock.uploaded_by_email ? ` · ${uploads.stock.uploaded_by_email}` : ""}`
-                : "Ολόκληρη εξαγωγή αποθήκης — κρατιούνται μόνο τα συστατικά των προδιαγραφών"}
+              {stockSrc === "live" ? (
+                <>
+                  <LivePill connected={live.connected} lastAt={live.lastAt} flash={flash} /> WMS τώρα · {liveStock ? `${fmtQty(liveStock.length)} θέσεις συστατικών/τελικών` : "φόρτωση…"}
+                </>
+              ) : uploads.stock ? (
+                `Excel: ${uploads.stock.file_name || "Excel"} · ${fmtDate(uploads.stock.uploaded_at)}${uploads.stock.uploaded_by_email ? ` · ${uploads.stock.uploaded_by_email}` : ""}`
+              ) : (
+                "Ολόκληρη εξαγωγή αποθήκης — κρατιούνται μόνο τα συστατικά των προδιαγραφών"
+              )}
             </div>
           </div>
-          <button className="import-btn primary" type="button" disabled={busy !== null} onClick={() => stockInput.current?.click()}>
+          <button className="import-btn" type="button" disabled={busy !== null} onClick={() => stockInput.current?.click()} title="Ανέβασμα Excel αποθέματος (γυρίζει την πηγή σε Excel)">
             <UploadIcon />
-            {busy === "stock" ? "Φιλτράρισμα…" : "Ανέβασμα αποθέματος"}
+            {busy === "stock" ? "Φιλτράρισμα…" : "Excel"}
           </button>
         </div>
         <input ref={recipeInput} type="file" accept=".xlsx,.xls" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) handleRecipes(f); }} />
         <div className="rp-source">
           <div>
-            <div className="rp-source-title">Δεσμευμένα (παραγγελίες)</div>
+            <div className="rp-source-title">
+              Δεσμευμένα (παραγγελίες) <SrcToggle value={reservedSrc} onChange={setReservedSrc} excelOk excelLabel="Χειροκίνητα" />
+            </div>
             <div className="meta">
-              {uploads.reserved
-                ? `${uploads.reserved.file_name || "Excel"} · ${fmtDate(uploads.reserved.uploaded_at)}${uploads.reserved.uploaded_by_email ? ` · ${uploads.reserved.uploaded_by_email}` : ""}`
-                : "Excel εκκρεμών παραγγελιών: κωδικός + ποσότητα"}
+              {reservedSrc === "live"
+                ? liveReserved
+                  ? `Ανοιχτές λίστες προς εκτέλεση (SALEXPORTLS) · ${fmtQty(liveReserved.size)} τελικοί κωδικοί · ${fmtQty([...liveReserved.values()].reduce((t, r) => t + r.qty, 0))} τεμ.`
+                  : "φόρτωση…"
+                : uploads.reserved
+                  ? `${uploads.reserved.file_name || "Excel"} · ${fmtDate(uploads.reserved.uploaded_at)}${uploads.reserved.uploaded_by_email ? ` · ${uploads.reserved.uploaded_by_email}` : ""}`
+                  : "Excel εκκρεμών παραγγελιών: κωδικός + ποσότητα, ή τιμή ανά κωδικό"}
             </div>
             <button type="button" className="rp-link" onClick={downloadReservedTemplate}>
               Πρότυπο / τρέχοντα
             </button>
           </div>
-          <button className="import-btn" type="button" disabled={busy !== null || !recipes.length} onClick={() => reservedInput.current?.click()}>
+          <button className="import-btn" type="button" disabled={busy !== null || !recipes.length} onClick={() => reservedInput.current?.click()} title="Ανέβασμα Excel δεσμευμένων (γυρίζει την πηγή σε χειροκίνητα)">
             <UploadIcon />
-            {busy === "reserved" ? "Φόρτωση…" : "Ανέβασμα"}
+            {busy === "reserved" ? "Φόρτωση…" : "Excel"}
           </button>
         </div>
         <input ref={reservedInput} type="file" accept=".xlsx,.xls,.csv" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) handleReserved(f); }} />
         <input ref={stockInput} type="file" accept=".xlsx,.xls,.csv" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) handleStock(f); }} />
       </div>
 
+      {liveErr && <div className="rp-notice error"><div><strong>{liveErr}</strong></div><button type="button" onClick={() => setLiveErr(null)}>Κλείσιμο</button></div>}
       {notice && (
         <div className={`rp-notice ${notice.tone}`}>
           <div>
@@ -903,7 +1024,7 @@ export default function RepackBoard({
                   <div className="print-only print-head">
                     <h2>Ανασυσκευασία — λίστα συλλογής</h2>
                     <p>
-                      {new Date().toLocaleString("el-GR")} · απόθεμα: {uploads.stock?.file_name ?? "—"}
+                      {new Date().toLocaleString("el-GR")} · απόθεμα: {stockSrc === "live" ? "WMS live" : uploads.stock?.file_name ?? "—"}
                     </p>
                     <ul>
                       {plannedLines.map((a) => (
@@ -1219,16 +1340,23 @@ function ProductMeta({
   const short = reservedShortfall(reserved, finalStock);
   return (
     <div className="pm">
-      <span className="pm-item" title="Απόθεμα του τελικού κωδικού στο αρχείο αποθέματος">
+      <span className="pm-item" title="Απόθεμα του τελικού κωδικού">
         <span className="l">Απόθεμα τελικού</span>
         <span className="v">{fmtQty(finalStock)}</span>
       </span>
-      <NumField
-        label="Δεσμευμένα"
-        title={`Τεμάχια για παραγγελίες σε εκκρεμότητα${setting?.reserved_note ? ` (${setting.reserved_note})` : ""}`}
-        value={reserved || null}
-        onCommit={(n) => onSave(productCode, { reserved: n ?? 0 })}
-      />
+      {setting?.reserved_live ? (
+        <span className="pm-item" title={`Live από τις ανοιχτές λίστες του WMS${setting.reserved_note ? ` (${setting.reserved_note})` : ""}`}>
+          <span className="l">Δεσμευμένα · live</span>
+          <span className="v">{reserved ? fmtQty(reserved) : "—"}</span>
+        </span>
+      ) : (
+        <NumField
+          label="Δεσμευμένα"
+          title={`Τεμάχια για παραγγελίες σε εκκρεμότητα${setting?.reserved_note ? ` (${setting.reserved_note})` : ""}`}
+          value={reserved || null}
+          onCommit={(n) => onSave(productCode, { reserved: n ?? 0 })}
+        />
+      )}
       <NumField
         label="Τμχ/συσκ."
         title="Τεμάχια ανά συσκευασία"
@@ -1255,6 +1383,26 @@ function ProductMeta({
 }
 
 /** Αριθμητικό πεδίο που αποθηκεύει όταν φύγει το focus ή πατηθεί Enter. */
+function SrcToggle({ value, onChange, excelOk, excelLabel = "Excel" }: { value: Src; onChange: (v: Src) => void; excelOk: boolean; excelLabel?: string }) {
+  return (
+    <span className="rp-src" role="group" aria-label="Πηγή">
+      <button type="button" className={value === "live" ? "on" : ""} aria-pressed={value === "live"} onClick={() => onChange("live")}>
+        Live WMS
+      </button>
+      <button
+        type="button"
+        className={value === "excel" ? "on" : ""}
+        aria-pressed={value === "excel"}
+        disabled={!excelOk}
+        title={excelOk ? undefined : "Δεν έχει ανέβει Excel"}
+        onClick={() => onChange("excel")}
+      >
+        {excelLabel}
+      </button>
+    </span>
+  );
+}
+
 function NumField({
   label,
   title,
