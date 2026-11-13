@@ -26,6 +26,9 @@ export async function loadLiveStock(codes: string[]): Promise<StockRow[]> {
   });
 }
 
+/** μετράνε μόνο λίστες από αυτή την ημερομηνία και μετά (παλιές ανοιχτές λίστες του WMS αγνοούνται) */
+export const RESERVED_FROM = "2026-01-01";
+
 export type LiveReserved = { qty: number; lists: string[]; customers: string[] };
 
 /** ανοιχτές γραμμές πωλήσεων (μη ολοκληρωμένες λίστες) ανά τελικό κωδικό */
@@ -40,6 +43,7 @@ export async function loadLiveReserved(finals: string[]): Promise<Map<string, Li
         .eq("doc_type", "SALEXPORTLS")
         .eq("is_completed", false)
         .gt("qty", 0)
+        .gte("order_date", RESERVED_FROM)
         .in("item", part)
         .order("id")
         .range(from, from + 999);

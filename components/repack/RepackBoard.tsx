@@ -7,7 +7,7 @@ import { closePlanOrder, loadPlanOrders, planOrderTotals, type PlanOrder } from 
 import AppBar from "@/components/AppBar";
 import LivePill from "@/components/LivePill";
 import { useCoalesced, useWmsLive } from "@/lib/live";
-import { loadLiveReserved, loadLiveStock, recipeCodes, type LiveReserved } from "@/lib/repackLive";
+import { loadLiveReserved, loadLiveStock, recipeCodes, RESERVED_FROM, type LiveReserved } from "@/lib/repackLive";
 import type { ExportMeta, PdfFonts } from "@/lib/exports";
 import { estimateTotal, fmtDuration, ratesByRecipe, type Job, type Rate } from "@/lib/jobs";
 import { FinishDialog, LiveClock, PlayIcon, RunningJobs, TimesView, type FinishFields } from "@/components/repack/Jobs";
@@ -777,7 +777,7 @@ export default function RepackBoard({
             <div className="meta">
               {reservedSrc === "live"
                 ? liveReserved
-                  ? `Ανοιχτές λίστες προς εκτέλεση (SALEXPORTLS) · ${fmtQty(liveReserved.size)} τελικοί κωδικοί · ${fmtQty([...liveReserved.values()].reduce((t, r) => t + r.qty, 0))} τεμ.`
+                  ? `Ανοιχτές λίστες προς εκτέλεση (SALEXPORTLS) από ${RESERVED_FROM.slice(8, 10)}/${RESERVED_FROM.slice(5, 7)}/${RESERVED_FROM.slice(0, 4)} · ${fmtQty(liveReserved.size)} τελικοί κωδικοί · ${fmtQty([...liveReserved.values()].reduce((t, r) => t + r.qty, 0))} τεμ.`
                   : "φόρτωση…"
                 : uploads.reserved
                   ? `${uploads.reserved.file_name || "Excel"} · ${fmtDate(uploads.reserved.uploaded_at)}${uploads.reserved.uploaded_by_email ? ` · ${uploads.reserved.uploaded_by_email}` : ""}`
