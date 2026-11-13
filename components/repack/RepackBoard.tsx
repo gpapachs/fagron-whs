@@ -43,6 +43,7 @@ const LS_PLAN = "repack.plan.v1";
 const LS_AREAS = "repack.excludedAreas.v1";
 const LS_SRC = "repack.sources.v1";
 type Src = "live" | "excel";
+type ResStatus = "covered" | "repack" | "short";
 
 function loadLS<T>(key: string, fallback: T): T {
   try {
@@ -116,6 +117,7 @@ export default function RepackBoard({
     Object.fromEntries(initialSettings.map((x) => [x.product_code, x]))
   );
   const [onlyReserved, setOnlyReserved] = useState(false);
+  const [resFilter, setResFilter] = useState<null | ResStatus>(null);
   const [query, setQuery] = useState("");
   const [onlyFeasible, setOnlyFeasible] = useState(true);
   const [busy, setBusy] = useState<null | "recipes" | "stock" | "reserved">(null);
@@ -426,10 +428,23 @@ export default function RepackBoard({
     !q ||
     searchKey(`${r.id} ${r.product_code} ${r.description} ${r.components.map((c) => `${c.code} ${c.description}`).join(" ")}`).includes(q);
 
+  // κωδικοί με δεσμευμένα: καλύπτονται από το απόθεμα τελικού / βγαίνουν με ανασυσκευασία / όχι
+  const maxByProduct = new Map<string, number>();
+  for (const a of plan.analyses) maxByProduct.set(a.recipe.product_code, Math.max(maxByProduct.get(a.recipe.product_code) ?? 0, a.max));
+  const resStatus = new Map<string, ResStatus>();
+  for (const [code, st] of Object.entries(settings)) {
+    if ((st.reserved ?? 0) <= 0 || !maxByProduct.has(code)) continue;
+    const short = reservedShortfall(st.reserved, finalStockOf(code));
+    resStatus.set(code, short <= 0 ? "covered" : (maxByProduct.get(code) ?? 0) >= short ? "repack" : "short");
+  }
+  const resCount = { covered: 0, repack: 0, short: 0 };
+  for (const v of resStatus.values()) resCount[v]++;
+
   const visible = plan.analyses
     .filter((a) => matches(a.recipe))
-    .filter((a) => !onlyFeasible || a.max > 0 || a.planned > 0)
+    .filter((a) => resFilter != null || !onlyFeasible || a.max > 0 || a.planned > 0)
     .filter((a) => !onlyReserved || (settings[a.recipe.product_code]?.reserved ?? 0) > 0)
+    .filter((a) => resFilter == null || resStatus.get(a.recipe.product_code) === resFilter)
     .sort((a, b) => b.planned - a.planned || Number(b.max > 0) - Number(a.max > 0) || a.recipe.id.localeCompare(b.recipe.id, "el", { numeric: true }));
 
   function setQty(id: string, value: number) {
@@ -726,6 +741,43 @@ export default function RepackBoard({
         </div>
       </div>
 
+      {resStatus.size > 0 && (
+        <div className="kpis rp-res" role="group" aria-label="Κωδικοί με δεσμευμένα">
+          {(
+            [
+              [null, resStatus.size, "κωδικοί με δεσμευμένα", "Όλοι οι τελικοί κωδικοί με ανοιχτές παραγγελίες", ""],
+              ["covered", resCount.covered, "διαθέσιμοι από απόθεμα", "Το απόθεμα του τελικού καλύπτει τα δεσμευμένα", "ok"],
+              ["repack", resCount.repack, "βγαίνουν με ανασυσκευασία", "Δεν φτάνει το απόθεμα τελικού, αλλά τα συστατικά φτάνουν για όσα λείπουν", "warn"],
+              ["short", resCount.short, "δεν καλύπτονται", "Ούτε με ανασυσκευασία δεν βγαίνουν όσα λείπουν", "bad"],
+            ] as [ResStatus | null, number, string, string, string][]
+          ).map(([k, n, label, title, tone]) => {
+            const on = k === null ? resFilter === null && onlyReserved : resFilter === k;
+            return (
+              <button
+                key={label}
+                type="button"
+                className={`kpi ${tone} ${on ? "on" : ""}`}
+                title={`${title} — πατήστε για φίλτρο`}
+                aria-pressed={on}
+                onClick={() => {
+                  if (on) {
+                    setResFilter(null);
+                    setOnlyReserved(false);
+                  } else {
+                    setResFilter(k);
+                    setOnlyReserved(true);
+                  }
+                  setTab("plan");
+                }}
+              >
+                <span className="n">{n}</span>
+                <span className="l">{label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* ---------- πηγές δεδομένων ---------- */}
       <div className="rp-sources">
         <div className="rp-source">
@@ -853,7 +905,7 @@ export default function RepackBoard({
             )}
             {tab === "plan" && reservedCodes > 0 && (
               <label className="rp-check">
-                <input type="checkbox" checked={onlyReserved} onChange={(e) => setOnlyReserved(e.target.checked)} />
+                <input type="checkbox" checked={onlyReserved} onChange={(e) => { setOnlyReserved(e.target.checked); if (!e.target.checked) setResFilter(null); }} />
                 Μόνο με δεσμευμένα
               </label>
             )}
