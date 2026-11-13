@@ -6,6 +6,7 @@ import LivePill from "@/components/LivePill";
 import { createClient } from "@/lib/supabase/client";
 import { fetchAll } from "@/lib/supabase/fetchAll";
 import { useCoalesced, useWmsLive } from "@/lib/live";
+import { convertAll, NEW_CODE_MAX, ROOM_LETTER } from "@/lib/posCode";
 import { buildPlan, cellMatches, monthsTo, type PlanCell, type PlanRoom, type PosStock, type WmsPos } from "@/lib/wmsPlan";
 
 type StockLine = PosStock & { position: string; area: string | null };
@@ -192,6 +193,63 @@ export default function WmsPlanBoard({ userEmail, role, onManual }: { userEmail:
     });
   };
   const roomCells = (r: PlanRoom) => [...r.aisles.flatMap((a) => a.racks.flatMap((k) => k.levels.flatMap((l) => l.cells))), ...r.loose];
+  /** όλες οι θέσεις του χώρου (και οι ανενεργές του WMS) με τον νέο κωδικό -> Excel */
+  async function exportNewCodes(roomCode: string) {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const sb = createClient();
+      const all: { code: string; descr: string | null; active: string | null }[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data, error: e } = await sb.from("wms_positions").select("code, descr, active:attrs->>isActive").like("code", `${roomCode}.%`).order("code").range(from, from + 999);
+        if (e) throw new Error(e.message);
+        all.push(...((data ?? []) as typeof all));
+        if (!data || data.length < 1000) break;
+      }
+      const stocked = new Set((stock ?? []).map((x) => x.position));
+      for (const code of stocked) if (code.startsWith(`${roomCode}.`) && !all.some((a) => a.code === code)) all.push({ code, descr: null, active: null });
+      all.sort((a, b) => a.code.localeCompare(b.code, "el", { numeric: true }));
+      const conv = convertAll(all.map((a) => a.code));
+      const XLSX = await import("xlsx");
+      const rows = all.map((a, i) => ({
+        "Αρχικός κωδικός (WMS)": a.code,
+        "Νέος κωδικός": conv[i].code ?? "",
+        "Χαρακτήρες": conv[i].code?.length ?? "",
+        "Περιοχή WMS": a.descr ?? "",
+        "Ενεργή στο WMS": a.active === "true" ? "Ναι" : a.active === "false" ? "Όχι" : "",
+        "Απενεργ. στην εφαρμογή": disabled.has(a.code) ? "Ναι" : "",
+        "Με απόθεμα": stocked.has(a.code) ? "Ναι" : "",
+        "Σημείωση": conv[i].note,
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws["!cols"] = [16, 13, 10, 28, 12, 14, 10, 60].map((wch) => ({ wch }));
+      ws["!autofilter"] = { ref: `A1:H${rows.length + 1}` };
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, `Χώρος ${roomCode}`);
+      const ok = conv.filter((c) => c.code).length;
+      const dup = conv.filter((c) => c.note.includes("ΔΙΠΛΟΣ")).length;
+      XLSX.utils.book_append_sheet(
+        wb,
+        XLSX.utils.aoa_to_sheet([
+          ["Κανόνας", `${ROOM_LETTER[roomCode]}<διάδρομος 2ψ>-<ραφιέρα 2ψ>-<επίπεδο>-<θέση>, έως ${NEW_CODE_MAX} χαρακτήρες`],
+          ["Παράδειγμα", `${roomCode}.03.02.04 -> ${convertAll([`${roomCode}.03.02.04`])[0].code} · ${roomCode}.08.09.05.02 -> ${convertAll([`${roomCode}.08.09.05.02`])[0].code}`],
+          ["Θέσεις", all.length],
+          ["Μετατράπηκαν", ok],
+          ["Δεν μετατράπηκαν", all.length - ok],
+          ["Διπλοί νέοι κωδικοί", dup],
+          ["Δημιουργήθηκε", new Date().toLocaleString("el-GR")],
+        ]),
+        "Σύνοψη"
+      );
+      XLSX.writeFile(wb, `kodikoi-theseon-${roomCode}-nea-morfi.xlsx`);
+      setNotice({ tone: "ok", text: `Χώρος ${roomCode}: ${all.length} θέσεις · ${ok} μετατράπηκαν · ${all.length - ok} όχι${dup ? ` · ${dup} με διπλό νέο κωδικό` : ""}.` });
+    } catch (e) {
+      setNotice({ tone: "error", text: `Η εξαγωγή δεν έγινε: ${(e as Error).message}` });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function applyDisabled(off: boolean) {
     const codes = [...picked];
     if (!codes.length) return;
@@ -358,11 +416,18 @@ export default function WmsPlanBoard({ userEmail, role, onManual }: { userEmail:
                     </button>
                     {!isClosed && (
                       <>
-                        {selMode && (
+                        {(selMode || ROOM_LETTER[r.room]) && (
                           <div>
-                            <button type="button" className="rp-link" onClick={() => pickMany(roomCells(r))}>
-                              Επιλογή όλου του χώρου {r.room}
-                            </button>
+                            {selMode && (
+                              <button type="button" className="rp-link" onClick={() => pickMany(roomCells(r))}>
+                                Επιλογή όλου του χώρου {r.room}
+                              </button>
+                            )}
+                            {ROOM_LETTER[r.room] && (
+                              <button type="button" className="rp-link" disabled={busy} onClick={() => exportNewCodes(r.room)} title="Excel με όλους τους κωδικούς θέσεων του χώρου και τη μετατροπή στη νέα μορφή">
+                                Νέοι κωδικοί θέσεων (Excel)
+                              </button>
+                            )}
                           </div>
                         )}
                         {r.aisles.map((a) => (
