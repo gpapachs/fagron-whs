@@ -38,7 +38,9 @@ export default function Board({
   userId,
   userEmail,
   role,
+  onLive,
 }: {
+  onLive?: () => void;
   initialPositions: Position[];
   userId: string | null;
   userEmail: string | null;
@@ -232,6 +234,11 @@ export default function Board({
             12 διάδρομοι με την πραγματική αρίθμηση θέσεων (E{"{διάδρομος}"}-{"{στήλη}"}-{"{σειρά}"}-
             {"{θέση}"}) και οι ειδικές θέσεις. Πατήστε μια θέση για να τη δείτε ή να την αλλάξετε.
           </p>
+          {onLive && (
+            <button type="button" className="rp-link" onClick={onLive}>
+              ← Live πλάνο από το WMS
+            </button>
+          )}
         </div>
         <div className="stats">
           <div className="stat total">

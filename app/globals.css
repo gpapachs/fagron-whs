@@ -1555,3 +1555,31 @@ a.sl-open:hover { text-decoration: underline; }
 .kpis.rp-res .kpi.ok .n { color: var(--free); }
 .kpis.rp-res .kpi.warn .n { color: #b7791f; }
 .kpis.rp-res .kpi.bad .n { color: var(--occupied); }
+
+/* ---- Live πλάνο αποθήκης (WMS) ---- */
+.wp-filters { align-items: flex-end; }
+.wp-views { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.wp-rooms { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 12px; }
+.wp-rooms .wp-chip b { font-family: var(--font-mono), monospace; margin-right: 2px; }
+.wp-head { background: none; border: 0; padding: 0; font: inherit; color: var(--ink); text-align: left; cursor: pointer; width: 100%; }
+.wp-name { font-weight: 700; font-size: 14px; }
+.wp-aisle { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px dashed var(--border); }
+.wp-aisle-h { font-size: 12px; font-weight: 700; color: var(--ink); }
+button.cell.wp-cell { border: 1px solid transparent; font-family: var(--font-mono), monospace; padding: 0; min-width: 28px; width: auto; padding: 0 4px; }
+.cell.wp-cell.occupied { border-color: color-mix(in srgb, var(--occupied) 35%, transparent); }
+.cell.wp-cell.exp, .special-pill.exp { box-shadow: inset 0 0 0 2px #d97706; }
+.wp-panel-bg { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.35); z-index: 60; display: flex; justify-content: flex-end; }
+.wp-panel { width: min(520px, 100%); height: 100%; overflow-y: auto; background: var(--surface); box-shadow: var(--shadow); padding: 18px 18px 30px; display: flex; flex-direction: column; gap: 12px; }
+.wp-panel-h { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.wp-code { font-family: var(--font-mono), monospace; font-size: 22px; font-weight: 700; }
+.wp-ptable td { vertical-align: top; }
+.wp-exp { color: #b45309; font-weight: 700; }
+.wp-chip { border: 1px solid var(--border); background: var(--surface); color: var(--ink); border-radius: 999px; padding: 5px 11px; font: inherit; font-size: 12.5px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.wp-chip span { font-size: 11px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+.wp-chip.on { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.wp-chip.on span { color: inherit; opacity: 0.75; }
+
+.wp-filters .field { flex: 0 1 320px; }
+.wp-filters .field input { min-width: 0; width: 100%; }
+.wp-others { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px dashed var(--border); }
+.wp-others .special-pill { padding: 4px 8px; font-size: 11.5px; }
