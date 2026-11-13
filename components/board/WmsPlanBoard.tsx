@@ -38,6 +38,12 @@ async function loadPositions(): Promise<WmsPos[]> {
   return out;
 }
 
+/** θέσεις που απενεργοποιήθηκαν στην εφαρμογή (το WMS δεν αλλάζει) */
+async function loadDisabled(): Promise<Set<string>> {
+  const rows = await fetchAll<{ code: string }>(createClient(), "position_disabled", "code", ["code"]).catch(() => [] as { code: string }[]);
+  return new Set(rows.map((r) => r.code));
+}
+
 const expSoon = (c: PlanCell) => c.stock.some((s) => {
   const m = monthsTo(s.expiry);
   return m != null && m < 6;
@@ -54,6 +60,13 @@ export default function WmsPlanBoard({ userEmail, role, onManual }: { userEmail:
   const [sel, setSel] = useState<PlanCell | null>(null);
   const [closed, setClosed] = useState<Set<string>>(new Set());
   const [allLoose, setAllLoose] = useState<Set<string>>(new Set());
+  const [disabled, setDisabled] = useState<Set<string>>(new Set());
+  const [showDisabled, setShowDisabled] = useState(false);
+  const [selMode, setSelMode] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const isAdmin = role === "admin";
 
   useEffect(() => {
     try {
@@ -73,10 +86,11 @@ export default function WmsPlanBoard({ userEmail, role, onManual }: { userEmail:
   }, [room, view]);
 
   useEffect(() => {
-    Promise.all([loadPositions(), loadStock()])
-      .then(([p, s]) => {
+    Promise.all([loadPositions(), loadStock(), loadDisabled()])
+      .then(([p, s, d]) => {
         setPositions(p);
         setStock(s);
+        setDisabled(d);
       })
       .catch((e: Error) => setError(e.message));
   }, []);
@@ -86,7 +100,10 @@ export default function WmsPlanBoard({ userEmail, role, onManual }: { userEmail:
     const w = what.current;
     what.current = { stock: false, positions: false };
     try {
-      if (w.positions) setPositions(await loadPositions());
+      if (w.positions) {
+        setPositions(await loadPositions());
+        setDisabled(await loadDisabled());
+      }
       if (w.stock) setStock(await loadStock());
       setFlash((x) => x + 1);
     } catch {
@@ -100,7 +117,11 @@ export default function WmsPlanBoard({ userEmail, role, onManual }: { userEmail:
     flush();
   });
 
-  const plan = useMemo<PlanRoom[]>(() => (positions && stock ? buildPlan(positions, stock) : []), [positions, stock]);
+  // απενεργοποιημένες: έξω από το πλάνο (εκτός αν «εμφάνιση» ή αν έχουν απόθεμα)
+  const plan = useMemo<PlanRoom[]>(
+    () => (positions && stock ? buildPlan(showDisabled ? positions : positions.filter((p) => !disabled.has(p.code)), stock) : []),
+    [positions, stock, disabled, showDisabled]
+  );
   const t = q.trim().toLowerCase();
   // κωδικός θέσης -> κελί, και είδος -> θέσεις (για «βρίσκεται και σε»)
   const cellByCode = useMemo(() => {
@@ -142,11 +163,62 @@ export default function WmsPlanBoard({ userEmail, role, onManual }: { userEmail:
 
   const noMaster = positions != null && positions.length === 0;
   const cellCls = (c: PlanCell) =>
-    ["cell", "wp-cell", c.stock.length ? "occupied" : "free", expSoon(c) ? "exp" : "", visibleCell(c) ? "" : "dim", t && cellMatches(c, t) && c.stock.length ? "match" : "", sel?.code === c.code ? "selected" : ""]
+    ["cell", "wp-cell", c.stock.length ? "occupied" : "free", disabled.has(c.code) ? "off" : "", picked.has(c.code) ? "picked" : "", expSoon(c) ? "exp" : "", visibleCell(c) ? "" : "dim", t && cellMatches(c, t) && c.stock.length ? "match" : "", sel?.code === c.code ? "selected" : ""]
       .filter(Boolean)
       .join(" ");
   const tip = (c: PlanCell) =>
-    `${c.code}${c.area ? ` · ${c.area}` : ""}${c.stock.length ? `\n${c.stock.map((s) => `${s.item} ${fq(s.qty)}${s.lot ? ` · ${s.lot}` : ""}`).join("\n")}` : "\nελεύθερη"}`;
+    `${c.code}${disabled.has(c.code) ? " · ΑΠΕΝΕΡΓΟΠΟΙΗΜΕΝΗ" : ""}${c.area ? ` · ${c.area}` : ""}${c.stock.length ? `\n${c.stock.map((s) => `${s.item} ${fq(s.qty)}${s.lot ? ` · ${s.lot}` : ""}`).join("\n")}` : "\nελεύθερη"}`;
+
+  const onCell = (c: PlanCell) => {
+    if (!selMode) return setSel(c);
+    setPicked((cur) => {
+      const n = new Set(cur);
+      if (n.has(c.code)) n.delete(c.code);
+      else n.add(c.code);
+      return n;
+    });
+  };
+  /** επιλογή όλων των ορατών (με τα τρέχοντα φίλτρα) κελιών μιας ομάδας· ξανά = αποεπιλογή */
+  const pickMany = (cells: PlanCell[]) => {
+    const codes = cells.filter(visibleCell).map((c) => c.code);
+    setPicked((cur) => {
+      const n = new Set(cur);
+      const all = codes.length > 0 && codes.every((x) => n.has(x));
+      for (const x of codes) {
+        if (all) n.delete(x);
+        else n.add(x);
+      }
+      return n;
+    });
+  };
+  const roomCells = (r: PlanRoom) => [...r.aisles.flatMap((a) => a.racks.flatMap((k) => k.levels.flatMap((l) => l.cells))), ...r.loose];
+  async function applyDisabled(off: boolean) {
+    const codes = [...picked];
+    if (!codes.length) return;
+    const withStock = codes.filter((x) => cellByCode.get(x)?.stock.length).length;
+    if (
+      off &&
+      !window.confirm(
+        `Απενεργοποίηση ${codes.length} θέσεων στην εφαρμογή;${withStock ? `\n\nΠροσοχή: ${withStock} από αυτές έχουν απόθεμα — θα συνεχίσουν να φαίνονται όσο έχουν απόθεμα.` : ""}\n\nΤο WMS δεν αλλάζει.`
+      )
+    )
+      return;
+    setBusy(true);
+    setNotice(null);
+    const { error: e } = await createClient().rpc("positions_set_disabled", { p_codes: codes, p_disabled: off });
+    setBusy(false);
+    if (e) return setNotice({ tone: "error", text: `Δεν έγινε: ${e.message}` });
+    setDisabled((cur) => {
+      const n = new Set(cur);
+      for (const x of codes) {
+        if (off) n.add(x);
+        else n.delete(x);
+      }
+      return n;
+    });
+    setPicked(new Set());
+    setNotice({ tone: "ok", text: `${off ? "Απενεργοποιήθηκαν" : "Ενεργοποιήθηκαν"} ${codes.length} θέσεις.` });
+  }
 
   return (
     <>
@@ -210,7 +282,30 @@ export default function WmsPlanBoard({ userEmail, role, onManual }: { userEmail:
             ))}
           </div>
           {hits != null && <span className="dim">{hits} θέσεις με «{q.trim()}»</span>}
+          {isAdmin && (
+            <span className="wp-admin">
+              <label className="st-check">
+                <input type="checkbox" checked={showDisabled} onChange={(e) => setShowDisabled(e.target.checked)} /> Εμφάνιση απενεργοποιημένων ({disabled.size})
+              </label>
+              <button
+                type="button"
+                className={`btn ${selMode ? "primary" : "ghost"} sm`}
+                onClick={() => {
+                  setSelMode((x) => !x);
+                  setPicked(new Set());
+                }}
+              >
+                {selMode ? "Τέλος επιλογής" : "Μαζική επιλογή"}
+              </button>
+            </span>
+          )}
         </div>
+        {notice && <p className={`rp-notice ${notice.tone}`}>{notice.text}</p>}
+        {selMode && (
+          <p className="rp-hint">
+            Πατήστε θέσεις για να τις επιλέξετε, ή «επιλογή» σε χώρο / διάδρομο / ραφιέρα (με τα τρέχοντα φίλτρα — π.χ. «Ελεύθερες» για να πάρει μόνο τις άδειες).
+          </p>
+        )}
 
         <div className="wp-rooms" role="group" aria-label="Χώροι">
           <button type="button" className={`wp-chip ${room === "" ? "on" : ""}`} onClick={() => setRoom("")}>
@@ -263,21 +358,39 @@ export default function WmsPlanBoard({ userEmail, role, onManual }: { userEmail:
                     </button>
                     {!isClosed && (
                       <>
+                        {selMode && (
+                          <div>
+                            <button type="button" className="rp-link" onClick={() => pickMany(roomCells(r))}>
+                              Επιλογή όλου του χώρου {r.room}
+                            </button>
+                          </div>
+                        )}
                         {r.aisles.map((a) => (
                           <div className="wp-aisle" key={a.aisle}>
                             <div className="wp-aisle-h">
                               Διάδρομος {a.aisle} <span className="dim">· {a.occupied}/{a.total}</span>
+                              {selMode && (
+                                <button type="button" className="rp-link" onClick={() => pickMany(a.racks.flatMap((k) => k.levels.flatMap((l) => l.cells)))}>
+                                  επιλογή διαδρόμου
+                                </button>
+                              )}
                             </div>
                             <div className="cols">
                               {a.racks.map((k) => (
                                 <div className="colgroup" key={k.rack}>
-                                  <div className="collabel">Ρ.{k.rack}</div>
+                                  {selMode ? (
+                                    <button type="button" className="collabel wp-pickrack" title="Επιλογή ραφιέρας" onClick={() => pickMany(k.levels.flatMap((l) => l.cells))}>
+                                      Ρ.{k.rack} ☐
+                                    </button>
+                                  ) : (
+                                    <div className="collabel">Ρ.{k.rack}</div>
+                                  )}
                                   <div className="rows">
                                     {k.levels.map((l) => (
                                       <div className="rowline" key={l.level}>
                                         {l.cells.map((c) => (
-                                          <button type="button" key={c.code} className={cellCls(c)} title={tip(c)} onClick={() => setSel(c)}>
-                                            {c.slot ?? l.level}
+                                          <button type="button" key={c.code} className={cellCls(c)} title={tip(c)} onClick={() => onCell(c)}>
+                                            {c.code}
                                           </button>
                                         ))}
                                       </div>
@@ -304,7 +417,7 @@ export default function WmsPlanBoard({ userEmail, role, onManual }: { userEmail:
                             </div>
                             <div className="special-pills">
                               {list.map((c) => (
-                                <button type="button" key={c.code} className={`special-pill ${cellCls(c).replace("cell wp-cell", "")}`} title={tip(c)} onClick={() => setSel(c)}>
+                                <button type="button" key={c.code} className={`special-pill ${cellCls(c).replace("cell wp-cell", "")}`} title={tip(c)} onClick={() => onCell(c)}>
                                   {c.code}
                                 </button>
                               ))}
@@ -320,6 +433,22 @@ export default function WmsPlanBoard({ userEmail, role, onManual }: { userEmail:
           </div>
         )}
 
+        {selMode && (
+          <div className="wp-bulk" role="region" aria-label="Μαζικές ενέργειες">
+            <b>{picked.size}</b> επιλεγμένες
+            <button type="button" className="btn primary sm" disabled={!picked.size || busy} onClick={() => applyDisabled(true)}>
+              Απενεργοποίηση
+            </button>
+            <button type="button" className="btn ghost sm" disabled={!picked.size || busy} onClick={() => applyDisabled(false)}>
+              Ενεργοποίηση
+            </button>
+            <button type="button" className="btn ghost sm" disabled={!picked.size} onClick={() => setPicked(new Set())}>
+              Καθαρισμός
+            </button>
+            <span className="dim">Μόνο στην εφαρμογή — το WMS δεν αλλάζει</span>
+          </div>
+        )}
+
         <div className="legend">
           <span>
             <i style={{ background: "var(--occupied-bg)", border: "1px solid var(--occupied)" }} /> με απόθεμα
@@ -330,7 +459,7 @@ export default function WmsPlanBoard({ userEmail, role, onManual }: { userEmail:
           <span>
             <i style={{ boxShadow: "inset 0 0 0 2px #d97706" }} /> λήξη &lt; 6 μήνες
           </span>
-          <span>Στήλες = ραφιέρες (Ρ.), γραμμές = επίπεδα (ψηλότερο επάνω), αριθμός = επίπεδο ή θέση</span>
+          <span>Στήλες = ραφιέρες (Ρ.), γραμμές = επίπεδα (ψηλότερο επάνω)</span>
         </div>
       </div>
 
