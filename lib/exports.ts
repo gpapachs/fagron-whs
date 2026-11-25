@@ -1368,7 +1368,7 @@ const CAT_TXT: Record<string, string> = { dead: "Χωρίς κατανάλωση
 const AREA_TXT: Record<string, string> = { movable: "Μεταφέρσιμη", fixed: "Σταθερή (μένει)", offsite: "Εξωτερική" };
 const rnd = (n: number | null, d = 2) => (n == null ? "" : Math.round(n * 10 ** d) / 10 ** d);
 
-export function relocationWorkbook(XLSX: XLSXLib, p: RelPlanLike, meta: StockExportMeta) {
+export function relocationWorkbook(XLSX: XLSXLib, p: RelPlanLike, meta: StockExportMeta, opt: { sheet?: string; file?: string } = {}) {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(
     wb,
@@ -1390,7 +1390,7 @@ export function relocationWorkbook(XLSX: XLSXLib, p: RelPlanLike, meta: StockExp
       })),
       [16, 24, 12, 40, 18, 11, 12, 11, 9, 8, 10, 5]
     ),
-    "Λίστα μεταφοράς"
+    opt.sheet ?? "Λίστα μεταφοράς"
   );
   XLSX.utils.book_append_sheet(
     wb,
@@ -1438,16 +1438,16 @@ export function relocationWorkbook(XLSX: XLSXLib, p: RelPlanLike, meta: StockExp
     ),
     "Ρυθμίσεις"
   );
-  return { wb, fileName: `metafora-${p.params.prefix}-${stamp(meta.generatedAt)}.xlsx` };
+  return { wb, fileName: `${opt.file ?? "metafora"}-${p.params.prefix}-${stamp(meta.generatedAt)}.xlsx` };
 }
 
 /** Λίστα μεταφοράς για την αποθήκη: ανά θέση (σειρά διαδρομής), με κουτάκι ✓. */
-export function relocationPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFonts, p: RelPlanLike, meta: StockExportMeta) {
+export function relocationPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: PdfFonts, p: RelPlanLike, meta: StockExportMeta, opt: { title?: string; file?: string } = {}) {
   const doc = newDoc(jsPDF, fonts, "landscape");
   const t = p.totals;
   const y = header(
     doc,
-    `Λίστα μεταφοράς ${p.params.prefix}*`,
+    `${opt.title ?? "Λίστα μεταφοράς"} ${p.params.prefix}*`,
     [
       `Δημιουργήθηκε: ${when(meta.generatedAt)}${meta.userEmail ? ` · ${displayUser(meta.userEmail)}` : ""}`,
       `Μένουν ${p.params.keepMonths} μήνες κατανάλωσης + ανοιχτές παραγγελίες · φεύγουν οι νεότερες παρτίδες`,
@@ -1482,8 +1482,8 @@ export function relocationPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: P
       if (d.section === "body" && d.column.index === 9) doc.rect(d.cell.x + 2.2, d.cell.y + 1.2, 3.6, 3.6);
     },
   });
-  footer(doc, "Λίστα μεταφοράς · Fagron Hellas");
-  return { doc, fileName: `metafora-${p.params.prefix}-${stamp(meta.generatedAt)}.pdf` };
+  footer(doc, `${opt.title ?? "Λίστα μεταφοράς"} · Fagron Hellas`);
+  return { doc, fileName: `${opt.file ?? "metafora"}-${p.params.prefix}-${stamp(meta.generatedAt)}.pdf` };
 }
 
 

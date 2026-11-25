@@ -351,3 +351,36 @@ export const CATEGORY_TXT: Record<Category, string> = {
 
 export const withRelPallet = (rows: RelRow[], item: string, qty: number | null, by: string | null) =>
   rows.map((r) => (r.item === item ? { ...r, pal_manual: qty, pal_manual_by: qty ? by : null } : r));
+
+/** Κλειδί γραμμής μεταφοράς (κωδικός · θέση · παρτίδα · λήξη) για τη λίστα συλλογής. */
+export const lineKey = (l: Pick<MoveLine, "item" | "pos" | "lot" | "expiry">) => `${l.item}|${l.pos}|${l.lot}|${l.expiry ?? ""}`;
+
+/** Το πλάνο περιορισμένο στις γραμμές που επέλεξε ο χρήστης (λίστα συλλογής). */
+export function pickPlan(p: RelPlan, keys: Set<string>): RelPlan {
+  const lines = p.lines.filter((l) => keys.has(lineKey(l)));
+  const byItem = new Map<string, MoveLine[]>();
+  for (const l of lines) byItem.set(l.item, [...(byItem.get(l.item) ?? []), l]);
+  const moving = p.moving
+    .filter((i) => byItem.has(i.item))
+    .map((i) => {
+      const ls = byItem.get(i.item)!;
+      const pal = ls.every((l) => l.pallets != null) ? ls.reduce((s, l) => s + (l.pallets ?? 0), 0) : null;
+      return { ...i, lines: ls, moveQty: ls.reduce((s, l) => s + l.moveQty, 0), movePallets: pal };
+    });
+  const freed = new Set(lines.filter((l) => l.freesPosition).map((l) => l.pos));
+  return {
+    ...p,
+    items: moving,
+    moving,
+    returns: [],
+    lines,
+    freedPositions: p.freedPositions.filter((x) => freed.has(x)),
+    totals: {
+      moveQty: moving.reduce((s, i) => s + i.moveQty, 0),
+      pallets: lines.reduce((s, l) => s + (l.pallets ?? 0), 0),
+      palletsMissing: lines.filter((l) => l.pallets == null).length,
+      lines: lines.length,
+      items: moving.length,
+    },
+  };
+}

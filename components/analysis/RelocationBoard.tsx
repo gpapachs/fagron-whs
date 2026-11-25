@@ -1,16 +1,17 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import KpiTiles from "@/components/KpiTiles";
 import PalInput from "@/components/analysis/PalInput";
 import { createClient } from "@/lib/supabase/client";
 import { parseCodes, setLegacy } from "@/lib/legacy";
 import { siteOf } from "@/lib/site";
 import { isLeaflet } from "@/lib/leaflet";
-import { CATEGORY_TXT, defaultAreaClass, normRel, planRelocation, withRelPallet, type AreaClass, type ItemPlan, type RelRow } from "@/lib/relocation";
+import { CATEGORY_TXT, defaultAreaClass, lineKey, normRel, pickPlan, planRelocation, withRelPallet, type AreaClass, type ItemPlan, type RelPlan, type RelRow } from "@/lib/relocation";
 
-type View = "lines" | "items" | "dead" | "returns" | "freed" | "areas";
+type View = "lines" | "pick" | "items" | "dead" | "returns" | "freed" | "areas";
 const LS = "relocation.v1";
+const LS_PICK = "relocation.pick";
 const fq = (n: number | null | undefined, d = 2) => (n == null ? "" : n.toLocaleString("el-GR", { maximumFractionDigits: d }));
 const fd = (s: string | null) => (s ? s.slice(0, 10).split("-").reverse().join("/") : "");
 const yearStart = () => `${new Date().getFullYear()}-01-01`;
@@ -60,15 +61,32 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [legacyOff, setLegacyOff] = useState(false);
+  // λίστα συλλογής: οι γραμμές (κωδικός·θέση·παρτίδα) που επέλεξε ο χρήστης να σταλούν
+  const [picked, setPicked] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     try {
       const v = JSON.parse(window.localStorage.getItem(LS) ?? "null");
       if (v) setS({ ...DEF, ...v });
+      const pk = JSON.parse(window.localStorage.getItem(LS_PICK) ?? "null");
+      if (Array.isArray(pk)) setPicked(new Set(pk));
     } catch {
       /* τίποτα */
     }
   }, []);
+  const savePick = (n: Set<string>) => {
+    setPicked(n);
+    try {
+      window.localStorage.setItem(LS_PICK, JSON.stringify([...n]));
+    } catch {
+      /* τίποτα */
+    }
+  };
+  const setPick = (keys: string[], on: boolean) => {
+    const n = new Set(picked);
+    for (const k of keys) on ? n.add(k) : n.delete(k);
+    savePick(n);
+  };
   const save = (n: Saved) => {
     setS(n);
     try {
@@ -146,24 +164,28 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
   const toggleExcluded = (item: string) => save({ ...s, excluded: s.excluded.includes(item) ? s.excluded.filter((x) => x !== item) : [...s.excluded, item] });
   const setArea = (area: string, c: AreaClass) => save({ ...s, areaClass: { ...s.areaClass, [area]: c } });
 
+  // η λίστα συλλογής πάνω στο τρέχον πλάνο (γραμμές που δεν υπάρχουν πια με τις ρυθμίσεις αγνοούνται)
+  const pick = useMemo(() => (plan ? pickPlan(plan, picked) : null), [plan, picked]);
+  const stale = pick ? picked.size - pick.lines.length : 0;
+
   const meta = () => ({ generatedAt: new Date(), userEmail, filters: [], syncedAt: null });
-  const excel = async () => {
-    if (!plan) return;
-    setBusy("xlsx");
+  const excel = async (src: RelPlan | null = plan, asPick = false) => {
+    if (!src) return;
+    setBusy(asPick ? "pxlsx" : "xlsx");
     try {
       const [XLSX, ex] = await Promise.all([import("xlsx"), import("@/lib/exports")]);
-      const { wb, fileName } = ex.relocationWorkbook(XLSX, plan, meta());
+      const { wb, fileName } = ex.relocationWorkbook(XLSX, src, meta(), asPick ? { sheet: "Λίστα συλλογής", file: "syllogi" } : {});
       XLSX.writeFile(wb, fileName);
     } finally {
       setBusy(null);
     }
   };
-  const pdf = async () => {
-    if (!plan) return;
-    setBusy("pdf");
+  const pdf = async (src: RelPlan | null = plan, asPick = false) => {
+    if (!src) return;
+    setBusy(asPick ? "ppdf" : "pdf");
     try {
       const [{ jsPDF }, { autoTable }, ex, { loadPdfFonts }] = await Promise.all([import("jspdf"), import("jspdf-autotable"), import("@/lib/exports"), import("@/lib/pdfFonts")]);
-      const { doc, fileName } = ex.relocationPdf(jsPDF, autoTable, await loadPdfFonts(), plan, meta());
+      const { doc, fileName } = ex.relocationPdf(jsPDF, autoTable, await loadPdfFonts(), src, meta(), asPick ? { title: "Λίστα συλλογής", file: "syllogi" } : {});
       doc.save(fileName);
     } finally {
       setBusy(null);
@@ -267,10 +289,10 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
             )}
             .
             <div className="st-actions rl-actions">
-              <button type="button" className="btn ghost sm" onClick={pdf} disabled={!!busy || !plan.lines.length}>
+              <button type="button" className="btn ghost sm" onClick={() => pdf()} disabled={!!busy || !plan.lines.length}>
                 {busy === "pdf" ? "PDF…" : "Λίστα μεταφοράς PDF"}
               </button>
-              <button type="button" className="btn ghost sm" onClick={excel} disabled={!!busy}>
+              <button type="button" className="btn ghost sm" onClick={() => excel()} disabled={!!busy}>
                 {busy === "xlsx" ? "Excel…" : "Excel"}
               </button>
             </div>
@@ -280,6 +302,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
             onPick={(k) => setView(k as View)}
             items={[
               { key: "lines", label: "Τι φεύγει", value: plan.totals.items, tone: "blue", hint: "Ανά κωδικό· πατήστε έναν κωδικό για τις παρτίδες και τις θέσεις του" },
+              { key: "pick", label: "Λίστα συλλογής", value: pick?.totals.items ?? 0, tone: "green", hint: "Οι κωδικοί / παρτίδες που επέλεξες να σταλούν — PDF και Excel μόνο γι' αυτές" },
               { key: "items", label: "Ανά κωδικό", value: plan.items.length, tone: "neutral", hint: "Τι μένει, τι φεύγει, κάλυψη, πότε θα χρειαστεί πίσω" },
               { key: "dead", label: "Χωρίς κατανάλωση", value: dead.length, tone: "red", hint: "Καμία έξοδο στην περίοδο: φεύγουν ολόκληρα" },
               { key: "freed", label: "Θέσεις αδειάζουν", value: plan.freedPositions.length, tone: "green", hint: "Όλο το περιεχόμενο της θέσης φεύγει" },
@@ -301,7 +324,34 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
             <input className="an-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Αναζήτηση κωδικού / περιγραφής / θέσης…" />
           </div>
 
-          {view === "lines" && <MoveGroups items={sortItems(plan.moving.filter(m), s.sort)} />}
+          {view === "lines" && <MoveGroups items={sortItems(plan.moving.filter(m), s.sort)} picked={picked} onPick={setPick} />}
+          {view === "pick" && pick && (
+            <>
+              <div className="rl-pickbar">
+                <span>
+                  <b>{pick.totals.items}</b> κωδικοί · <b>{pick.totals.lines}</b> γραμμές · <b>{fq(pick.totals.moveQty, 0)}</b> τεμ. · ≈ <b>{pick.totals.pallets}</b> παλέτες
+                  {pick.totals.palletsMissing > 0 && <span className="dim"> (+{pick.totals.palletsMissing} χωρίς ποσ./παλέτα)</span>}
+                  {stale > 0 && <span className="dim"> · {stale} επιλογές δεν ισχύουν πια με τις τρέχουσες ρυθμίσεις</span>}
+                </span>
+                <span className="st-actions">
+                  <button type="button" className="btn primary sm" onClick={() => pdf(pick, true)} disabled={!!busy || !pick.lines.length}>
+                    {busy === "ppdf" ? "PDF…" : "Λίστα συλλογής PDF"}
+                  </button>
+                  <button type="button" className="btn ghost sm" onClick={() => excel(pick, true)} disabled={!!busy || !pick.lines.length}>
+                    {busy === "pxlsx" ? "Excel…" : "Excel"}
+                  </button>
+                  <button type="button" className="btn ghost sm" onClick={() => savePick(new Set())} disabled={!picked.size}>
+                    Άδειασμα λίστας
+                  </button>
+                </span>
+              </div>
+              {pick.lines.length ? (
+                <MoveGroups items={sortItems(pick.moving.filter(m), s.sort)} picked={picked} onPick={setPick} pickView />
+              ) : (
+                <p className="rp-hint">Η λίστα είναι άδεια. Στο «Τι φεύγει» τσέκαρε τους κωδικούς (ή μεμονωμένες παρτίδες / θέσεις) που θέλεις να στείλεις.</p>
+              )}
+            </>
+          )}
           {view === "items" && <ItemsTable rows={sortItems(plan.items.filter(m), s.sort)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} />}
           {view === "dead" && <ItemsTable rows={sortItems(dead.filter(m), s.sort)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} />}
           {view === "returns" && <ItemsTable rows={sortItems(plan.returns.filter(m), s.sort)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} returns />}
@@ -356,8 +406,30 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
 }
 
 /** Τι φεύγει: πρώτα ανά κωδικό, και με κλικ οι παρτίδες / θέσεις του κωδικού. */
-function MoveGroups({ items }: { items: ItemPlan[] }) {
+function PickBox({ keys, picked, onPick, label }: { keys: string[]; picked: Set<string>; onPick: (k: string[], on: boolean) => void; label: string }) {
+  const ref = useRef<HTMLInputElement>(null);
+  const n = keys.filter((k) => picked.has(k)).length;
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = n > 0 && n < keys.length;
+  }, [n, keys.length]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      className="rl-pick"
+      aria-label={label}
+      title={n ? "Αφαίρεση από τη λίστα συλλογής" : "Προσθήκη στη λίστα συλλογής"}
+      checked={n > 0 && n === keys.length}
+      onClick={(e) => e.stopPropagation()}
+      onChange={() => onPick(keys, n < keys.length)}
+    />
+  );
+}
+
+function MoveGroups({ items, picked, onPick, pickView }: { items: ItemPlan[]; picked: Set<string>; onPick: (k: string[], on: boolean) => void; pickView?: boolean }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const allKeys = items.flatMap((i) => i.lines.map(lineKey));
+  const nPicked = allKeys.filter((k) => picked.has(k)).length;
   const toggle = (i: string) =>
     setOpen((cur) => {
       const n = new Set(cur);
@@ -369,6 +441,19 @@ function MoveGroups({ items }: { items: ItemPlan[] }) {
   return (
     <>
       <div className="rl-groupbar">
+        {!pickView && (
+          <>
+            <button type="button" className="btn ghost sm" onClick={() => onPick(allKeys, true)} disabled={!allKeys.length || nPicked === allKeys.length} title="Όλοι οι κωδικοί που φαίνονται τώρα (με την αναζήτηση) μπαίνουν στη λίστα συλλογής">
+              + Όλα τα εμφανιζόμενα στη λίστα
+            </button>
+            {nPicked > 0 && (
+              <button type="button" className="btn ghost sm" onClick={() => onPick(allKeys, false)}>
+                Αφαίρεση εμφανιζόμενων
+              </button>
+            )}
+            <span className="rl-gap" />
+          </>
+        )}
         <button type="button" className="btn ghost sm" onClick={() => setOpen(new Set(items.map((i) => i.item)))}>
           Άνοιγμα όλων
         </button>
@@ -380,7 +465,7 @@ function MoveGroups({ items }: { items: ItemPlan[] }) {
         <table className="st-table st-cards rl-groups">
           <thead>
             <tr>
-              {["", "Κωδικός", "Περιγραφή", "Κατηγορία", "Παρτίδες", "Θέσεις", "Κεντρική", "Κάλυψη", "Να φύγει", "Παλέτες", "Μένει"].map((h, i) => (
+              {["", "✓", "Κωδικός", "Περιγραφή", "Κατηγορία", "Παρτίδες", "Θέσεις", "Κεντρική", "Κάλυψη", "Να φύγει", "Παλέτες", "Μένει"].map((h, i) => (
                 <th key={i}>{h}</th>
               ))}
             </tr>
@@ -388,16 +473,20 @@ function MoveGroups({ items }: { items: ItemPlan[] }) {
           <tbody>
             {items.map((p) => {
               const isOpen = open.has(p.item);
+              const keys = p.lines.map(lineKey);
               const freed = p.lines.filter((l) => l.freesPosition).length;
               // παρτίδες με σειρά: νεότερη λήξη πρώτα (αυτές φεύγουν)
               const lines = [...p.lines].sort((a, b) => (b.expiry ?? "").localeCompare(a.expiry ?? "") || a.lot.localeCompare(b.lot) || a.pos.localeCompare(b.pos, "el", { numeric: true }));
               return (
                 <Fragment key={p.item}>
-                  <tr className={`rl-grow ${isOpen ? "open" : ""}`} onClick={() => toggle(p.item)} aria-expanded={isOpen}>
+                  <tr className={`rl-grow ${isOpen ? "open" : ""} ${keys.some((k) => picked.has(k)) ? "picked" : ""}`} onClick={() => toggle(p.item)} aria-expanded={isOpen}>
                     <td data-label="">
                       <button type="button" className="rl-caret" aria-label={isOpen ? "Κλείσιμο" : "Παρτίδες"} onClick={(e) => { e.stopPropagation(); toggle(p.item); }}>
                         {isOpen ? "▾" : "▸"}
                       </button>
+                    </td>
+                    <td data-label="Λίστα συλλογής">
+                      <PickBox keys={keys} picked={picked} onPick={onPick} label={`Λίστα συλλογής: ${p.item}`} />
                     </td>
                     <td className="mono" data-label="Κωδικός">
                       <b>{p.item}</b>
@@ -421,7 +510,7 @@ function MoveGroups({ items }: { items: ItemPlan[] }) {
                   </tr>
                   {isOpen && (
                     <tr className="rl-sub">
-                      <td colSpan={11}>
+                      <td colSpan={12}>
                         <ul className="rl-whylong" aria-label="Γιατί">
                           {p.why.long.map((t, k) => (
                             <li key={k}>{t}</li>
@@ -430,7 +519,7 @@ function MoveGroups({ items }: { items: ItemPlan[] }) {
                         <table className="st-table rl-subtable">
                           <thead>
                             <tr>
-                              {["Παρτίδα", "Λήξη", "Θέση", "Στη θέση", "Να φύγει", "Παλέτες", ""].map((h, i) => (
+                              {["Παρτίδα", "Λήξη", "✓", "Θέση", "Στη θέση", "Να φύγει", "Παλέτες", ""].map((h, i) => (
                                 <th key={i}>{h}</th>
                               ))}
                             </tr>
@@ -455,6 +544,9 @@ function MoveGroups({ items }: { items: ItemPlan[] }) {
                                     {fd(l.expiry)}
                                   </td>
                                 )}
+                                <td data-label="Λίστα συλλογής">
+                                  <PickBox keys={[lineKey(l)]} picked={picked} onPick={onPick} label={`Λίστα συλλογής: ${l.item} ${l.lot} ${l.pos}`} />
+                                </td>
                                 <td data-label="Θέση"><span className="rack">{l.pos}</span></td>
                                 <td className="num" data-label="Στη θέση">{fq(l.posQty)}</td>
                                 <td className="num" data-label="Να φύγει">
@@ -475,7 +567,7 @@ function MoveGroups({ items }: { items: ItemPlan[] }) {
             })}
             {!items.length && (
               <tr>
-                <td colSpan={11} className="st-empty">Τίποτα να μεταφερθεί με αυτές τις ρυθμίσεις.</td>
+                <td colSpan={12} className="st-empty">Τίποτα να μεταφερθεί με αυτές τις ρυθμίσεις.</td>
               </tr>
             )}
           </tbody>
