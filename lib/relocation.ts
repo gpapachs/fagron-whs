@@ -81,6 +81,12 @@ export type ItemPlan = {
   positions: number;
   legacyCodes: string | null;
   legacyOut: number;
+  outQty: number; // ανάλωση στην περίοδο (μαζί με τους παλιούς κωδικούς)
+  effMonths: number; // μήνες στους οποίους μετρήθηκε η ανάλωση
+  need: number; // ανάλωση μηνών + ανοιχτές παραγγελίες, πριν τη στρογγυλοποίηση σε παλέτες
+  firstReceipt: string | null;
+  /** γιατί προτείνεται αυτή η κίνηση: σύντομα και αναλυτικά */
+  why: { short: string; long: string[] };
 };
 export type RelPlan = {
   params: RelParams;
@@ -188,7 +194,8 @@ export function planRelocation(rows: RelRow[], params: RelParams): RelPlan {
     let category: Category =
       excluded.has(item) ? "excluded" : h.item_out_qty <= EPS && demand <= EPS ? (isNew ? "new" : "dead") : perMonth > 0 && onsite / perMonth > params.keepMonths * 2 ? "slow" : "active";
 
-    let keep = perMonth * params.keepMonths + demand;
+    const need = perMonth * params.keepMonths + demand;
+    let keep = need;
     if (pq.qty && keep > 0) keep = Math.ceil(keep / pq.qty - EPS) * pq.qty;
     if (category === "excluded" || (category === "new" && !params.includeNew)) keep = Infinity;
 
@@ -236,7 +243,14 @@ export function planRelocation(rows: RelRow[], params: RelParams): RelPlan {
       positions: new Set(onsiteRows.map((r) => r.pos)).size,
       legacyCodes: h.legacy_codes,
       legacyOut: h.legacy_out_qty,
+      outQty: h.item_out_qty,
+      effMonths,
+      need,
+      firstReceipt: h.item_first_receipt,
+      why: { short: "", long: [] },
     });
+    const it = items[items.length - 1];
+    it.why = explain(it, params, isNew);
   }
 
   // θέσεις που αδειάζουν: όλες οι γραμμές του προθέματος φεύγουν ολόκληρες και δεν υπάρχει άλλο είδος
@@ -273,6 +287,53 @@ export function planRelocation(rows: RelRow[], params: RelParams): RelPlan {
       lines: lines.length,
       items: moving.length,
     },
+  };
+}
+
+const n0 = (n: number) => Math.round(n).toLocaleString("el-GR");
+const n1 = (n: number) => n.toLocaleString("el-GR", { maximumFractionDigits: 1 });
+const dmy = (s: string | null) => (s ? s.slice(0, 10).split("-").reverse().join("/") : "");
+
+/** Η αιτιολόγηση της πρότασης για έναν κωδικό, με τα νούμερα που την έβγαλαν. */
+export function explain(i: ItemPlan, params: RelParams, isNew: boolean): { short: string; long: string[] } {
+  const from = dmy(params.from);
+  const legacy = i.legacyCodes ? ` (μαζί ${n0(i.legacyOut)} από τον παλιό ${i.legacyCodes})` : "";
+  const cons = i.outQty > 0 ? `Ανάλωση ${n0(i.outQty)} σε ${n1(i.effMonths)} μήνες${legacy} = ${n1(i.perMonth)}/μήνα.` : `Καμία ανάλωση από ${from}${i.legacyCodes ? ` (ούτε στον παλιό ${i.legacyCodes})` : ""}.`;
+  const dem = i.demand > 0 ? ` + ανοιχτές παραγγελίες ${n0(i.demand)}` : "";
+  const pal = i.palQty && i.keep > i.need + 1e-6 ? `, σε ολόκληρες παλέτες των ${n0(i.palQty)} = ${n0(i.keep)}` : "";
+  const long: string[] = [cons];
+  if (i.category === "excluded") return { short: "Επιλέχθηκε «Κράτα όλο» — μένει.", long: [...long, "Ο κωδικός εξαιρέθηκε χειροκίνητα από τη μεταφορά."] };
+  if (i.category === "new" && !params.includeNew)
+    return {
+      short: `Νέος κωδικός (πρώτη παραλαβή ${dmy(i.firstReceipt)}) χωρίς ανάλωση ακόμη — μένει.`,
+      long: [...long, `Ήρθε για πρώτη φορά ${dmy(i.firstReceipt)}, λιγότερο από 90 ημέρες. Μένει μέχρι να φανεί η κατανάλωσή του (ή τσέκαρε «Να φύγουν και οι νέοι κωδικοί»).`],
+    };
+  if (i.outQty <= 0 && i.demand <= 0) {
+    long.push(`Χωρίς ανάλωση και χωρίς ανοιχτές παραγγελίες δεν χρειάζεται απόθεμα στην κεντρική → φεύγει ό,τι είναι σε μεταφέρσιμες θέσεις (${n0(i.movable)}).`);
+    if (isNew) long.push("Είναι νέος κωδικός· φεύγει επειδή είναι τσεκαρισμένο «Να φύγουν και οι νέοι κωδικοί».");
+    return { short: `Καμία ανάλωση από ${from}${i.legacyCodes ? " (ούτε στον παλιό)" : ""} και καμία παραγγελία → φεύγει όλο.`, long };
+  }
+  long.push(`Για ${n1(params.keepMonths)} μήνες χρειάζονται ${n0(i.perMonth * params.keepMonths)}${dem ? `${dem} = ${n0(i.need)}` : ""}${pal}.`);
+  const cover = i.cover == null ? "" : i.cover >= 24 ? `${n1(i.cover / 12)} έτη` : `${n0(i.cover)} μήνες`;
+  long.push(`Στην κεντρική υπάρχουν ${n0(i.onsite)}${cover ? ` (κάλυψη ${cover})` : ""}.`);
+  if (i.moveQty <= 0) {
+    const why =
+      i.onsite <= i.keep + 1e-6
+        ? "Δεν περισσεύει — μένει όλο."
+        : i.movable <= 0
+          ? "Περισσεύει, αλλά δεν είναι σε θέσεις από τις οποίες φεύγει απόθεμα (π.χ. άλλος χώρος)."
+          : "Περισσεύει λιγότερο από μία ολόκληρη παλέτα — μένει.";
+    long.push(why);
+    return { short: `${n1(i.perMonth)}/μήνα, κάλυψη ${cover || "—"} → ${why.toLowerCase()}`, long };
+  }
+  const excess = i.onsite - i.keep;
+  long.push(
+    `Περισσεύουν ${n0(excess)} → φεύγουν ${n0(i.moveQty)}${i.movePallets ? ` (${i.movePallets} παλ.)` : ""}: οι νεότερες παρτίδες, ώστε να μείνουν οι παλαιότερες (FEFO)${i.moveQty + 1e-6 < excess ? ` — μόνο σε ολόκληρες παλέτες / μεταφέρσιμες θέσεις` : ""}.`
+  );
+  if (i.neededBack) long.push(`Με αυτή την ανάλωση, ό,τι μένει φτάνει μέχρι περίπου ${dmy(i.neededBack)} — τότε θα χρειαστεί να επιστρέψει απόθεμα.`);
+  return {
+    short: `${n1(i.perMonth)}/μήνα${i.legacyCodes ? " (μαζί ο παλιός)" : ""}, κάλυψη ${cover} → για ${n1(params.keepMonths)} μήνες μένουν ${n0(i.keep)}, φεύγουν ${n0(i.moveQty)}.`,
+    long,
   };
 }
 

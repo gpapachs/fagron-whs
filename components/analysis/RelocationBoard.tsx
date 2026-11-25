@@ -352,7 +352,10 @@ function MoveGroups({ items }: { items: ItemPlan[] }) {
                       <b>{p.item}</b>
                       {p.legacyCodes && <div className="dim rl-legacy">πρώην {p.legacyCodes}</div>}
                     </td>
-                    <td className="st-desc" data-label="Περιγραφή">{p.description}</td>
+                    <td className="st-desc" data-label="Περιγραφή">
+                      {p.description}
+                      <div className="rl-why">{p.why.short}</div>
+                    </td>
                     <td data-label="Κατηγορία"><span className={`rl-cat ${p.category}`}>{CATEGORY_TXT[p.category]}</span></td>
                     <td className="num" data-label="Παρτίδες">{lotsOf(p)}</td>
                     <td className="num" data-label="Θέσεις">
@@ -367,6 +370,11 @@ function MoveGroups({ items }: { items: ItemPlan[] }) {
                   {isOpen && (
                     <tr className="rl-sub">
                       <td colSpan={10}>
+                        <ul className="rl-whylong" aria-label="Γιατί">
+                          {p.why.long.map((t, k) => (
+                            <li key={k}>{t}</li>
+                          ))}
+                        </ul>
                         <table className="st-table rl-subtable">
                           <thead>
                             <tr>
@@ -491,7 +499,10 @@ function ItemsTable({
                 <LegacyEdit item={i.item} codes={i.legacyCodes} onSave={onLegacy} />
                 {i.legacyOut > 0 && <div className="dim rl-legacy">{fq(i.legacyOut, 0)} τεμ. από τον παλιό</div>}
               </td>
-              <td className="st-desc" data-label="Περιγραφή">{i.description}</td>
+              <td className="st-desc" data-label="Περιγραφή" title={i.why.long.join("\n")}>
+                {i.description}
+                <div className="rl-why">{i.why.short}</div>
+              </td>
               <td data-label="Κατηγορία"><span className={`rl-cat ${i.category}`}>{CATEGORY_TXT[i.category]}</span></td>
               <td className="num" data-label="Κεντρική">{fq(i.onsite, 0)}</td>
               <td className="num" data-label="Εξωτερική">{i.offsite ? fq(i.offsite, 0) : ""}</td>

@@ -278,9 +278,9 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
             ) : view === "expiring" ? (
               byItem ? <ExpItemTable rows={shownExp} /> : <ExpTable rows={shownExp} />
             ) : byItem ? (
-              <ItemGroupTable rows={shownBatches} partial={view === "partial"} onPal={savePallet} />
+              <ItemGroupTable rows={shownBatches} partial={view === "partial"} onPal={savePallet} months={a.periodMonths} />
             ) : (
-              <BatchTable rows={shownBatches} partial={view === "partial"} onPal={savePallet} />
+              <BatchTable rows={shownBatches} partial={view === "partial"} onPal={savePallet} months={a.periodMonths} />
             )}
           </>
         )}
@@ -301,13 +301,25 @@ function PalletLine({ label, bs }: { label: string; bs: { pallets: number | null
   );
 }
 
-function BatchTable({ rows, partial, onPal }: { rows: Batch[]; partial?: boolean; onPal: (item: string, q: number | null) => void }) {
+/** Ανάλωση του κωδικού στην περίοδο (μαζί με τον παλιό κωδικό), ανά μήνα */
+function Cons({ qty, months, legacy, legacyQty }: { qty: number; months: number; legacy: string | null; legacyQty: number }) {
+  if (!qty) return <span className="dim">—{legacy ? <div className="an-legacy">πρώην {legacy}</div> : null}</span>;
+  return (
+    <span title={`${fq(qty)} σε ${fq(Math.round(months * 10) / 10)} μήνες${legacy ? ` · μαζί ${fq(legacyQty)} από τον παλιό ${legacy}` : ""}`}>
+      <b>{fq(qty)}</b>
+      <div className="dim an-legacy">{fq(Math.round((qty / months) * 10) / 10)}/μήνα</div>
+      {legacy && <div className="dim an-legacy">πρώην {legacy}{legacyQty ? `: ${fq(legacyQty)}` : ""}</div>}
+    </span>
+  );
+}
+
+function BatchTable({ rows, partial, onPal, months }: { rows: Batch[]; partial?: boolean; onPal: (item: string, q: number | null) => void; months: number }) {
   return (
     <div className="st-tablewrap">
       <table className="st-table st-cards">
         <thead>
           <tr>
-            {["Κωδικός", "Περιγραφή", "Παρτίδα", "Παραλαβή", "Ημ.", "Προμηθευτής", partial ? "Παραλ. / Υπόλ." : "Απόθεμα", "Ποσ./παλέτα", "Παλέτες", "Λήξη", "Έξοδοι κωδ.", "Τελ. έξοδος κωδ.", "Θέσεις"].map((h) => (
+            {["Κωδικός", "Περιγραφή", "Παρτίδα", "Παραλαβή", "Ημ.", "Προμηθευτής", partial ? "Παραλ. / Υπόλ." : "Απόθεμα", "Ποσ./παλέτα", "Παλέτες", "Λήξη", "Ανάλωση κωδ.", "Έξοδοι κωδ.", "Τελ. έξοδος κωδ.", "Θέσεις"].map((h) => (
               <th key={h}>{h}</th>
             ))}
           </tr>
@@ -339,6 +351,9 @@ function BatchTable({ rows, partial, onPal }: { rows: Batch[]; partial?: boolean
               <td className={`mono ${b.monthsToExpiry != null && b.monthsToExpiry < 0 ? "st-expired" : b.monthsToExpiry != null && b.monthsToExpiry < 6 ? "st-soon" : ""}`} data-label="Λήξη">
                 {fd(b.expiry)}
               </td>
+              <td className="num" data-label="Ανάλωση κωδικού">
+                <Cons qty={b.item_out_qty} months={months} legacy={b.legacy_codes} legacyQty={b.legacy_out_qty} />
+              </td>
               <td className="num" data-label="Έξοδοι κωδικού">{b.item_out_n || "—"}</td>
               <td className="mono" data-label="Τελ. έξοδος">{fd(b.item_out_last)}</td>
               <td className="dim an-pos" data-label="Θέσεις">{b.positions}</td>
@@ -346,7 +361,7 @@ function BatchTable({ rows, partial, onPal }: { rows: Batch[]; partial?: boolean
           ))}
           {!rows.length && (
             <tr>
-              <td colSpan={13} className="st-empty">Τίποτα σε αυτή την ομάδα.</td>
+              <td colSpan={14} className="st-empty">Τίποτα σε αυτή την ομάδα.</td>
             </tr>
           )}
         </tbody>
@@ -413,6 +428,9 @@ type ItemGroup = {
   lastReceipt: string;
   expiry: string | null;
   outN: number;
+  outQty: number;
+  legacyCodes: string | null;
+  legacyQty: number;
   outLast: string | null;
   itemStock: number;
   positions: string[];
@@ -439,6 +457,9 @@ function groupByItem(rows: Batch[]): ItemGroup[] {
         lastReceipt: b.last_receipt,
         expiry: b.expiry,
         outN: b.item_out_n,
+        outQty: b.item_out_qty,
+        legacyCodes: b.legacy_codes,
+        legacyQty: b.legacy_out_qty,
         outLast: b.item_out_last,
         itemStock: b.item_stock,
         positions: pos,
@@ -457,14 +478,14 @@ function groupByItem(rows: Batch[]): ItemGroup[] {
   return [...m.values()].sort((a, b) => b.stock - a.stock);
 }
 
-function ItemGroupTable({ rows, partial, onPal }: { rows: Batch[]; partial?: boolean; onPal: (item: string, q: number | null) => void }) {
+function ItemGroupTable({ rows, partial, onPal, months }: { rows: Batch[]; partial?: boolean; onPal: (item: string, q: number | null) => void; months: number }) {
   const groups = useMemo(() => groupByItem(rows), [rows]);
   return (
     <div className="st-tablewrap">
       <table className="st-table st-cards">
         <thead>
           <tr>
-            {["Κωδικός", "Περιγραφή", "Παρτίδες", "Παραλαβές", partial ? "Παραλ. / Υπόλ." : "Απόθεμα", "Ποσ./παλέτα", "Παλέτες", "Νωρίτερη λήξη", "Έξοδοι κωδ.", "Τελ. έξοδος", "Θέσεις"].map((h) => (
+            {["Κωδικός", "Περιγραφή", "Παρτίδες", "Παραλαβές", partial ? "Παραλ. / Υπόλ." : "Απόθεμα", "Ποσ./παλέτα", "Παλέτες", "Νωρίτερη λήξη", "Ανάλωση", "Έξοδοι κωδ.", "Τελ. έξοδος", "Θέσεις"].map((h) => (
               <th key={h}>{h}</th>
             ))}
           </tr>
@@ -493,6 +514,9 @@ function ItemGroupTable({ rows, partial, onPal }: { rows: Batch[]; partial?: boo
               </td>
               <td className="num" data-label="Παλέτες">{g.pallets == null ? <span className="dim">({new Set(g.positions.map((p) => p.split(" (")[0])).size} θέσ.)</span> : <b>{g.pallets}</b>}</td>
               <td className="mono" data-label="Νωρίτερη λήξη">{fd(g.expiry)}</td>
+              <td className="num" data-label="Ανάλωση">
+                <Cons qty={g.outQty} months={months} legacy={g.legacyCodes} legacyQty={g.legacyQty} />
+              </td>
               <td className="num" data-label="Έξοδοι κωδικού">{g.outN || "—"}</td>
               <td className="mono" data-label="Τελ. έξοδος">{fd(g.outLast)}</td>
               <td className="dim an-pos" data-label="Θέσεις">{g.positions.join(", ")}</td>
@@ -500,7 +524,7 @@ function ItemGroupTable({ rows, partial, onPal }: { rows: Batch[]; partial?: boo
           ))}
           {!groups.length && (
             <tr>
-              <td colSpan={11} className="st-empty">Τίποτα σε αυτή την ομάδα.</td>
+              <td colSpan={12} className="st-empty">Τίποτα σε αυτή την ομάδα.</td>
             </tr>
           )}
         </tbody>

@@ -1248,6 +1248,9 @@ function batchRow(b: BatchLike) {
     "Θέσεις παρτίδας": b.lot_positions,
     "Λήξη": dOnly(b.expiry),
     "Μήνες ως λήξη": b.monthsToExpiry ?? "",
+    "Ανάλωση κωδικού": b.item_out_qty,
+    "Παλιοί κωδικοί": b.legacy_codes ?? "",
+    "Ανάλωση παλιών": b.legacy_out_qty || "",
     "Έξοδοι κωδικού": b.item_out_n,
     "Τελ. έξοδος κωδικού": dOnly(b.item_out_last),
     "Απόθεμα κωδικού": b.item_stock,
@@ -1255,7 +1258,7 @@ function batchRow(b: BatchLike) {
     "Θέσεις": b.positions ?? "",
   };
 }
-const BATCH_W = [12, 40, 18, 11, 8, 28, 11, 12, 11, 12, 11, 9, 11, 9, 9, 12, 12, 9, 40];
+const BATCH_W = [12, 40, 18, 11, 8, 28, 11, 12, 11, 12, 11, 9, 11, 9, 12, 14, 12, 9, 12, 12, 9, 40];
 
 export function analysisWorkbook(
   XLSX: XLSXLib,
@@ -1410,8 +1413,9 @@ export function relocationWorkbook(XLSX: XLSXLib, p: RelPlanLike, meta: StockExp
         "Επιστροφή από εξωτερική": i.returnQty ? rnd(i.returnQty, 3) : "",
         "Παλιοί κωδικοί": i.legacyCodes ?? "",
         "Κατανάλωση παλιών": i.legacyOut ? rnd(i.legacyOut, 3) : "",
+        "Γιατί": i.why?.long.join(" ") ?? "",
       })),
-      [12, 40, 16, 11, 11, 12, 10, 11, 11, 11, 10, 10, 14, 13, 16, 12]
+      [12, 40, 16, 11, 11, 12, 10, 11, 11, 11, 10, 10, 14, 13, 16, 12, 90]
     ),
     "Ανά κωδικό"
   );

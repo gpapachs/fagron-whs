@@ -25,6 +25,10 @@ export type ReceiptRow = {
   pal_manual: number | null; // ποσότητα/παλέτα που έδωσε χρήστης
   pal_manual_by: string | null;
   pal_wms: number | null; // από το WMS (ms_Item.PiecesPerPalete), όταν είναι συμπληρωμένο
+  /** παλιοί κωδικοί (π.χ. 40-… για 41-…)· η item_out_* τους περιλαμβάνει ήδη */
+  legacy_codes: string | null;
+  legacy_out_n: number;
+  legacy_out_qty: number;
 };
 
 export type PalSource = "manual" | "wms" | null;
@@ -100,6 +104,9 @@ export function normReceipt(r: Record<string, unknown>): ReceiptRow {
     pal_manual: r.pal_manual == null ? null : num(r.pal_manual),
     pal_manual_by: (r.pal_manual_by as string | null) ?? null,
     pal_wms: r.pal_wms_ppp == null ? (r.pal_wms == null ? null : num(r.pal_wms)) : num(r.pal_wms_ppp),
+    legacy_codes: (r.legacy_codes as string | null) || null,
+    legacy_out_n: num(r.legacy_out_n),
+    legacy_out_qty: num(r.legacy_out_qty),
   };
 }
 
