@@ -6,6 +6,7 @@ import PalInput from "@/components/analysis/PalInput";
 import { createClient } from "@/lib/supabase/client";
 import { parseCodes, setLegacy } from "@/lib/legacy";
 import { siteOf } from "@/lib/site";
+import { isLeaflet } from "@/lib/leaflet";
 import { CATEGORY_TXT, defaultAreaClass, normRel, planRelocation, withRelPallet, type AreaClass, type ItemPlan, type RelRow } from "@/lib/relocation";
 
 type View = "lines" | "items" | "dead" | "returns" | "freed" | "areas";
@@ -25,8 +26,9 @@ type Saved = {
   excluded: string[];
   room: string; // χώρος από τον οποίο φεύγει απόθεμα (π.χ. 20)· "*" = όλοι· κενό = κατά περιοχή WMS
   legacy: string; // πρόθεμα παλιών κωδικών με ίδια περιγραφή (π.χ. 40 για τους 41)
+  noLeaflets: boolean; // leaflets εκτός ανάλυσης
 };
-const DEF: Saved = { prefix: "41", from: yearStart(), keepMonths: 3, includeNew: false, partial: true, areaClass: {}, excluded: [], room: "20", legacy: "40" };
+const DEF: Saved = { prefix: "41", from: yearStart(), keepMonths: 3, includeNew: false, partial: true, areaClass: {}, excluded: [], room: "20", legacy: "40", noLeaflets: true };
 
 export default function RelocationBoard({ userEmail }: { userEmail: string | null }) {
   const [s, setS] = useState<Saved>(DEF);
@@ -76,10 +78,26 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
   }
 
   // ο υπολογισμός ξανατρέχει τοπικά σε κάθε αλλαγή ρύθμισης (χωρίς νέο ερώτημα στη βάση)
-  const plan = useMemo(
-    () => (rows && loaded ? planRelocation(rows, { prefix: loaded.prefix, from: loaded.from, keepMonths: s.keepMonths, includeNew: s.includeNew, partial: s.partial, areaClass: s.areaClass, excluded: s.excluded, room: s.room }) : null),
-    [rows, loaded, s.keepMonths, s.includeNew, s.partial, s.areaClass, s.excluded, s.room]
-  );
+  const plan = useMemo(() => {
+    if (!rows || !loaded) return null;
+    const p = planRelocation(s.noLeaflets ? rows.filter((r) => !isLeaflet(r.description)) : rows, {
+      prefix: loaded.prefix,
+      from: loaded.from,
+      keepMonths: s.keepMonths,
+      includeNew: s.includeNew,
+      partial: s.partial,
+      areaClass: s.areaClass,
+      excluded: s.excluded,
+      room: s.room,
+    });
+    if (s.noLeaflets) {
+      // θέση που κρατά και leaflets δεν «αδειάζει»
+      const withLeaflets = new Set(rows.filter((r) => isLeaflet(r.description)).map((r) => r.pos));
+      p.freedPositions = p.freedPositions.filter((x) => !withLeaflets.has(x));
+      for (const l of p.lines) if (withLeaflets.has(l.pos)) l.freesPosition = false;
+    }
+    return p;
+  }, [rows, loaded, s.keepMonths, s.includeNew, s.partial, s.areaClass, s.excluded, s.room, s.noLeaflets]);
 
   async function savePallet(item: string, qty: number | null) {
     const prev = rows;
@@ -192,6 +210,10 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
           <label className="st-check">
             <input type="checkbox" checked={s.partial} onChange={(e) => save({ ...s, partial: e.target.checked })} />
             Μέρος θέσης (ολόκληρες παλέτες)
+          </label>
+          <label className="st-check" title="Τα leaflets (φύλλα οδηγιών) δεν μετράνε στην ανάλυση">
+            <input type="checkbox" checked={s.noLeaflets} onChange={(e) => save({ ...s, noLeaflets: e.target.checked })} />
+            Χωρίς leaflets
           </label>
           <label className="st-check" title="Κωδικοί που κινήθηκαν για πρώτη φορά τις τελευταίες 90 ημέρες και δεν έχουν ακόμα κατανάλωση">
             <input type="checkbox" checked={s.includeNew} onChange={(e) => save({ ...s, includeNew: e.target.checked })} />

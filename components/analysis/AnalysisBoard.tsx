@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import { analyse, normReceipt, sumPallets, sumStock, withPallet, type Analysis, type Batch, type Coverage, type FifoCase, type PalSource, type ReceiptRow } from "@/lib/analysis";
 import PalInput from "@/components/analysis/PalInput";
 import RelocationBoard from "@/components/analysis/RelocationBoard";
+import { isLeaflet } from "@/lib/leaflet";
 
 type View = "noConsumption" | "overstock" | "fifo" | "expiring" | "toCheck" | "old" | "untouched" | "partial";
 const LS = "analysis.v1";
@@ -35,7 +36,27 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
   const [prefix, setPrefix] = useState("60");
   const [from, setFrom] = useState(yearStart());
   const [raw, setRaw] = useState<{ rows: ReceiptRow[]; prefix: string; from: string } | null>(null);
-  const a = useMemo<Analysis | null>(() => (raw ? analyse(raw.rows, { prefix: raw.prefix, from: raw.from }) : null), [raw]);
+  // leaflets εκτός ανάλυσης (προεπιλογή)
+  const [noLeaflets, setNoLeaflets] = useState(true);
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem("analysis.leaflets") === "with") setNoLeaflets(false);
+    } catch {
+      /* τίποτα */
+    }
+  }, []);
+  const toggleLeaflets = (v: boolean) => {
+    setNoLeaflets(v);
+    try {
+      window.localStorage.setItem("analysis.leaflets", v ? "without" : "with");
+    } catch {
+      /* τίποτα */
+    }
+  };
+  const a = useMemo<Analysis | null>(
+    () => (raw ? analyse(noLeaflets ? raw.rows.filter((r) => !isLeaflet(r.description)) : raw.rows, { prefix: raw.prefix, from: raw.from }) : null),
+    [raw, noLeaflets]
+  );
   const [palErr, setPalErr] = useState<string | null>(null);
   const [view, setView] = useState<View>("noConsumption");
   const [q, setQ] = useState("");
@@ -125,7 +146,7 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
     setBusy(true);
     try {
       const [XLSX, ex] = await Promise.all([import("xlsx"), import("@/lib/exports")]);
-      const { wb, fileName } = ex.analysisWorkbook(XLSX, a, { generatedAt: new Date(), userEmail, filters: [], syncedAt: null }, exp ?? undefined);
+      const { wb, fileName } = ex.analysisWorkbook(XLSX, a, { generatedAt: new Date(), userEmail, filters: noLeaflets ? ["χωρίς leaflets"] : [], syncedAt: null }, expAll ?? undefined);
       XLSX.writeFile(wb, fileName);
     } finally {
       setBusy(false);
@@ -140,10 +161,11 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
     !a ? [] : v === "noConsumption" ? a.noConsumption : v === "expiring" ? a.expiring : v === "toCheck" ? a.toCheck : v === "old" ? a.old : v === "untouched" ? a.untouched : v === "partial" ? a.partial : [];
   const shownBatches = useMemo(() => batchesOf(view).filter((b) => match(b.item, b.description, b.lot, b.supplier)), [a, view, q]); // eslint-disable-line react-hooks/exhaustive-deps
   const shownCover = useMemo(() => (a?.overstock ?? []).filter((c) => match(c.item, c.description)), [a, q]); // eslint-disable-line react-hooks/exhaustive-deps
-  const shownExp = useMemo(() => (exp ?? []).filter((r) => match(r.item, r.description, r.lot ?? "", r.position)), [exp, q]); // eslint-disable-line react-hooks/exhaustive-deps
+  const expAll = useMemo(() => (exp && noLeaflets ? exp.filter((r) => !isLeaflet(r.description)) : exp), [exp, noLeaflets]);
+  const shownExp = useMemo(() => (expAll ?? []).filter((r) => match(r.item, r.description, r.lot ?? "", r.position)), [expAll, q]); // eslint-disable-line react-hooks/exhaustive-deps
   const shownFifo = useMemo(() => (a?.fifo ?? []).filter((f) => match(f.batch.item, f.batch.description, f.batch.lot)), [a, q]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const count = (v: View) => (!a ? 0 : v === "overstock" ? a.overstock.length : v === "fifo" ? a.fifo.length : v === "expiring" ? exp?.length ?? 0 : batchesOf(v).length);
+  const count = (v: View) => (!a ? 0 : v === "overstock" ? a.overstock.length : v === "fifo" ? a.fifo.length : v === "expiring" ? expAll?.length ?? 0 : batchesOf(v).length);
   const tone: Record<View, "green" | "yellow" | "red" | "blue" | "orange" | "neutral"> = {
     noConsumption: "red",
     overstock: "orange",
@@ -221,6 +243,9 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
           <button type="button" className="btn ghost sm" onClick={clearAll}>
             Καθαρισμός
           </button>
+          <label className="st-check" title="Τα leaflets (φύλλα οδηγιών) δεν μετράνε στην ανάλυση">
+            <input type="checkbox" checked={noLeaflets} onChange={(e) => toggleLeaflets(e.target.checked)} /> Χωρίς leaflets
+          </label>
           <div className="an-quick">
             Γρήγορα:
             {QUICK.map((p) => (
