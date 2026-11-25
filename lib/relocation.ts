@@ -55,6 +55,8 @@ export type MoveLine = {
   area: string;
   lot: string;
   expiry: string | null;
+  /** πρώτη παραλαβή (εισαγωγή) της παρτίδας στην αποθήκη */
+  received: string | null;
   posQty: number;
   moveQty: number;
   full: boolean; // φεύγει όλη η γραμμή της θέσης
@@ -361,7 +363,7 @@ export function explain(i: ItemPlan, params: RelParams, isNew: boolean): { short
 }
 
 function mk(r: RelRow, q: number, full: boolean, palQ: number | null): MoveLine {
-  return { item: r.item, description: r.description, pos: r.pos, area: r.area, lot: r.lot, expiry: r.expiry, posQty: r.qty, moveQty: q, full, pallets: palletsFor(q, palQ), freesPosition: false };
+  return { item: r.item, description: r.description, pos: r.pos, area: r.area, lot: r.lot, expiry: r.expiry, received: r.lot_first_receipt, posQty: r.qty, moveQty: q, full, pallets: palletsFor(q, palQ), freesPosition: false };
 }
 
 export const CATEGORY_TXT: Record<Category, string> = {

@@ -1381,6 +1381,7 @@ export function relocationWorkbook(XLSX: XLSXLib, p: RelPlanLike, meta: StockExp
         "Περιγραφή": l.description ?? "",
         "Παρτίδα": l.lot,
         "Λήξη": dOnly(l.expiry),
+        "Εισαγωγή παρτίδας": dOnly(l.received),
         "Ποσότητα θέσης": l.posQty,
         "Να φύγει": l.moveQty,
         "Ολόκληρη": l.full ? "ναι" : "μέρος",
@@ -1388,7 +1389,7 @@ export function relocationWorkbook(XLSX: XLSXLib, p: RelPlanLike, meta: StockExp
         "Αδειάζει η θέση": l.freesPosition ? "ΝΑΙ" : "",
         "✓": "",
       })),
-      [16, 24, 12, 40, 18, 11, 12, 11, 9, 8, 10, 5]
+      [16, 24, 12, 40, 18, 11, 13, 12, 11, 9, 8, 10, 5]
     ),
     opt.sheet ?? "Λίστα μεταφοράς"
   );
@@ -1458,8 +1459,8 @@ export function relocationPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: P
   autoTable(doc, {
     ...baseTable,
     startY: y,
-    head: [["Θέση", "Κωδικός", "Περιγραφή", "Παρτίδα", "Λήξη", "Στη θέση", "Να φύγει", "Παλ.", "Αδειάζει", "✓"]],
-    body: p.lines.map((l) => [l.pos, l.item, l.description ?? "", l.lot, l.expiry ? l.expiry.slice(0, 10).split("-").reverse().join("/") : "", q(l.posQty), `${q(l.moveQty)}${l.full ? "" : " (μέρος)"}`, l.pallets ?? "", l.freesPosition ? "ΝΑΙ" : "", ""]),
+    head: [["Θέση", "Κωδικός", "Περιγραφή", "Παρτίδα", "Λήξη", "Εισαγωγή", "Στη θέση", "Να φύγει", "Παλ.", "Αδειάζει", "✓"]],
+    body: p.lines.map((l) => [l.pos, l.item, l.description ?? "", l.lot, l.expiry ? l.expiry.slice(0, 10).split("-").reverse().join("/") : "", l.received ? l.received.slice(0, 10).split("-").reverse().join("/") : "", q(l.posQty), `${q(l.moveQty)}${l.full ? "" : " (μέρος)"}`, l.pallets ?? "", l.freesPosition ? "ΝΑΙ" : "", ""]),
     styles: { ...baseTable.styles, fontSize: 7.6, cellPadding: 1.3 },
     columnStyles: {
       0: { cellWidth: 24, fontStyle: "bold" },
@@ -1467,11 +1468,12 @@ export function relocationPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: P
       2: { cellWidth: "auto" },
       3: { cellWidth: 32 },
       4: { cellWidth: 18 },
-      5: { cellWidth: 17, halign: "right" },
-      6: { cellWidth: 24, halign: "right", fontStyle: "bold" },
-      7: { cellWidth: 10, halign: "right" },
-      8: { cellWidth: 15 },
-      9: { cellWidth: 9 },
+      5: { cellWidth: 18 },
+      6: { cellWidth: 17, halign: "right" },
+      7: { cellWidth: 24, halign: "right", fontStyle: "bold" },
+      8: { cellWidth: 10, halign: "right" },
+      9: { cellWidth: 15 },
+      10: { cellWidth: 9 },
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     didParseCell: (d: any) => {
@@ -1479,7 +1481,7 @@ export function relocationPdf(jsPDF: JsPDFCtor, autoTable: AutoTableFn, fonts: P
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     didDrawCell: (d: any) => {
-      if (d.section === "body" && d.column.index === 9) doc.rect(d.cell.x + 2.2, d.cell.y + 1.2, 3.6, 3.6);
+      if (d.section === "body" && d.column.index === 10) doc.rect(d.cell.x + 2.2, d.cell.y + 1.2, 3.6, 3.6);
     },
   });
   footer(doc, `${opt.title ?? "Λίστα μεταφοράς"} · Fagron Hellas`);

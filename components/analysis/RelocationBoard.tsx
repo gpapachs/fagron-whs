@@ -570,7 +570,7 @@ function MoveGroups({ items, picked, onPick, onQty, pickView }: { items: ItemPla
                         <table className="st-table rl-subtable">
                           <thead>
                             <tr>
-                              {["Παρτίδα", "Λήξη", "✓", "Θέση", "Στη θέση", "Να φύγει", "Παλέτες", ""].map((h, i) => (
+                              {["Παρτίδα", "Λήξη", "Εισαγωγή", "✓", "Θέση", "Στη θέση", "Να φύγει", "Παλέτες", ""].map((h, i) => (
                                 <th key={i}>{h}</th>
                               ))}
                             </tr>
@@ -593,6 +593,11 @@ function MoveGroups({ items, picked, onPick, onQty, pickView }: { items: ItemPla
                                 {first && (
                                   <td className="mono" data-label="Λήξη" rowSpan={span}>
                                     {fd(l.expiry)}
+                                  </td>
+                                )}
+                                {first && (
+                                  <td className="mono" data-label="Εισαγωγή" rowSpan={span} title="Πρώτη παραλαβή της παρτίδας">
+                                    {fd(l.received) || <span className="dim">—</span>}
                                   </td>
                                 )}
                                 <td data-label="Pick list">
