@@ -1,6 +1,6 @@
 -- Πλάνο μεταφοράς v2: η κατανάλωση ενός κωδικού μετράει ΚΑΙ τους παλιούς κωδικούς που
 -- αντικατέστησε (π.χ. το καλοκαίρι οι 40-xx-xxx έγιναν 41-xx-xxx με την ίδια περιγραφή).
--- Αντιστοίχιση: ίδια περιγραφή (χωρίς κενά/κεφαλαία) με κωδικό που ξεκινά από p_legacy.
+-- Αντιστοίχιση: ίδια περιγραφή (ίδιες λέξεις, χωρίς διαφορά σε κενά/κεφαλαία/σειρά) με κωδικό που ξεκινά από p_legacy.
 -- Επιστρέφει και ποιοι παλιοί κωδικοί συνδέθηκαν και πόση κατανάλωση έφεραν, για έλεγχο.
 drop function if exists public.wms_relocation_data_v2(text, date, text);
 create or replace function public.wms_relocation_data_v2(p_prefix text, p_from date, p_legacy text default null)
@@ -18,7 +18,11 @@ as $$
                     nullif(regexp_replace(coalesce(p_legacy, ''), '[^0-9A-Za-z-]', '', 'g'), '') as lpre,
                     (p_from::timestamp at time zone 'Europe/Athens') as since),
   st as (select s.* from wms_stock_v s, p where s.item like p.pat and s.qty > 0),
-  norm as (select i.code as item, upper(regexp_replace(trim(coalesce(i.description, '')), '\s+', ' ', 'g')) d from wms_items i),
+  -- ίδια περιγραφή = ίδιες λέξεις (κεφαλαία, με όποια σειρά: «ΠΕΡΙΕΚΤΗΣ ΓΥΑΛΙΝΟΣ» = «ΓΥΑΛΙΝΟΣ ΠΕΡΙΕΚΤΗΣ»)
+  norm as (
+    select i.code as item,
+           array_to_string(array(select w from unnest(string_to_array(upper(regexp_replace(trim(coalesce(i.description, '')), '\s+', ' ', 'g')), ' ')) w where w <> '' order by w), ' ') d
+    from wms_items i),
   -- νέος κωδικός -> παλιοί κωδικοί με ίδια περιγραφή
   link as (
     select distinct n1.item, n0.item old
