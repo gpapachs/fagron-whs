@@ -45,6 +45,8 @@ export type RelParams = {
   room?: string;
   /** ποσότητα που ο χρήστης θέλει να φύγει ανά κωδικό (αντί για την προτεινόμενη) */
   manual?: Record<string, number>;
+  /** ποσότητα ανά παρτίδα/θέση (κλειδί lineKey)· αν υπάρχει για έναν κωδικό, υπερισχύει */
+  lotQty?: Record<string, number>;
   today?: Date;
 };
 export type Category = "dead" | "new" | "slow" | "active" | "excluded";
@@ -62,6 +64,8 @@ export type MoveLine = {
   full: boolean; // φεύγει όλη η γραμμή της θέσης
   pallets: number | null;
   freesPosition: boolean;
+  /** ποσότητα που έγραψε ο χρήστης σε αυτή την παρτίδα/θέση (αν έγραψε) */
+  req?: number;
 };
 export type ItemPlan = {
   item: string;
@@ -95,6 +99,10 @@ export type ItemPlan = {
   manual?: number | null;
   /** η προτεινόμενη ποσότητα (πριν από τη χειροκίνητη) */
   suggested?: number;
+  /** όλες οι παρτίδες/θέσεις του χώρου που μπορούν να φύγουν (και όσες δεν προτείνονται, με 0) */
+  candidates?: MoveLine[];
+  /** οι ποσότητες ορίστηκαν ανά παρτίδα */
+  byLot?: boolean;
 };
 export type RelPlan = {
   params: RelParams;
@@ -208,11 +216,21 @@ export function planRelocation(rows: RelRow[], params: RelParams): RelPlan {
     if (category === "excluded" || (category === "new" && !params.includeNew)) keep = Infinity;
 
     const suggested = Math.min(movable, Math.max(0, onsite - keep));
-    const man = params.manual?.[item];
+    const lotRows = movableRows.filter((r) => params.lotQty?.[lineKey(r)] != null);
+    const byLot = lotRows.length > 0;
+    const man = byLot ? lotRows.reduce((t, r) => t + Math.max(0, params.lotQty![lineKey(r)]), 0) : params.manual?.[item];
     const manual = man != null && isFinite(man) && man >= 0 ? man : null;
     let excess = manual != null ? Math.min(movable, manual) : suggested;
     const lines: MoveLine[] = [];
-    if (excess > EPS && manual != null) {
+    if (byLot) {
+      // ποσότητες ανά παρτίδα/θέση: ακριβώς ό,τι έγραψε ο χρήστης (έως όσα υπάρχουν στη θέση)
+      for (const r of [...movableRows].sort(keepOrder).reverse()) {
+        const want = params.lotQty?.[lineKey(r)];
+        if (want == null || want <= EPS) continue;
+        const q = Math.min(r.qty, want);
+        lines.push({ ...mk(r, q, q >= r.qty - EPS, pq.qty), req: want });
+      }
+    } else if (excess > EPS && manual != null) {
       // χειροκίνητη ποσότητα: ακριβώς όσα τεμάχια ζητήθηκαν, πρώτα από τις νεότερες παρτίδες
       for (const r of [...movableRows].sort(keepOrder).reverse()) {
         if (excess <= EPS) break;
@@ -269,11 +287,23 @@ export function planRelocation(rows: RelRow[], params: RelParams): RelPlan {
       why: { short: "", long: [] },
       manual,
       suggested,
+      byLot,
+      candidates: [...movableRows]
+        .sort(keepOrder)
+        .reverse()
+        .map((r) => {
+          const k = lineKey(r);
+          const l = lines.find((x) => lineKey(x) === k);
+          if (l) return l;
+          const z = mk(r, 0, false, pq.qty);
+          const want = params.lotQty?.[k];
+          return want != null ? { ...z, req: want } : z;
+        }),
     });
     const it = items[items.length - 1];
     it.why = explain(it, params, isNew);
     if (manual != null) {
-      const txt = `Χειροκίνητη ποσότητα: φεύγουν ${n0(it.moveQty)} (πρόταση ${n0(suggested)}).`;
+      const txt = `${byLot ? "Ποσότητες ανά παρτίδα" : "Χειροκίνητη ποσότητα"}: φεύγουν ${n0(it.moveQty)} (πρόταση ${n0(suggested)}).`;
       it.why = { short: `${txt} Μένουν ${n0(it.onsite - it.moveQty)} στην κεντρική.`, long: [`${txt} Μένουν ${n0(it.onsite - it.moveQty)} στην κεντρική.`, "Η πρόταση της ανάλυσης ήταν:", ...it.why.long] };
     }
   }

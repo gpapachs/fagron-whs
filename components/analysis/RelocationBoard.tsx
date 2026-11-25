@@ -30,6 +30,7 @@ type Saved = {
   noLeaflets: boolean; // leaflets εκτός ανάλυσης
   sort: SortKey;
   manual: Record<string, number>; // τεμάχια που θέλει ο χρήστης να φύγουν ανά κωδικό
+  lotQty: Record<string, number>; // τεμάχια ανά παρτίδα/θέση (lineKey)
 };
 type SortKey = "default" | "cover" | "move" | "pallets" | "item";
 const SORT_TXT: Record<SortKey, string> = {
@@ -50,7 +51,7 @@ function sortItems(list: ItemPlan[], k: SortKey) {
   if (k === "item") a.sort((x, y) => x.item.localeCompare(y.item));
   return a;
 }
-const DEF: Saved = { prefix: "41", from: yearStart(), keepMonths: 3, includeNew: false, partial: true, areaClass: {}, excluded: [], room: "20", legacy: "40", noLeaflets: true, sort: "default", manual: {} };
+const DEF: Saved = { prefix: "41", from: yearStart(), keepMonths: 3, includeNew: false, partial: true, areaClass: {}, excluded: [], room: "20", legacy: "40", noLeaflets: true, sort: "default", manual: {}, lotQty: {} };
 
 export default function RelocationBoard({ userEmail }: { userEmail: string | null }) {
   const [s, setS] = useState<Saved>(DEF);
@@ -95,13 +96,26 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
     savePick(n);
   };
   // πόσα τεμάχια να φύγουν: ο κωδικός μπαίνει αυτόματα ολόκληρος στο pick list
+  const dropLots = (lq: Record<string, number>, item: string) => Object.fromEntries(Object.entries(lq).filter(([k]) => !k.startsWith(`${item}|`)));
   const setManual = (item: string, qty: number | null) => {
     const manual = { ...s.manual };
     if (qty == null) delete manual[item];
     else manual[item] = qty;
-    save({ ...s, manual });
+    save({ ...s, manual, lotQty: dropLots(s.lotQty, item) });
     const n = new Set([...picked].filter((k) => !k.startsWith(`${item}|`)));
     if (qty == null ? picked.has(itemKey(item)) || [...picked].some((k) => k.startsWith(`${item}|`)) : qty > 0) n.add(itemKey(item));
+    savePick(n);
+  };
+  // ποσότητα σε μία παρτίδα/θέση: οι υπόλοιπες κρατούν ό,τι δείχνουν τώρα· ο κωδικός μπαίνει στο pick list
+  const setLot = (p: ItemPlan, key: string, qty: number | null) => {
+    const lotQty = { ...s.lotQty };
+    if (!p.byLot) for (const l of p.lines) lotQty[lineKey(l)] = l.moveQty;
+    lotQty[key] = qty ?? 0;
+    const manual = { ...s.manual };
+    delete manual[p.item];
+    save({ ...s, manual, lotQty });
+    const n = new Set([...picked].filter((k) => !k.startsWith(`${p.item}|`)));
+    n.add(itemKey(p.item));
     savePick(n);
   };
   const save = (n: Saved) => {
@@ -145,6 +159,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
       excluded: s.excluded,
       room: s.room,
       manual: s.manual,
+      lotQty: s.lotQty,
     });
     if (s.noLeaflets) {
       // θέση που κρατά και leaflets δεν «αδειάζει»
@@ -153,7 +168,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
       for (const l of p.lines) if (withLeaflets.has(l.pos)) l.freesPosition = false;
     }
     return p;
-  }, [rows, loaded, s.keepMonths, s.includeNew, s.partial, s.areaClass, s.excluded, s.room, s.noLeaflets, s.manual]);
+  }, [rows, loaded, s.keepMonths, s.includeNew, s.partial, s.areaClass, s.excluded, s.room, s.noLeaflets, s.manual, s.lotQty]);
 
   async function savePallet(item: string, qty: number | null) {
     const prev = rows;
@@ -342,7 +357,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
             <input className="an-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Αναζήτηση κωδικού / περιγραφής / θέσης…" />
           </div>
 
-          {view === "lines" && <MoveGroups items={sortItems(plan.moving.filter(m), s.sort)} picked={picked} onPick={setPick} onQty={setManual} />}
+          {view === "lines" && <MoveGroups items={sortItems(plan.moving.filter(m), s.sort)} picked={picked} onPick={setPick} onQty={setManual} onLot={setLot} />}
           {view === "pick" && pick && (
             <>
               <div className="rl-pickbar">
@@ -364,7 +379,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
                 </span>
               </div>
               {pick.lines.length ? (
-                <MoveGroups items={sortItems(pick.moving.filter(m), s.sort)} picked={picked} onPick={setPick} onQty={setManual} pickView />
+                <MoveGroups items={sortItems(pick.moving.filter(m), s.sort)} picked={picked} onPick={setPick} onQty={setManual} onLot={setLot} pickView />
               ) : (
                 <p className="rp-hint">Το pick list είναι άδειο. Στο «Τι φεύγει» τσέκαρε τους κωδικούς (ή μεμονωμένες παρτίδες / θέσεις) που θέλεις να στείλεις, ή γράψε πόσα τεμάχια να φύγουν.</p>
               )}
@@ -447,7 +462,7 @@ function PickBox({ keys, picked, onPick, label, whole, disabled }: { keys: strin
 }
 
 /** Πόσα τεμάχια να φύγουν: κενό = η πρόταση. Αποθηκεύεται με Enter ή όταν φύγεις από το πεδίο. */
-function QtyInput({ item, value, suggested, manual, onQty }: { item: string; value: number; suggested: number; manual: number | null | undefined; onQty: (i: string, q: number | null) => void }) {
+function QtyInput({ item, value, suggested, manual, max, onQty }: { item: string; value: number; suggested: number; manual: number | null | undefined; max?: number; onQty: (i: string, q: number | null) => void }) {
   const shown = manual != null ? String(manual) : "";
   const [v, setV] = useState(shown);
   useEffect(() => setV(shown), [shown]);
@@ -470,12 +485,26 @@ function QtyInput({ item, value, suggested, manual, onQty }: { item: string; val
         aria-label={`Τεμάχια να φύγουν ${item}`}
         title={manual != null ? `Χειροκίνητη ποσότητα — πρόταση ${fq(suggested, 0)}. Άδειασέ το για την πρόταση.` : "Γράψε πόσα τεμάχια θέλεις να φύγουν (κενό = η πρόταση)"}
       />
-      {manual != null && manual > value + 1e-6 && <i className="dim" title="Δεν υπάρχει τόσο απόθεμα στον χώρο">έως {fq(value, 0)}</i>}
+      {manual != null && manual > (max ?? value) + 1e-6 && <i className="dim" title="Δεν υπάρχει τόσο απόθεμα">έως {fq(max ?? value, 0)}</i>}
     </span>
   );
 }
 
-function MoveGroups({ items, picked, onPick, onQty, pickView }: { items: ItemPlan[]; picked: Set<string>; onPick: (k: string[], on: boolean) => void; onQty: (i: string, q: number | null) => void; pickView?: boolean }) {
+function MoveGroups({
+  items,
+  picked,
+  onPick,
+  onQty,
+  onLot,
+  pickView,
+}: {
+  items: ItemPlan[];
+  picked: Set<string>;
+  onPick: (k: string[], on: boolean) => void;
+  onQty: (i: string, q: number | null) => void;
+  onLot: (p: ItemPlan, key: string, q: number | null) => void;
+  pickView?: boolean;
+}) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const allKeys = items.flatMap((i) => i.lines.map(lineKey));
   const nPicked = allKeys.filter((k) => picked.has(k) || picked.has(itemKey(k.split("|")[0]))).length;
@@ -514,7 +543,7 @@ function MoveGroups({ items, picked, onPick, onQty, pickView }: { items: ItemPla
         <table className="st-table st-cards rl-groups">
           <thead>
             <tr>
-              {["", "✓", "Κωδικός", "Περιγραφή", "Κατηγορία", "Παρτίδες", "Θέσεις", "Κεντρική", "Κάλυψη", "Να φύγει ✎", "Παλέτες", "Μένει"].map((h, i) => (
+              {["", "✓", "Κωδικός", "Περιγραφή", "Κατηγορία", "Παρτίδες", "Θέσεις", "Κεντρική", "Κάλυψη", "Σύνολο να φύγει ✎", "Παλέτες", "Μένει"].map((h, i) => (
                 <th key={i}>{h}</th>
               ))}
             </tr>
@@ -525,7 +554,7 @@ function MoveGroups({ items, picked, onPick, onQty, pickView }: { items: ItemPla
               const keys = p.lines.map(lineKey);
               const freed = p.lines.filter((l) => l.freesPosition).length;
               // παρτίδες με σειρά: νεότερη λήξη πρώτα (αυτές φεύγουν)
-              const lines = [...p.lines].sort((a, b) => (b.expiry ?? "").localeCompare(a.expiry ?? "") || a.lot.localeCompare(b.lot) || a.pos.localeCompare(b.pos, "el", { numeric: true }));
+              const lines = [...(pickView ? p.lines : p.candidates ?? p.lines)].sort((a, b) => (b.expiry ?? "").localeCompare(a.expiry ?? "") || a.lot.localeCompare(b.lot) || a.pos.localeCompare(b.pos, "el", { numeric: true }));
               return (
                 <Fragment key={p.item}>
                   <tr className={`rl-grow ${isOpen ? "open" : ""} ${picked.has(itemKey(p.item)) || keys.some((k) => picked.has(k)) ? "picked" : ""}`} onClick={() => toggle(p.item)} aria-expanded={isOpen}>
@@ -570,7 +599,7 @@ function MoveGroups({ items, picked, onPick, onQty, pickView }: { items: ItemPla
                         <table className="st-table rl-subtable">
                           <thead>
                             <tr>
-                              {["Παρτίδα", "Λήξη", "Εισαγωγή", "✓", "Θέση", "Στη θέση", "Να φύγει", "Παλέτες", ""].map((h, i) => (
+                              {["Παρτίδα", "Λήξη", "Εισαγωγή", "✓", "Θέση", "Στη θέση", "Να φύγει ✎", "Παλέτες", ""].map((h, i) => (
                                 <th key={i}>{h}</th>
                               ))}
                             </tr>
@@ -583,7 +612,7 @@ function MoveGroups({ items, picked, onPick, onQty, pickView }: { items: ItemPla
                               const span = first ? lines.filter((x) => `${x.lot}|${x.expiry ?? ""}` === key).length : 0;
                               const lotQty = first ? lines.filter((x) => `${x.lot}|${x.expiry ?? ""}` === key).reduce((t, x) => t + x.moveQty, 0) : 0;
                               return (
-                              <tr key={`${l.pos}|${l.lot}|${l.expiry}`} className={first && idx > 0 ? "rl-lotstart" : ""}>
+                              <tr key={`${l.pos}|${l.lot}|${l.expiry}`} className={`${first && idx > 0 ? "rl-lotstart" : ""} ${l.moveQty <= 0 ? "rl-stays" : ""}`}>
                                 {first && (
                                   <td className="mono" data-label="Παρτίδα" rowSpan={span}>
                                     <b>{l.lot || "—"}</b>
@@ -601,12 +630,15 @@ function MoveGroups({ items, picked, onPick, onQty, pickView }: { items: ItemPla
                                   </td>
                                 )}
                                 <td data-label="Pick list">
-                                  <PickBox keys={[lineKey(l)]} whole={l.item} picked={picked} onPick={onPick} disabled={p.manual != null} label={`Pick list: ${l.item} ${l.lot} ${l.pos}`} />
+                                  <PickBox keys={[lineKey(l)]} whole={l.item} picked={picked} onPick={onPick} disabled={p.manual != null || l.moveQty <= 0} label={`Pick list: ${l.item} ${l.lot} ${l.pos}`} />
                                 </td>
                                 <td data-label="Θέση"><span className="rack">{l.pos}</span></td>
                                 <td className="num" data-label="Στη θέση">{fq(l.posQty)}</td>
                                 <td className="num" data-label="Να φύγει">
-                                  <b>{fq(l.moveQty)}</b> {!l.full && <span className="dim">(μέρος)</span>}
+                                  <span className="rl-lotqty">
+                                    <QtyInput item={`${l.item} ${l.lot} ${l.pos}`} value={l.moveQty} suggested={l.moveQty} manual={l.req ?? (p.byLot ? 0 : null)} max={l.posQty} onQty={(_, q) => onLot(p, lineKey(l), q)} />
+                                    {l.moveQty > 0 && !l.full && <span className="dim">(μέρος)</span>}
+                                  </span>
                                 </td>
                                 <td className="num" data-label="Παλέτες">{l.pallets ?? <span className="dim">—</span>}</td>
                                 <td data-label="">{l.freesPosition && <span className="sl-chip on rl-free">αδειάζει</span>}</td>

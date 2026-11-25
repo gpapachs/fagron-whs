@@ -1618,3 +1618,5 @@ button.cell.wp-cell { font-size: 10px; height: 26px; padding: 0 6px; letter-spac
 .rl-qty input:hover, .rl-qty input:focus { border-color: var(--accent, #2563eb); outline: none; }
 .rl-qty.man input { border-color: var(--green, #2f8f5b); background: color-mix(in srgb, var(--green, #2f8f5b) 10%, var(--surface)); }
 .rl-qty i { font-size: 11px; font-style: normal; }
+.rl-lotqty { display: inline-flex; gap: 6px; align-items: center; justify-content: flex-end; }
+.rl-subtable tr.rl-stays td { color: var(--ink-dim); }
