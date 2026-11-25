@@ -1613,8 +1613,8 @@ button.cell.wp-cell { font-size: 10px; height: 26px; padding: 0 6px; letter-spac
 .rl-groupbar .rl-gap { flex: 1; }
 .rl-pickbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin: 8px 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); font-size: 13px; }
 .rl-qty { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 1px; }
-.rl-qty input { width: 78px; text-align: right; font: inherit; font-weight: 700; font-variant-numeric: tabular-nums; padding: 3px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--ink); }
-.rl-qty input::placeholder { color: var(--ink); opacity: 1; }
-.rl-qty input:hover, .rl-qty input:focus { border-color: var(--border); background: var(--surface); outline: none; }
+.rl-qty input { width: 84px; text-align: right; font: inherit; font-weight: 700; font-variant-numeric: tabular-nums; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); cursor: text; }
+.rl-qty input::placeholder { color: var(--ink-dim); opacity: 1; }
+.rl-qty input:hover, .rl-qty input:focus { border-color: var(--accent, #2563eb); outline: none; }
 .rl-qty.man input { border-color: var(--green, #2f8f5b); background: color-mix(in srgb, var(--green, #2f8f5b) 10%, var(--surface)); }
 .rl-qty i { font-size: 11px; font-style: normal; }
