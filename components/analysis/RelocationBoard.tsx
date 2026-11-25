@@ -7,11 +7,13 @@ import { createClient } from "@/lib/supabase/client";
 import { parseCodes, setLegacy } from "@/lib/legacy";
 import { siteOf } from "@/lib/site";
 import { isLeaflet } from "@/lib/leaflet";
+import { ago, useCoalesced, useWmsLive } from "@/lib/live";
+import { displayUser } from "@/lib/users";
 import { CATEGORY_TXT, defaultAreaClass, itemKey, lineKey, normRel, pickPlan, planRelocation, withRelPallet, type AreaClass, type ItemPlan, type RelPlan, type RelRow } from "@/lib/relocation";
 
 type View = "lines" | "pick" | "items" | "dead" | "returns" | "freed" | "areas";
 const LS = "relocation.v1";
-const LS_PICK = "relocation.pick";
+type PickRec = { keys: string[]; manual: number | null; lot_qty: Record<string, number> };
 const fq = (n: number | null | undefined, d = 2) => (n == null ? "" : n.toLocaleString("el-GR", { maximumFractionDigits: d }));
 const fd = (s: string | null) => (s ? s.slice(0, 10).split("-").reverse().join("/") : "");
 const yearStart = () => `${new Date().getFullYear()}-01-01`;
@@ -29,8 +31,6 @@ type Saved = {
   legacy: string; // πρόθεμα παλιών κωδικών με ίδια περιγραφή (π.χ. 40 για τους 41)
   noLeaflets: boolean; // leaflets εκτός ανάλυσης
   sort: SortKey;
-  manual: Record<string, number>; // τεμάχια που θέλει ο χρήστης να φύγουν ανά κωδικό
-  lotQty: Record<string, number>; // τεμάχια ανά παρτίδα/θέση (lineKey)
 };
 type SortKey = "default" | "cover" | "move" | "pallets" | "item";
 const SORT_TXT: Record<SortKey, string> = {
@@ -51,7 +51,7 @@ function sortItems(list: ItemPlan[], k: SortKey) {
   if (k === "item") a.sort((x, y) => x.item.localeCompare(y.item));
   return a;
 }
-const DEF: Saved = { prefix: "41", from: yearStart(), keepMonths: 3, includeNew: false, partial: true, areaClass: {}, excluded: [], room: "20", legacy: "40", noLeaflets: true, sort: "default", manual: {}, lotQty: {} };
+const DEF: Saved = { prefix: "41", from: yearStart(), keepMonths: 3, includeNew: false, partial: true, areaClass: {}, excluded: [], room: "20", legacy: "40", noLeaflets: true, sort: "default" };
 
 export default function RelocationBoard({ userEmail }: { userEmail: string | null }) {
   const [s, setS] = useState<Saved>(DEF);
@@ -63,61 +63,111 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [legacyOff, setLegacyOff] = useState(false);
-  // λίστα συλλογής: οι γραμμές (κωδικός·θέση·παρτίδα) που επέλεξε ο χρήστης να σταλούν
-  const [picked, setPicked] = useState<Set<string>>(new Set());
+  // κοινό Pick list (όλοι οι χρήστες): μία εγγραφή ανά κωδικό στη βάση
+  const [shared, setShared] = useState<Record<string, PickRec>>({});
+  const [sharedInfo, setSharedInfo] = useState<{ by: string | null; at: string | null }>({ by: null, at: null });
+  const [skip, setSkip] = useState<string[]>([]);
+  const picked = useMemo(() => new Set(Object.values(shared).flatMap((r) => r.keys)), [shared]);
+  const manualMap = useMemo(() => Object.fromEntries(Object.entries(shared).filter(([, r]) => r.manual != null).map(([i, r]) => [i, Number(r.manual)])), [shared]);
+  const lotMap = useMemo(() => Object.assign({}, ...Object.values(shared).map((r) => r.lot_qty ?? {})) as Record<string, number>, [shared]);
 
   useEffect(() => {
     try {
       const v = JSON.parse(window.localStorage.getItem(LS) ?? "null");
       if (v) setS({ ...DEF, ...v });
-      const pk = JSON.parse(window.localStorage.getItem(LS_PICK) ?? "null");
-      if (Array.isArray(pk)) setPicked(new Set(pk));
     } catch {
       /* τίποτα */
     }
+    loadShared();
   }, []);
-  const savePick = (n: Set<string>) => {
-    setPicked(n);
-    try {
-      window.localStorage.setItem(LS_PICK, JSON.stringify([...n]));
-    } catch {
-      /* τίποτα */
+  async function loadShared() {
+    const sb = createClient();
+    const all: (PickRec & { item: string; updated_by: string | null; updated_at: string })[] = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await sb.from("relocation_pick").select("item, keys, manual, lot_qty, updated_by, updated_at").range(from, from + 999);
+      if (error) return setError(`Δεν φορτώθηκε το κοινό pick list: ${error.message}`);
+      all.push(...((data as typeof all) ?? []));
+      if (!data || data.length < 1000) break;
     }
-  };
-  const setPick = (keys: string[], on: boolean) => {
-    const n = new Set(picked);
-    for (const k of keys) {
-      if (on) n.add(k);
-      else {
-        n.delete(k);
-        n.delete(itemKey(k.split("|")[0])); // ξετσεκάρισμα: φεύγει και το «όλος ο κωδικός»
+    setShared(Object.fromEntries(all.map((r) => [r.item, { keys: r.keys ?? [], manual: r.manual == null ? null : Number(r.manual), lot_qty: r.lot_qty ?? {} }])));
+    const last = all.sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
+    setSharedInfo({ by: last?.updated_by ?? null, at: last?.updated_at ?? null });
+    const { data: sk } = await sb.from("relocation_skip_pos").select("code").order("code");
+    setSkip(((sk as { code: string }[] | null) ?? []).map((r) => r.code));
+  }
+  const reloadShared = useCoalesced(() => loadShared(), 800);
+  useWmsLive((sig) => {
+    if (sig.key === "relocation_pick") reloadShared();
+  });
+  // αλλαγή εγγραφών κωδικών (null = διαγραφή): αμέσως στην οθόνη, μετά στη βάση
+  async function putRecs(recs: Record<string, PickRec | null>) {
+    setShared((cur) => {
+      const n = { ...cur };
+      for (const [i, r] of Object.entries(recs)) {
+        if (!r || (!r.keys.length && r.manual == null && !Object.keys(r.lot_qty).length)) delete n[i];
+        else n[i] = r;
       }
+      return n;
+    });
+    const rows = Object.entries(recs).map(([item, r]) => ({ item, keys: r?.keys ?? [], manual: r?.manual ?? null, lot_qty: r?.lot_qty ?? {} }));
+    const { error } = await createClient().rpc("relocation_pick_put", { p_rows: rows });
+    if (error) {
+      setError(`Δεν αποθηκεύτηκε το pick list: ${error.message}`);
+      loadShared();
     }
-    savePick(n);
+  }
+  const recOf = (item: string): PickRec => shared[item] ?? { keys: [], manual: null, lot_qty: {} };
+  const setPick = (keys: string[], on: boolean) => {
+    const byItem = new Map<string, string[]>();
+    for (const k of keys) {
+      const i = k.split("|")[0];
+      byItem.set(i, [...(byItem.get(i) ?? []), k]);
+    }
+    const recs: Record<string, PickRec> = {};
+    for (const [i, ks] of byItem) {
+      const r = recOf(i);
+      const set = new Set(r.keys);
+      for (const k of ks) {
+        if (on) set.add(k);
+        else {
+          set.delete(k);
+          set.delete(itemKey(i)); // ξετσεκάρισμα: φεύγει και το «όλος ο κωδικός»
+        }
+      }
+      recs[i] = { ...r, keys: [...set] };
+    }
+    putRecs(recs);
+  };
+  const clearPick = async () => {
+    setShared({});
+    const { error } = await createClient().rpc("relocation_pick_clear");
+    if (error) {
+      setError(`Δεν άδειασε το pick list: ${error.message}`);
+      loadShared();
+    }
   };
   // πόσα τεμάχια να φύγουν: ο κωδικός μπαίνει αυτόματα ολόκληρος στο pick list
-  const dropLots = (lq: Record<string, number>, item: string) => Object.fromEntries(Object.entries(lq).filter(([k]) => !k.startsWith(`${item}|`)));
   const setManual = (item: string, qty: number | null) => {
-    const manual = { ...s.manual };
-    if (qty == null) delete manual[item];
-    else manual[item] = qty;
-    save({ ...s, manual, lotQty: dropLots(s.lotQty, item) });
-    const n = new Set([...picked].filter((k) => !k.startsWith(`${item}|`)));
-    if (qty == null ? picked.has(itemKey(item)) || [...picked].some((k) => k.startsWith(`${item}|`)) : qty > 0) n.add(itemKey(item));
-    savePick(n);
+    const r = recOf(item);
+    const wasPicked = r.keys.length > 0;
+    putRecs({ [item]: { manual: qty, lot_qty: {}, keys: (qty == null ? wasPicked : qty > 0) ? [itemKey(item)] : [] } });
   };
   // ποσότητα σε μία παρτίδα/θέση: οι υπόλοιπες κρατούν ό,τι δείχνουν τώρα· ο κωδικός μπαίνει στο pick list
   const setLot = (p: ItemPlan, key: string, qty: number | null) => {
-    const lotQty = { ...s.lotQty };
-    if (!p.byLot) for (const l of p.lines) lotQty[lineKey(l)] = l.moveQty;
-    lotQty[key] = qty ?? 0;
-    const manual = { ...s.manual };
-    delete manual[p.item];
-    save({ ...s, manual, lotQty });
-    const n = new Set([...picked].filter((k) => !k.startsWith(`${p.item}|`)));
-    n.add(itemKey(p.item));
-    savePick(n);
+    const lot_qty = { ...recOf(p.item).lot_qty };
+    if (!p.byLot) for (const l of p.lines) lot_qty[lineKey(l)] = l.moveQty;
+    lot_qty[key] = qty ?? 0;
+    putRecs({ [p.item]: { manual: null, lot_qty, keys: [itemKey(p.item)] } });
   };
+  async function saveSkip(text: string) {
+    const codes = [...new Set(text.split(/[\s,;]+/).map((c) => c.trim()).filter(Boolean))];
+    setSkip(codes);
+    const { error } = await createClient().rpc("relocation_skip_set", { p_codes: codes });
+    if (error) {
+      setError(`Δεν αποθηκεύτηκαν οι θέσεις: ${error.message}`);
+      loadShared();
+    }
+  }
   const save = (n: Saved) => {
     setS(n);
     try {
@@ -158,8 +208,9 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
       areaClass: s.areaClass,
       excluded: s.excluded,
       room: s.room,
-      manual: s.manual,
-      lotQty: s.lotQty,
+      manual: manualMap,
+      lotQty: lotMap,
+      skipPos: skip,
     });
     if (s.noLeaflets) {
       // θέση που κρατά και leaflets δεν «αδειάζει»
@@ -168,7 +219,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
       for (const l of p.lines) if (withLeaflets.has(l.pos)) l.freesPosition = false;
     }
     return p;
-  }, [rows, loaded, s.keepMonths, s.includeNew, s.partial, s.areaClass, s.excluded, s.room, s.noLeaflets, s.manual, s.lotQty]);
+  }, [rows, loaded, s.keepMonths, s.includeNew, s.partial, s.areaClass, s.excluded, s.room, s.noLeaflets, manualMap, lotMap, skip]);
 
   async function savePallet(item: string, qty: number | null) {
     const prev = rows;
@@ -282,6 +333,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
               <option value="">Κατά περιοχή WMS</option>
             </select>
           </label>
+          <SkipField codes={skip} onSave={saveSkip} />
           <label className="st-check">
             <input type="checkbox" checked={s.partial} onChange={(e) => save({ ...s, partial: e.target.checked })} />
             Μέρος θέσης (ολόκληρες παλέτες)
@@ -365,6 +417,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
                   <b>{pick.totals.items}</b> κωδικοί · <b>{pick.totals.lines}</b> γραμμές · <b>{fq(pick.totals.moveQty, 0)}</b> τεμ. · ≈ <b>{pick.totals.pallets}</b> παλέτες
                   {pick.totals.palletsMissing > 0 && <span className="dim"> (+{pick.totals.palletsMissing} χωρίς ποσ./παλέτα)</span>}
                   {stale > 0 && <span className="dim"> · {stale} επιλογές δεν ισχύουν πια με τις τρέχουσες ρυθμίσεις</span>}
+                  <span className="dim"> · κοινό για όλους τους χρήστες{sharedInfo.at ? ` · τελευταία αλλαγή ${ago(sharedInfo.at)}${sharedInfo.by ? ` από ${displayUser(sharedInfo.by)}` : ""}` : ""}</span>
                 </span>
                 <span className="st-actions">
                   <button type="button" className="btn primary sm" onClick={() => pdf(pick, true)} disabled={!!busy || !pick.lines.length}>
@@ -373,7 +426,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
                   <button type="button" className="btn ghost sm" onClick={() => excel(pick, true)} disabled={!!busy || !pick.lines.length}>
                     {busy === "pxlsx" ? "Excel…" : "Excel"}
                   </button>
-                  <button type="button" className="btn ghost sm" onClick={() => savePick(new Set())} disabled={!picked.size}>
+                  <button type="button" className="btn ghost sm" onClick={clearPick} disabled={!picked.size}>
                     Άδειασμα λίστας
                   </button>
                 </span>
@@ -439,6 +492,25 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
 }
 
 /** Τι φεύγει: πρώτα ανά κωδικό, και με κλικ οι παρτίδες / θέσεις του κωδικού. */
+/** Θέσεις από τις οποίες δεν παίρνουμε ποτέ απόθεμα (κοινές για όλους). */
+function SkipField({ codes, onSave }: { codes: string[]; onSave: (text: string) => void }) {
+  const txt = codes.join(", ");
+  const [v, setV] = useState(txt);
+  useEffect(() => setV(txt), [txt]);
+  return (
+    <label className="field rl-skip" title="Θέσεις από τις οποίες δεν φεύγει ποτέ απόθεμα — μετράνε όμως στην κεντρική. Χωρίστε με κόμμα· «06.01» = όλες οι θέσεις που ξεκινούν έτσι. Κοινό για όλους.">
+      Δεν παίρνουμε από θέσεις
+      <input
+        value={v}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={() => v.trim() !== txt && onSave(v)}
+        onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), (e.target as HTMLInputElement).blur())}
+        placeholder="π.χ. 06.01.01.02"
+      />
+    </label>
+  );
+}
+
 function PickBox({ keys, picked, onPick, label, whole, disabled }: { keys: string[]; picked: Set<string>; onPick: (k: string[], on: boolean) => void; label: string; whole?: string; disabled?: boolean }) {
   const ref = useRef<HTMLInputElement>(null);
   const all = whole != null && picked.has(itemKey(whole));

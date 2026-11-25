@@ -47,6 +47,8 @@ export type RelParams = {
   manual?: Record<string, number>;
   /** ποσότητα ανά παρτίδα/θέση (κλειδί lineKey)· αν υπάρχει για έναν κωδικό, υπερισχύει */
   lotQty?: Record<string, number>;
+  /** θέσεις από τις οποίες δεν φεύγει ποτέ απόθεμα (ακριβής κωδικός ή αρχή του, π.χ. «06.01») */
+  skipPos?: string[];
   today?: Date;
 };
 export type Category = "dead" | "new" | "slow" | "active" | "excluded";
@@ -167,7 +169,13 @@ export function planRelocation(rows: RelRow[], params: RelParams): RelPlan {
   const room = (params.room ?? "").trim();
   const clsArea = (area: string) => params.areaClass[area] ?? defaultAreaClass(area);
   // με χώρο: κατά θέση (χώρος -> μεταφέρσιμη, εξωτερική -> εξωτερική, αλλού -> σταθερή)
-  const clsRow = (r: RelRow): AreaClass =>
+  const skip = (params.skipPos ?? []).map((c) => c.trim()).filter(Boolean);
+  const skipped = (pos: string) => skip.some((c) => pos === c || pos.startsWith(`${c}.`));
+  const clsRow = (r: RelRow): AreaClass => {
+    const c = clsRow0(r);
+    return c === "movable" && skipped(r.pos) ? "fixed" : c;
+  };
+  const clsRow0 = (r: RelRow): AreaClass =>
     !room
       ? clsArea(r.area)
       : siteOf(r.pos) === "external"
@@ -179,7 +187,7 @@ export function planRelocation(rows: RelRow[], params: RelParams): RelPlan {
 
   const areaMap = new Map<string, { area: string; rows: number; qty: number; cls: AreaClass }>();
   for (const r of rows) {
-    const a = areaMap.get(r.area) ?? { area: r.area, rows: 0, qty: 0, cls: clsRow(r) };
+    const a = areaMap.get(r.area) ?? { area: r.area, rows: 0, qty: 0, cls: clsRow0(r) };
     a.rows++;
     a.qty += r.qty;
     areaMap.set(r.area, a);
