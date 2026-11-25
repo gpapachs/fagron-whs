@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import KpiTiles from "@/components/KpiTiles";
 import PalInput from "@/components/analysis/PalInput";
 import { createClient } from "@/lib/supabase/client";
 import { parseCodes, setLegacy } from "@/lib/legacy";
 import { siteOf } from "@/lib/site";
-import { CATEGORY_TXT, defaultAreaClass, normRel, planRelocation, withRelPallet, type AreaClass, type ItemPlan, type MoveLine, type RelRow } from "@/lib/relocation";
+import { CATEGORY_TXT, defaultAreaClass, normRel, planRelocation, withRelPallet, type AreaClass, type ItemPlan, type RelRow } from "@/lib/relocation";
 
 type View = "lines" | "items" | "dead" | "returns" | "freed" | "areas";
 const LS = "relocation.v1";
@@ -237,7 +237,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
             active={view}
             onPick={(k) => setView(k as View)}
             items={[
-              { key: "lines", label: "Λίστα μεταφοράς", value: plan.totals.lines, tone: "blue", hint: "Ανά θέση, με τη σειρά της διαδρομής" },
+              { key: "lines", label: "Τι φεύγει", value: plan.totals.items, tone: "blue", hint: "Ανά κωδικό· πατήστε έναν κωδικό για τις παρτίδες και τις θέσεις του" },
               { key: "items", label: "Ανά κωδικό", value: plan.items.length, tone: "neutral", hint: "Τι μένει, τι φεύγει, κάλυψη, πότε θα χρειαστεί πίσω" },
               { key: "dead", label: "Χωρίς κατανάλωση", value: dead.length, tone: "red", hint: "Καμία έξοδο στην περίοδο: φεύγουν ολόκληρα" },
               { key: "freed", label: "Θέσεις αδειάζουν", value: plan.freedPositions.length, tone: "green", hint: "Όλο το περιεχόμενο της θέσης φεύγει" },
@@ -250,7 +250,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
             <input className="an-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Αναζήτηση κωδικού / περιγραφής / θέσης…" />
           </div>
 
-          {view === "lines" && <LinesTable rows={plan.lines.filter(m)} />}
+          {view === "lines" && <MoveGroups items={plan.moving.filter(m)} />}
           {view === "items" && <ItemsTable rows={plan.items.filter(m)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} />}
           {view === "dead" && <ItemsTable rows={dead.filter(m)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} />}
           {view === "returns" && <ItemsTable rows={plan.returns.filter(m)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} returns />}
@@ -304,41 +304,124 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
   );
 }
 
-function LinesTable({ rows }: { rows: MoveLine[] }) {
+/** Τι φεύγει: πρώτα ανά κωδικό, και με κλικ οι παρτίδες / θέσεις του κωδικού. */
+function MoveGroups({ items }: { items: ItemPlan[] }) {
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const toggle = (i: string) =>
+    setOpen((cur) => {
+      const n = new Set(cur);
+      if (n.has(i)) n.delete(i);
+      else n.add(i);
+      return n;
+    });
+  const lotsOf = (p: ItemPlan) => new Set(p.lines.map((l) => `${l.lot}|${l.expiry ?? ""}`)).size;
   return (
-    <div className="st-tablewrap">
-      <table className="st-table st-cards">
-        <thead>
-          <tr>
-            {["Θέση", "Κωδικός", "Περιγραφή", "Παρτίδα", "Λήξη", "Στη θέση", "Να φύγει", "Παλέτες", ""].map((h, i) => (
-              <th key={i}>{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((l) => (
-            <tr key={`${l.pos}|${l.item}|${l.lot}|${l.expiry}`}>
-              <td data-label="Θέση"><span className="rack">{l.pos}</span></td>
-              <td className="mono" data-label="Κωδικός">{l.item}</td>
-              <td className="st-desc" data-label="Περιγραφή">{l.description}</td>
-              <td className="mono" data-label="Παρτίδα">{l.lot}</td>
-              <td className="mono" data-label="Λήξη">{fd(l.expiry)}</td>
-              <td className="num" data-label="Στη θέση">{fq(l.posQty)}</td>
-              <td className="num" data-label="Να φύγει">
-                <b>{fq(l.moveQty)}</b> {!l.full && <span className="dim">(μέρος)</span>}
-              </td>
-              <td className="num" data-label="Παλέτες">{l.pallets ?? <span className="dim">—</span>}</td>
-              <td data-label="">{l.freesPosition && <span className="sl-chip on rl-free">αδειάζει</span>}</td>
-            </tr>
-          ))}
-          {!rows.length && (
+    <>
+      <div className="rl-groupbar">
+        <button type="button" className="btn ghost sm" onClick={() => setOpen(new Set(items.map((i) => i.item)))}>
+          Άνοιγμα όλων
+        </button>
+        <button type="button" className="btn ghost sm" onClick={() => setOpen(new Set())}>
+          Κλείσιμο όλων
+        </button>
+      </div>
+      <div className="st-tablewrap">
+        <table className="st-table st-cards rl-groups">
+          <thead>
             <tr>
-              <td colSpan={9} className="st-empty">Τίποτα να μεταφερθεί με αυτές τις ρυθμίσεις.</td>
+              {["", "Κωδικός", "Περιγραφή", "Κατηγορία", "Παρτίδες", "Θέσεις", "Κεντρική", "Να φύγει", "Παλέτες", "Μένει"].map((h, i) => (
+                <th key={i}>{h}</th>
+              ))}
             </tr>
-          )}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {items.map((p) => {
+              const isOpen = open.has(p.item);
+              const freed = p.lines.filter((l) => l.freesPosition).length;
+              // παρτίδες με σειρά: νεότερη λήξη πρώτα (αυτές φεύγουν)
+              const lines = [...p.lines].sort((a, b) => (b.expiry ?? "").localeCompare(a.expiry ?? "") || a.lot.localeCompare(b.lot) || a.pos.localeCompare(b.pos, "el", { numeric: true }));
+              return (
+                <Fragment key={p.item}>
+                  <tr className={`rl-grow ${isOpen ? "open" : ""}`} onClick={() => toggle(p.item)} aria-expanded={isOpen}>
+                    <td data-label="">
+                      <button type="button" className="rl-caret" aria-label={isOpen ? "Κλείσιμο" : "Παρτίδες"} onClick={(e) => { e.stopPropagation(); toggle(p.item); }}>
+                        {isOpen ? "▾" : "▸"}
+                      </button>
+                    </td>
+                    <td className="mono" data-label="Κωδικός">
+                      <b>{p.item}</b>
+                      {p.legacyCodes && <div className="dim rl-legacy">πρώην {p.legacyCodes}</div>}
+                    </td>
+                    <td className="st-desc" data-label="Περιγραφή">{p.description}</td>
+                    <td data-label="Κατηγορία"><span className={`rl-cat ${p.category}`}>{CATEGORY_TXT[p.category]}</span></td>
+                    <td className="num" data-label="Παρτίδες">{lotsOf(p)}</td>
+                    <td className="num" data-label="Θέσεις">
+                      {new Set(p.lines.map((l) => l.pos)).size}
+                      {freed > 0 && <span className="dim"> ({freed} αδειάζουν)</span>}
+                    </td>
+                    <td className="num" data-label="Κεντρική">{fq(p.onsite, 0)}</td>
+                    <td className="num" data-label="Να φύγει"><b>{fq(p.moveQty, 0)}</b></td>
+                    <td className="num" data-label="Παλέτες">{p.movePallets ?? <span className="dim">—</span>}</td>
+                    <td className="num" data-label="Μένει">{fq(p.onsite - p.moveQty, 0)}</td>
+                  </tr>
+                  {isOpen && (
+                    <tr className="rl-sub">
+                      <td colSpan={10}>
+                        <table className="st-table rl-subtable">
+                          <thead>
+                            <tr>
+                              {["Παρτίδα", "Λήξη", "Θέση", "Στη θέση", "Να φύγει", "Παλέτες", ""].map((h, i) => (
+                                <th key={i}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {lines.map((l, idx) => {
+                              // μία παρτίδα σε πολλές θέσεις: παρτίδα / λήξη / σύνολο μία φορά
+                              const key = `${l.lot}|${l.expiry ?? ""}`;
+                              const first = idx === 0 || `${lines[idx - 1].lot}|${lines[idx - 1].expiry ?? ""}` !== key;
+                              const span = first ? lines.filter((x) => `${x.lot}|${x.expiry ?? ""}` === key).length : 0;
+                              const lotQty = first ? lines.filter((x) => `${x.lot}|${x.expiry ?? ""}` === key).reduce((t, x) => t + x.moveQty, 0) : 0;
+                              return (
+                              <tr key={`${l.pos}|${l.lot}|${l.expiry}`} className={first && idx > 0 ? "rl-lotstart" : ""}>
+                                {first && (
+                                  <td className="mono" data-label="Παρτίδα" rowSpan={span}>
+                                    <b>{l.lot || "—"}</b>
+                                    {span > 1 && <div className="dim">{span} θέσεις · {fq(lotQty)}</div>}
+                                  </td>
+                                )}
+                                {first && (
+                                  <td className="mono" data-label="Λήξη" rowSpan={span}>
+                                    {fd(l.expiry)}
+                                  </td>
+                                )}
+                                <td data-label="Θέση"><span className="rack">{l.pos}</span></td>
+                                <td className="num" data-label="Στη θέση">{fq(l.posQty)}</td>
+                                <td className="num" data-label="Να φύγει">
+                                  <b>{fq(l.moveQty)}</b> {!l.full && <span className="dim">(μέρος)</span>}
+                                </td>
+                                <td className="num" data-label="Παλέτες">{l.pallets ?? <span className="dim">—</span>}</td>
+                                <td data-label="">{l.freesPosition && <span className="sl-chip on rl-free">αδειάζει</span>}</td>
+                              </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
+            {!items.length && (
+              <tr>
+                <td colSpan={10} className="st-empty">Τίποτα να μεταφερθεί με αυτές τις ρυθμίσεις.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
