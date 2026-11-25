@@ -345,6 +345,18 @@ if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) 
   if (!ok) { console.error("πλάνο μεταφοράς: λάθος", i1 && { keep: i1.keep, move: i1.moveQty, first: i1.lines[0]?.lot }, i2 && { c: i2.category, m: i2.moveQty }, p.freedPositions); process.exitCode = 1; }
   relocationWorkbook(XLSX, p, { generatedAt: new Date(), userEmail: "alex@whs.local", filters: [], syncedAt: null });
   relocationPdf(jsPDF, autoTable, fonts, p, { generatedAt: new Date(), userEmail: "alex@whs.local", filters: [], syncedAt: null });
+  // χώρος 20: μόνο ό,τι έχει απόθεμα εκεί· ό,τι είναι σε άλλο χώρο μένει (σταθερό), η εξωτερική μετράει έξω·
+  // ο παλιός κωδικός φέρνει κατανάλωση -> δεν είναι «νέος» ούτε «χωρίς κατανάλωση»
+  const rr = [
+    ...rows,
+    R({ item: "41-00-004", pos: "20.03.01.01", lot: "L", qty: 600, item_out_qty: 600, legacy_codes: "40-00-004", legacy_out_qty: 600, item_first_move: "2026-01-02T00:00:00Z", item_first_receipt: "2026-07-01T00:00:00Z" }),
+    R({ item: "41-00-004", pos: "14.01.01.01", area: "RAW MATERIALS", lot: "M", qty: 100, item_out_qty: 600, legacy_codes: "40-00-004", legacy_out_qty: 600 }),
+  ];
+  const pr = planRelocation(rr, { prefix: "41", from: "2026-01-01", keepMonths: 3, includeNew: false, partial: true, areaClass: {}, excluded: [], room: "20", today: new Date("2026-11-06T10:00:00") });
+  const i4 = pr.items.find((i) => i.item === "41-00-004");
+  const okR = !pr.items.some((i) => i.item === "41-00-003") && i4 && i4.onsite === 700 && i4.movable === 600 && i4.legacyCodes === "40-00-004" && i4.category !== "new" && i4.category !== "dead" && i4.lines.every((l) => l.pos.startsWith("20."));
+  if (!okR) { console.error("πλάνο μεταφοράς χώρου: λάθος", i4 && { on: i4.onsite, mv: i4.movable, c: i4.category, lines: i4.lines.map((l) => l.pos) }, pr.items.map((i) => i.item)); process.exitCode = 1; }
+  relocationWorkbook(XLSX, pr, { generatedAt: new Date(), userEmail: "alex@whs.local", filters: [], syncedAt: null });
   console.log("πλάνο μεταφοράς: OK");
 }
 

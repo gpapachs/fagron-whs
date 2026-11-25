@@ -3,6 +3,7 @@
 // περισσεύει και ΠΟΙΕΣ θέσεις/παρτίδες να φύγουν: μένουν οι παλαιότερες (FEFO/FIFO), φεύγουν οι
 // νεότερες. Βγάζει και τις θέσεις που αδειάζουν και ό,τι πρέπει να επιστρέψει από έξω.
 import { palletQty, palletsFor, type PalSource } from "./analysis.ts";
+import { siteOf } from "./site.ts";
 
 export type RelRow = {
   item: string;
@@ -24,6 +25,10 @@ export type RelRow = {
   pal_wms: number | null;
   pos_other_rows: number;
   item_first_receipt: string | null;
+  /** παλιοί κωδικοί με ίδια περιγραφή (π.χ. 40-… που έγιναν 41-…) και η κατανάλωσή τους */
+  legacy_codes: string | null;
+  legacy_out_qty: number;
+  legacy_first_move: string | null;
 };
 
 export type AreaClass = "movable" | "fixed" | "offsite";
@@ -35,6 +40,9 @@ export type RelParams = {
   partial: boolean; // επιτρέπεται να φύγει μέρος θέσης (σε ολόκληρες παλέτες)
   areaClass: Record<string, AreaClass>;
   excluded: string[]; // κωδικοί που ο χρήστης κρατά όλους
+  /** χώρος (1ο τμήμα θέσης, π.χ. "20"): μόνο από εκεί φεύγει απόθεμα· έξω = θέσεις εξωτερικής,
+   *  όλα τα άλλα σταθερά. Κενό = κατά περιοχή του WMS (areaClass). */
+  room?: string;
   today?: Date;
 };
 export type Category = "dead" | "new" | "slow" | "active" | "excluded";
@@ -71,6 +79,8 @@ export type ItemPlan = {
   palSource: PalSource;
   palBy: string | null;
   positions: number;
+  legacyCodes: string | null;
+  legacyOut: number;
 };
 export type RelPlan = {
   params: RelParams;
@@ -109,6 +119,9 @@ export function normRel(r: Record<string, unknown>): RelRow {
     pal_wms: r.pal_wms_ppp == null ? null : num(r.pal_wms_ppp),
     pos_other_rows: num(r.pos_other_rows),
     item_first_receipt: (r.item_first_receipt as string | null) ?? null,
+    legacy_codes: (r.legacy_codes as string | null) || null,
+    legacy_out_qty: num(r.legacy_out_qty),
+    legacy_first_move: (r.legacy_first_move as string | null) ?? null,
   };
 }
 
@@ -129,12 +142,16 @@ export function planRelocation(rows: RelRow[], params: RelParams): RelPlan {
   const t0 = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
   const fromT = new Date(`${params.from}T00:00:00`).getTime();
   const months = Math.max(1, (t0 - fromT) / DAY / 30.4);
-  const cls = (area: string) => params.areaClass[area] ?? defaultAreaClass(area);
+  const room = (params.room ?? "").trim();
+  const clsArea = (area: string) => params.areaClass[area] ?? defaultAreaClass(area);
+  // με χώρο: κατά θέση (χώρος -> μεταφέρσιμη, εξωτερική -> εξωτερική, αλλού -> σταθερή)
+  const clsRow = (r: RelRow): AreaClass =>
+    !room ? clsArea(r.area) : r.pos.split(".")[0] === room ? "movable" : siteOf(r.pos) === "external" ? "offsite" : "fixed";
   const excluded = new Set(params.excluded);
 
   const areaMap = new Map<string, { area: string; rows: number; qty: number; cls: AreaClass }>();
   for (const r of rows) {
-    const a = areaMap.get(r.area) ?? { area: r.area, rows: 0, qty: 0, cls: cls(r.area) };
+    const a = areaMap.get(r.area) ?? { area: r.area, rows: 0, qty: 0, cls: clsRow(r) };
     a.rows++;
     a.qty += r.qty;
     areaMap.set(r.area, a);
@@ -147,11 +164,12 @@ export function planRelocation(rows: RelRow[], params: RelParams): RelPlan {
   for (const [item, rs] of byItem) {
     const h = rs[0];
     const pq = palletQty(h);
-    const onsiteRows = rs.filter((r) => cls(r.area) !== "offsite");
-    const movableRows = rs.filter((r) => cls(r.area) === "movable");
+    const onsiteRows = rs.filter((r) => clsRow(r) !== "offsite");
+    const movableRows = rs.filter((r) => clsRow(r) === "movable");
+    if (room && !movableRows.length) continue; // ανάλυση μόνο για ό,τι έχει απόθεμα στον χώρο
     const onsite = onsiteRows.reduce((s, r) => s + r.qty, 0);
     const movable = movableRows.reduce((s, r) => s + r.qty, 0);
-    const offsite = rs.filter((r) => cls(r.area) === "offsite").reduce((s, r) => s + r.qty, 0);
+    const offsite = rs.filter((r) => clsRow(r) === "offsite").reduce((s, r) => s + r.qty, 0);
     // μήνες κατανάλωσης: από την αρχή της περιόδου ή από την πρώτη κίνηση του κωδικού, αν είναι νεότερος
     const firstT = h.item_first_move ? new Date(h.item_first_move).getTime() : fromT;
     const effMonths = Math.max(1, (t0 - Math.max(fromT, firstT)) / DAY / 30.4);
@@ -210,6 +228,8 @@ export function planRelocation(rows: RelRow[], params: RelParams): RelPlan {
       palSource: pq.source,
       palBy: h.pal_manual_by,
       positions: new Set(onsiteRows.map((r) => r.pos)).size,
+      legacyCodes: h.legacy_codes,
+      legacyOut: h.legacy_out_qty,
     });
   }
 

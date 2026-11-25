@@ -13,8 +13,18 @@ const fd = (s: string | null) => (s ? s.slice(0, 10).split("-").reverse().join("
 const yearStart = () => `${new Date().getFullYear()}-01-01`;
 const AREA_LBL: Record<AreaClass, string> = { movable: "Μεταφέρσιμη", fixed: "Σταθερή", offsite: "Εξωτερική" };
 
-type Saved = { prefix: string; from: string; keepMonths: number; includeNew: boolean; partial: boolean; areaClass: Record<string, AreaClass>; excluded: string[] };
-const DEF: Saved = { prefix: "41", from: yearStart(), keepMonths: 3, includeNew: false, partial: true, areaClass: {}, excluded: [] };
+type Saved = {
+  prefix: string;
+  from: string;
+  keepMonths: number;
+  includeNew: boolean;
+  partial: boolean;
+  areaClass: Record<string, AreaClass>;
+  excluded: string[];
+  room: string; // χώρος από τον οποίο φεύγει απόθεμα (π.χ. 20)· κενό = κατά περιοχή WMS
+  legacy: string; // πρόθεμα παλιών κωδικών με ίδια περιγραφή (π.χ. 40 για τους 41)
+};
+const DEF: Saved = { prefix: "41", from: yearStart(), keepMonths: 3, includeNew: false, partial: true, areaClass: {}, excluded: [], room: "20", legacy: "40" };
 
 export default function RelocationBoard({ userEmail }: { userEmail: string | null }) {
   const [s, setS] = useState<Saved>(DEF);
@@ -25,6 +35,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [legacyOff, setLegacyOff] = useState(false);
 
   useEffect(() => {
     try {
@@ -50,7 +61,12 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
     setLoading(true);
     setError(null);
     save({ ...s, prefix });
-    const { data, error } = await createClient().rpc("wms_relocation_data", { p_prefix: prefix, p_from: s.from });
+    const sb = createClient();
+    const legacy = s.legacy.replace(/[^0-9A-Za-z-]/g, "");
+    let { data, error } = await sb.rpc("wms_relocation_data_v2", { p_prefix: prefix, p_from: s.from, p_legacy: legacy || null });
+    // η βάση δεν έχει ακόμη την έκδοση με τους παλιούς κωδικούς: χωρίς αυτούς
+    setLegacyOff(!!error);
+    if (error) ({ data, error } = await sb.rpc("wms_relocation_data", { p_prefix: prefix, p_from: s.from }));
     setLoading(false);
     if (error) return setError(`Ο υπολογισμός απέτυχε: ${error.message}`);
     setRows(((data as Record<string, unknown>[]) ?? []).map(normRel));
@@ -59,8 +75,8 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
 
   // ο υπολογισμός ξανατρέχει τοπικά σε κάθε αλλαγή ρύθμισης (χωρίς νέο ερώτημα στη βάση)
   const plan = useMemo(
-    () => (rows && loaded ? planRelocation(rows, { prefix: loaded.prefix, from: loaded.from, keepMonths: s.keepMonths, includeNew: s.includeNew, partial: s.partial, areaClass: s.areaClass, excluded: s.excluded }) : null),
-    [rows, loaded, s.keepMonths, s.includeNew, s.partial, s.areaClass, s.excluded]
+    () => (rows && loaded ? planRelocation(rows, { prefix: loaded.prefix, from: loaded.from, keepMonths: s.keepMonths, includeNew: s.includeNew, partial: s.partial, areaClass: s.areaClass, excluded: s.excluded, room: s.room }) : null),
+    [rows, loaded, s.keepMonths, s.includeNew, s.partial, s.areaClass, s.excluded, s.room]
   );
 
   async function savePallet(item: string, qty: number | null) {
@@ -110,6 +126,10 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
           Πρόθεμα κωδικού
           <input value={s.prefix} onChange={(e) => setS({ ...s, prefix: e.target.value })} placeholder="π.χ. 41" />
         </label>
+        <label className="field" title="Κωδικοί που αντικατέστησαν παλιούς με την ίδια περιγραφή: η κατανάλωση των παλιών μετράει μαζί (π.χ. 40 για τους 41)">
+          Παλιοί κωδικοί
+          <input value={s.legacy} onChange={(e) => setS({ ...s, legacy: e.target.value })} placeholder="π.χ. 40" />
+        </label>
         <label className="field">
           Κατανάλωση από
           <input type="date" value={s.from} onChange={(e) => setS({ ...s, from: e.target.value })} />
@@ -140,6 +160,10 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
               μήνες κατανάλωσης
             </span>
           </label>
+          <label className="field" title="Ανάλυση μόνο για ό,τι έχει απόθεμα σε αυτόν τον χώρο (1ο τμήμα θέσης) — μόνο από εκεί φεύγει. Κενό = κατά περιοχή του WMS.">
+            Χώρος
+            <input value={s.room} onChange={(e) => save({ ...s, room: e.target.value.replace(/[^0-9]/g, "") })} placeholder="π.χ. 20" inputMode="numeric" style={{ width: 70 }} />
+          </label>
           <label className="st-check">
             <input type="checkbox" checked={s.partial} onChange={(e) => save({ ...s, partial: e.target.checked })} />
             Μέρος θέσης (ολόκληρες παλέτες)
@@ -152,6 +176,9 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
       </form>
 
       {error && <p className="rp-notice error">{error}</p>}
+      {legacyOff && plan && (
+        <p className="rp-notice warn">Η σύνδεση με τους παλιούς κωδικούς ({s.legacy}*) δεν είναι ενεργή ακόμη στη βάση — η κατανάλωση μετράει μόνο τους {plan.params.prefix}*.</p>
+      )}
       {!plan && !loading && (
         <p className="rp-hint">
           Υπολογίζει για κάθε κωδικό πόσο πρέπει να μείνει στην κεντρική αποθήκη (κατανάλωση των επόμενων μηνών + ανοιχτές παραγγελίες, σε ολόκληρες παλέτες) και ποιες θέσεις /
@@ -164,7 +191,14 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
           <div className="an-overview">
             <b>{plan.params.prefix}*</b>: να φύγουν <b>{plan.totals.items}</b> κωδικοί, <b>{plan.totals.lines}</b> γραμμές θέσεων, <b>≈ {plan.totals.pallets} παλέτες</b>
             {plan.totals.palletsMissing > 0 && <span className="dim"> (+{plan.totals.palletsMissing} γραμμές χωρίς ποσότητα/παλέτα — συμπλήρωσέ τη στο «Ανά κωδικό»)</span>} ·{" "}
-            <b>{plan.freedPositions.length}</b> θέσεις αδειάζουν εντελώς. Κατανάλωση {fq(plan.months, 1)} μηνών.
+            <b>{plan.freedPositions.length}</b> θέσεις αδειάζουν εντελώς. Κατανάλωση {fq(plan.months, 1)} μηνών
+            {plan.params.room ? <> · μόνο απόθεμα στον χώρο <b>{plan.params.room}</b> ({plan.items.length} κωδικοί)</> : null}
+            {plan.items.some((i) => i.legacyCodes) && (
+              <>
+                {" "}· <b>{plan.items.filter((i) => i.legacyCodes).length}</b> κωδικοί με παλιό κωδικό ({fq(plan.items.reduce((t, i) => t + i.legacyOut, 0), 0)} τεμ. κατανάλωσης από τους παλιούς)
+              </>
+            )}
+            .
             <div className="st-actions rl-actions">
               <button type="button" className="btn ghost sm" onClick={pdf} disabled={!!busy || !plan.lines.length}>
                 {busy === "pdf" ? "PDF…" : "Λίστα μεταφοράς PDF"}
@@ -297,7 +331,14 @@ function ItemsTable({ rows, excluded, onExclude, onPal, returns }: { rows: ItemP
         <tbody>
           {rows.map((i) => (
             <tr key={i.item}>
-              <td className="mono" data-label="Κωδικός">{i.item}</td>
+              <td className="mono" data-label="Κωδικός">
+                {i.item}
+                {i.legacyCodes && (
+                  <div className="dim rl-legacy" title={`Η κατανάλωση μετράει και τους παλιούς κωδικούς με ίδια περιγραφή: ${fq(i.legacyOut, 0)} τεμ. από αυτούς`}>
+                    πρώην {i.legacyCodes}
+                  </div>
+                )}
+              </td>
               <td className="st-desc" data-label="Περιγραφή">{i.description}</td>
               <td data-label="Κατηγορία"><span className={`rl-cat ${i.category}`}>{CATEGORY_TXT[i.category]}</span></td>
               <td className="num" data-label="Κεντρική">{fq(i.onsite, 0)}</td>

@@ -1408,8 +1408,10 @@ export function relocationWorkbook(XLSX: XLSXLib, p: RelPlanLike, meta: StockExp
         "Ποσ./παλέτα": i.palQty ?? "",
         "Θα χρειαστεί πίσω περίπου": dOnly(i.neededBack),
         "Επιστροφή από εξωτερική": i.returnQty ? rnd(i.returnQty, 3) : "",
+        "Παλιοί κωδικοί": i.legacyCodes ?? "",
+        "Κατανάλωση παλιών": i.legacyOut ? rnd(i.legacyOut, 3) : "",
       })),
-      [12, 40, 16, 11, 11, 12, 10, 11, 11, 11, 10, 10, 14, 13]
+      [12, 40, 16, 11, 11, 12, 10, 11, 11, 11, 10, 10, 14, 13, 16, 12]
     ),
     "Ανά κωδικό"
   );
