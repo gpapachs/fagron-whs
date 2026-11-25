@@ -27,8 +27,28 @@ type Saved = {
   room: string; // χώρος από τον οποίο φεύγει απόθεμα (π.χ. 20)· "*" = όλοι· κενό = κατά περιοχή WMS
   legacy: string; // πρόθεμα παλιών κωδικών με ίδια περιγραφή (π.χ. 40 για τους 41)
   noLeaflets: boolean; // leaflets εκτός ανάλυσης
+  sort: SortKey;
 };
-const DEF: Saved = { prefix: "41", from: yearStart(), keepMonths: 3, includeNew: false, partial: true, areaClass: {}, excluded: [], room: "20", legacy: "40", noLeaflets: true };
+type SortKey = "default" | "cover" | "move" | "pallets" | "item";
+const SORT_TXT: Record<SortKey, string> = {
+  default: "Προτεινόμενη σειρά",
+  cover: "Μεγαλύτερη κάλυψη πρώτα",
+  move: "Μεγαλύτερη ποσότητα να φύγει",
+  pallets: "Περισσότερες παλέτες",
+  item: "Κωδικός",
+};
+// κάλυψη σε μήνες· χωρίς ανάλωση = άπειρη (πρώτα)
+const coverOf = (i: ItemPlan) => (i.cover == null ? (i.onsite > 0 ? Infinity : -1) : i.cover);
+function sortItems(list: ItemPlan[], k: SortKey) {
+  if (k === "default") return list;
+  const a = [...list];
+  if (k === "cover") a.sort((x, y) => coverOf(y) - coverOf(x) || y.onsite - x.onsite);
+  if (k === "move") a.sort((x, y) => y.moveQty - x.moveQty);
+  if (k === "pallets") a.sort((x, y) => (y.movePallets ?? -1) - (x.movePallets ?? -1) || y.moveQty - x.moveQty);
+  if (k === "item") a.sort((x, y) => x.item.localeCompare(y.item));
+  return a;
+}
+const DEF: Saved = { prefix: "41", from: yearStart(), keepMonths: 3, includeNew: false, partial: true, areaClass: {}, excluded: [], room: "20", legacy: "40", noLeaflets: true, sort: "default" };
 
 export default function RelocationBoard({ userEmail }: { userEmail: string | null }) {
   const [s, setS] = useState<Saved>(DEF);
@@ -268,14 +288,23 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
             ]}
           />
           <div className="an-bar">
-            <span className="dim">Αλλαγές στις ρυθμίσεις υπολογίζονται αμέσως.</span>
+            <label className="rl-sort">
+              Ταξινόμηση
+              <select value={s.sort} onChange={(e) => save({ ...s, sort: e.target.value as SortKey })}>
+                {(Object.keys(SORT_TXT) as SortKey[]).map((k) => (
+                  <option key={k} value={k}>
+                    {SORT_TXT[k]}
+                  </option>
+                ))}
+              </select>
+            </label>
             <input className="an-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Αναζήτηση κωδικού / περιγραφής / θέσης…" />
           </div>
 
-          {view === "lines" && <MoveGroups items={plan.moving.filter(m)} />}
-          {view === "items" && <ItemsTable rows={plan.items.filter(m)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} />}
-          {view === "dead" && <ItemsTable rows={dead.filter(m)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} />}
-          {view === "returns" && <ItemsTable rows={plan.returns.filter(m)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} returns />}
+          {view === "lines" && <MoveGroups items={sortItems(plan.moving.filter(m), s.sort)} />}
+          {view === "items" && <ItemsTable rows={sortItems(plan.items.filter(m), s.sort)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} />}
+          {view === "dead" && <ItemsTable rows={sortItems(dead.filter(m), s.sort)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} />}
+          {view === "returns" && <ItemsTable rows={sortItems(plan.returns.filter(m), s.sort)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} returns />}
           {view === "freed" && (
             <div className="rl-freed">
               {plan.freedPositions.filter((p) => !t || p.toLowerCase().includes(t)).map((p) => (
@@ -351,7 +380,7 @@ function MoveGroups({ items }: { items: ItemPlan[] }) {
         <table className="st-table st-cards rl-groups">
           <thead>
             <tr>
-              {["", "Κωδικός", "Περιγραφή", "Κατηγορία", "Παρτίδες", "Θέσεις", "Κεντρική", "Να φύγει", "Παλέτες", "Μένει"].map((h, i) => (
+              {["", "Κωδικός", "Περιγραφή", "Κατηγορία", "Παρτίδες", "Θέσεις", "Κεντρική", "Κάλυψη", "Να φύγει", "Παλέτες", "Μένει"].map((h, i) => (
                 <th key={i}>{h}</th>
               ))}
             </tr>
@@ -385,13 +414,14 @@ function MoveGroups({ items }: { items: ItemPlan[] }) {
                       {freed > 0 && <span className="dim"> ({freed} αδειάζουν)</span>}
                     </td>
                     <td className="num" data-label="Κεντρική">{fq(p.onsite, 0)}</td>
+                    <td className="num" data-label="Κάλυψη">{p.cover == null ? <span title="Χωρίς ανάλωση">∞</span> : p.cover >= 24 ? `${fq(p.cover / 12, 1)} έτη` : `${fq(p.cover, 0)} μ.`}</td>
                     <td className="num" data-label="Να φύγει"><b>{fq(p.moveQty, 0)}</b></td>
                     <td className="num" data-label="Παλέτες">{p.movePallets ?? <span className="dim">—</span>}</td>
                     <td className="num" data-label="Μένει">{fq(p.onsite - p.moveQty, 0)}</td>
                   </tr>
                   {isOpen && (
                     <tr className="rl-sub">
-                      <td colSpan={10}>
+                      <td colSpan={11}>
                         <ul className="rl-whylong" aria-label="Γιατί">
                           {p.why.long.map((t, k) => (
                             <li key={k}>{t}</li>
@@ -445,7 +475,7 @@ function MoveGroups({ items }: { items: ItemPlan[] }) {
             })}
             {!items.length && (
               <tr>
-                <td colSpan={10} className="st-empty">Τίποτα να μεταφερθεί με αυτές τις ρυθμίσεις.</td>
+                <td colSpan={11} className="st-empty">Τίποτα να μεταφερθεί με αυτές τις ρυθμίσεις.</td>
               </tr>
             )}
           </tbody>
@@ -529,7 +559,7 @@ function ItemsTable({
               <td className="num" data-label="Κεντρική">{fq(i.onsite, 0)}</td>
               <td className="num" data-label="Εξωτερική">{i.offsite ? fq(i.offsite, 0) : ""}</td>
               <td className="num" data-label="/ μήνα">{i.perMonth ? fq(i.perMonth, 1) : "—"}</td>
-              <td className="num" data-label="Κάλυψη">{i.cover == null ? "—" : i.cover >= 24 ? `${fq(i.cover / 12, 1)} έτη` : `${fq(i.cover, 0)} μ.`}</td>
+              <td className="num" data-label="Κάλυψη">{i.cover == null ? (i.onsite > 0 ? "∞" : "—") : i.cover >= 24 ? `${fq(i.cover / 12, 1)} έτη` : `${fq(i.cover, 0)} μ.`}</td>
               <td className="num" data-label="Μένει">{fq(i.keep, 0)}</td>
               <td className="num" data-label={returns ? "Πίσω" : "Φεύγει"}><b>{returns ? fq(i.returnQty, 0) : i.moveQty ? fq(i.moveQty, 0) : ""}</b></td>
               <td className="num" data-label="Παλέτες">{returns ? "" : i.movePallets ?? (i.moveQty ? <span className="dim">—</span> : "")}</td>
