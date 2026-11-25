@@ -7,7 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import { parseCodes, setLegacy } from "@/lib/legacy";
 import { siteOf } from "@/lib/site";
 import { isLeaflet } from "@/lib/leaflet";
-import { CATEGORY_TXT, defaultAreaClass, lineKey, normRel, pickPlan, planRelocation, withRelPallet, type AreaClass, type ItemPlan, type RelPlan, type RelRow } from "@/lib/relocation";
+import { CATEGORY_TXT, defaultAreaClass, itemKey, lineKey, normRel, pickPlan, planRelocation, withRelPallet, type AreaClass, type ItemPlan, type RelPlan, type RelRow } from "@/lib/relocation";
 
 type View = "lines" | "pick" | "items" | "dead" | "returns" | "freed" | "areas";
 const LS = "relocation.v1";
@@ -29,6 +29,7 @@ type Saved = {
   legacy: string; // πρόθεμα παλιών κωδικών με ίδια περιγραφή (π.χ. 40 για τους 41)
   noLeaflets: boolean; // leaflets εκτός ανάλυσης
   sort: SortKey;
+  manual: Record<string, number>; // τεμάχια που θέλει ο χρήστης να φύγουν ανά κωδικό
 };
 type SortKey = "default" | "cover" | "move" | "pallets" | "item";
 const SORT_TXT: Record<SortKey, string> = {
@@ -49,7 +50,7 @@ function sortItems(list: ItemPlan[], k: SortKey) {
   if (k === "item") a.sort((x, y) => x.item.localeCompare(y.item));
   return a;
 }
-const DEF: Saved = { prefix: "41", from: yearStart(), keepMonths: 3, includeNew: false, partial: true, areaClass: {}, excluded: [], room: "20", legacy: "40", noLeaflets: true, sort: "default" };
+const DEF: Saved = { prefix: "41", from: yearStart(), keepMonths: 3, includeNew: false, partial: true, areaClass: {}, excluded: [], room: "20", legacy: "40", noLeaflets: true, sort: "default", manual: {} };
 
 export default function RelocationBoard({ userEmail }: { userEmail: string | null }) {
   const [s, setS] = useState<Saved>(DEF);
@@ -84,7 +85,23 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
   };
   const setPick = (keys: string[], on: boolean) => {
     const n = new Set(picked);
-    for (const k of keys) on ? n.add(k) : n.delete(k);
+    for (const k of keys) {
+      if (on) n.add(k);
+      else {
+        n.delete(k);
+        n.delete(itemKey(k.split("|")[0])); // ξετσεκάρισμα: φεύγει και το «όλος ο κωδικός»
+      }
+    }
+    savePick(n);
+  };
+  // πόσα τεμάχια να φύγουν: ο κωδικός μπαίνει αυτόματα ολόκληρος στο pick list
+  const setManual = (item: string, qty: number | null) => {
+    const manual = { ...s.manual };
+    if (qty == null) delete manual[item];
+    else manual[item] = qty;
+    save({ ...s, manual });
+    const n = new Set([...picked].filter((k) => !k.startsWith(`${item}|`)));
+    if (qty == null ? picked.has(itemKey(item)) || [...picked].some((k) => k.startsWith(`${item}|`)) : qty > 0) n.add(itemKey(item));
     savePick(n);
   };
   const save = (n: Saved) => {
@@ -127,6 +144,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
       areaClass: s.areaClass,
       excluded: s.excluded,
       room: s.room,
+      manual: s.manual,
     });
     if (s.noLeaflets) {
       // θέση που κρατά και leaflets δεν «αδειάζει»
@@ -135,7 +153,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
       for (const l of p.lines) if (withLeaflets.has(l.pos)) l.freesPosition = false;
     }
     return p;
-  }, [rows, loaded, s.keepMonths, s.includeNew, s.partial, s.areaClass, s.excluded, s.room, s.noLeaflets]);
+  }, [rows, loaded, s.keepMonths, s.includeNew, s.partial, s.areaClass, s.excluded, s.room, s.noLeaflets, s.manual]);
 
   async function savePallet(item: string, qty: number | null) {
     const prev = rows;
@@ -174,7 +192,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
     setBusy(asPick ? "pxlsx" : "xlsx");
     try {
       const [XLSX, ex] = await Promise.all([import("xlsx"), import("@/lib/exports")]);
-      const { wb, fileName } = ex.relocationWorkbook(XLSX, src, meta(), asPick ? { sheet: "Λίστα συλλογής", file: "syllogi" } : {});
+      const { wb, fileName } = ex.relocationWorkbook(XLSX, src, meta(), asPick ? { sheet: "Pick list", file: "pick-list" } : {});
       XLSX.writeFile(wb, fileName);
     } finally {
       setBusy(null);
@@ -185,7 +203,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
     setBusy(asPick ? "ppdf" : "pdf");
     try {
       const [{ jsPDF }, { autoTable }, ex, { loadPdfFonts }] = await Promise.all([import("jspdf"), import("jspdf-autotable"), import("@/lib/exports"), import("@/lib/pdfFonts")]);
-      const { doc, fileName } = ex.relocationPdf(jsPDF, autoTable, await loadPdfFonts(), src, meta(), asPick ? { title: "Λίστα συλλογής", file: "syllogi" } : {});
+      const { doc, fileName } = ex.relocationPdf(jsPDF, autoTable, await loadPdfFonts(), src, meta(), asPick ? { title: "Pick list", file: "pick-list" } : {});
       doc.save(fileName);
     } finally {
       setBusy(null);
@@ -302,7 +320,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
             onPick={(k) => setView(k as View)}
             items={[
               { key: "lines", label: "Τι φεύγει", value: plan.totals.items, tone: "blue", hint: "Ανά κωδικό· πατήστε έναν κωδικό για τις παρτίδες και τις θέσεις του" },
-              { key: "pick", label: "Λίστα συλλογής", value: pick?.totals.items ?? 0, tone: "green", hint: "Οι κωδικοί / παρτίδες που επέλεξες να σταλούν — PDF και Excel μόνο γι' αυτές" },
+              { key: "pick", label: "Pick list", value: pick?.totals.items ?? 0, tone: "green", hint: "Οι κωδικοί / παρτίδες που τσέκαρες να σταλούν, με τις ποσότητες που όρισες — PDF και Excel μόνο γι' αυτές" },
               { key: "items", label: "Ανά κωδικό", value: plan.items.length, tone: "neutral", hint: "Τι μένει, τι φεύγει, κάλυψη, πότε θα χρειαστεί πίσω" },
               { key: "dead", label: "Χωρίς κατανάλωση", value: dead.length, tone: "red", hint: "Καμία έξοδο στην περίοδο: φεύγουν ολόκληρα" },
               { key: "freed", label: "Θέσεις αδειάζουν", value: plan.freedPositions.length, tone: "green", hint: "Όλο το περιεχόμενο της θέσης φεύγει" },
@@ -324,7 +342,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
             <input className="an-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Αναζήτηση κωδικού / περιγραφής / θέσης…" />
           </div>
 
-          {view === "lines" && <MoveGroups items={sortItems(plan.moving.filter(m), s.sort)} picked={picked} onPick={setPick} />}
+          {view === "lines" && <MoveGroups items={sortItems(plan.moving.filter(m), s.sort)} picked={picked} onPick={setPick} onQty={setManual} />}
           {view === "pick" && pick && (
             <>
               <div className="rl-pickbar">
@@ -335,7 +353,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
                 </span>
                 <span className="st-actions">
                   <button type="button" className="btn primary sm" onClick={() => pdf(pick, true)} disabled={!!busy || !pick.lines.length}>
-                    {busy === "ppdf" ? "PDF…" : "Λίστα συλλογής PDF"}
+                    {busy === "ppdf" ? "PDF…" : "Pick list PDF"}
                   </button>
                   <button type="button" className="btn ghost sm" onClick={() => excel(pick, true)} disabled={!!busy || !pick.lines.length}>
                     {busy === "pxlsx" ? "Excel…" : "Excel"}
@@ -346,15 +364,15 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
                 </span>
               </div>
               {pick.lines.length ? (
-                <MoveGroups items={sortItems(pick.moving.filter(m), s.sort)} picked={picked} onPick={setPick} pickView />
+                <MoveGroups items={sortItems(pick.moving.filter(m), s.sort)} picked={picked} onPick={setPick} onQty={setManual} pickView />
               ) : (
-                <p className="rp-hint">Η λίστα είναι άδεια. Στο «Τι φεύγει» τσέκαρε τους κωδικούς (ή μεμονωμένες παρτίδες / θέσεις) που θέλεις να στείλεις.</p>
+                <p className="rp-hint">Το pick list είναι άδειο. Στο «Τι φεύγει» τσέκαρε τους κωδικούς (ή μεμονωμένες παρτίδες / θέσεις) που θέλεις να στείλεις, ή γράψε πόσα τεμάχια να φύγουν.</p>
               )}
             </>
           )}
-          {view === "items" && <ItemsTable rows={sortItems(plan.items.filter(m), s.sort)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} />}
-          {view === "dead" && <ItemsTable rows={sortItems(dead.filter(m), s.sort)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} />}
-          {view === "returns" && <ItemsTable rows={sortItems(plan.returns.filter(m), s.sort)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} returns />}
+          {view === "items" && <ItemsTable rows={sortItems(plan.items.filter(m), s.sort)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} onQty={setManual} />}
+          {view === "dead" && <ItemsTable rows={sortItems(dead.filter(m), s.sort)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} onQty={setManual} />}
+          {view === "returns" && <ItemsTable rows={sortItems(plan.returns.filter(m), s.sort)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} onQty={setManual} returns />}
           {view === "freed" && (
             <div className="rl-freed">
               {plan.freedPositions.filter((p) => !t || p.toLowerCase().includes(t)).map((p) => (
@@ -406,9 +424,10 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
 }
 
 /** Τι φεύγει: πρώτα ανά κωδικό, και με κλικ οι παρτίδες / θέσεις του κωδικού. */
-function PickBox({ keys, picked, onPick, label }: { keys: string[]; picked: Set<string>; onPick: (k: string[], on: boolean) => void; label: string }) {
+function PickBox({ keys, picked, onPick, label, whole, disabled }: { keys: string[]; picked: Set<string>; onPick: (k: string[], on: boolean) => void; label: string; whole?: string; disabled?: boolean }) {
   const ref = useRef<HTMLInputElement>(null);
-  const n = keys.filter((k) => picked.has(k)).length;
+  const all = whole != null && picked.has(itemKey(whole));
+  const n = all ? keys.length : keys.filter((k) => picked.has(k)).length;
   useEffect(() => {
     if (ref.current) ref.current.indeterminate = n > 0 && n < keys.length;
   }, [n, keys.length]);
@@ -420,16 +439,46 @@ function PickBox({ keys, picked, onPick, label }: { keys: string[]; picked: Set<
       aria-label={label}
       title={n ? "Αφαίρεση από τη λίστα συλλογής" : "Προσθήκη στη λίστα συλλογής"}
       checked={n > 0 && n === keys.length}
+      disabled={disabled}
       onClick={(e) => e.stopPropagation()}
       onChange={() => onPick(keys, n < keys.length)}
     />
   );
 }
 
-function MoveGroups({ items, picked, onPick, pickView }: { items: ItemPlan[]; picked: Set<string>; onPick: (k: string[], on: boolean) => void; pickView?: boolean }) {
+/** Πόσα τεμάχια να φύγουν: κενό = η πρόταση. Αποθηκεύεται με Enter ή όταν φύγεις από το πεδίο. */
+function QtyInput({ item, value, suggested, manual, onQty }: { item: string; value: number; suggested: number; manual: number | null | undefined; onQty: (i: string, q: number | null) => void }) {
+  const shown = manual != null ? String(manual) : "";
+  const [v, setV] = useState(shown);
+  useEffect(() => setV(shown), [shown]);
+  const commit = () => {
+    const t = v.trim();
+    if (t === "") return manual != null && onQty(item, null);
+    const n = Number(t.replace(/\./g, "").replace(",", "."));
+    if (!isFinite(n) || n < 0) return setV(shown);
+    if (n !== manual) onQty(item, n);
+  };
+  return (
+    <span className={`rl-qty ${manual != null ? "man" : ""}`} onClick={(e) => e.stopPropagation()}>
+      <input
+        value={v}
+        inputMode="decimal"
+        placeholder={fq(value, 0)}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+        aria-label={`Τεμάχια να φύγουν ${item}`}
+        title={manual != null ? `Χειροκίνητη ποσότητα — πρόταση ${fq(suggested, 0)}. Άδειασέ το για την πρόταση.` : "Γράψε πόσα τεμάχια θέλεις να φύγουν (κενό = η πρόταση)"}
+      />
+      {manual != null && manual > value + 1e-6 && <i className="dim" title="Δεν υπάρχει τόσο απόθεμα στον χώρο">έως {fq(value, 0)}</i>}
+    </span>
+  );
+}
+
+function MoveGroups({ items, picked, onPick, onQty, pickView }: { items: ItemPlan[]; picked: Set<string>; onPick: (k: string[], on: boolean) => void; onQty: (i: string, q: number | null) => void; pickView?: boolean }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const allKeys = items.flatMap((i) => i.lines.map(lineKey));
-  const nPicked = allKeys.filter((k) => picked.has(k)).length;
+  const nPicked = allKeys.filter((k) => picked.has(k) || picked.has(itemKey(k.split("|")[0]))).length;
   const toggle = (i: string) =>
     setOpen((cur) => {
       const n = new Set(cur);
@@ -479,14 +528,14 @@ function MoveGroups({ items, picked, onPick, pickView }: { items: ItemPlan[]; pi
               const lines = [...p.lines].sort((a, b) => (b.expiry ?? "").localeCompare(a.expiry ?? "") || a.lot.localeCompare(b.lot) || a.pos.localeCompare(b.pos, "el", { numeric: true }));
               return (
                 <Fragment key={p.item}>
-                  <tr className={`rl-grow ${isOpen ? "open" : ""} ${keys.some((k) => picked.has(k)) ? "picked" : ""}`} onClick={() => toggle(p.item)} aria-expanded={isOpen}>
+                  <tr className={`rl-grow ${isOpen ? "open" : ""} ${picked.has(itemKey(p.item)) || keys.some((k) => picked.has(k)) ? "picked" : ""}`} onClick={() => toggle(p.item)} aria-expanded={isOpen}>
                     <td data-label="">
                       <button type="button" className="rl-caret" aria-label={isOpen ? "Κλείσιμο" : "Παρτίδες"} onClick={(e) => { e.stopPropagation(); toggle(p.item); }}>
                         {isOpen ? "▾" : "▸"}
                       </button>
                     </td>
-                    <td data-label="Λίστα συλλογής">
-                      <PickBox keys={keys} picked={picked} onPick={onPick} label={`Λίστα συλλογής: ${p.item}`} />
+                    <td data-label="Pick list">
+                      <PickBox keys={keys} whole={p.item} picked={picked} onPick={(k, on) => onPick(on && p.manual != null ? [itemKey(p.item)] : k, on)} label={`Pick list: ${p.item}`} />
                     </td>
                     <td className="mono" data-label="Κωδικός">
                       <b>{p.item}</b>
@@ -504,7 +553,9 @@ function MoveGroups({ items, picked, onPick, pickView }: { items: ItemPlan[]; pi
                     </td>
                     <td className="num" data-label="Κεντρική">{fq(p.onsite, 0)}</td>
                     <td className="num" data-label="Κάλυψη">{p.cover == null ? <span title="Χωρίς ανάλωση">∞</span> : p.cover >= 24 ? `${fq(p.cover / 12, 1)} έτη` : `${fq(p.cover, 0)} μ.`}</td>
-                    <td className="num" data-label="Να φύγει"><b>{fq(p.moveQty, 0)}</b></td>
+                    <td className="num" data-label="Να φύγει">
+                      <QtyInput item={p.item} value={p.moveQty} suggested={p.suggested ?? p.moveQty} manual={p.manual} onQty={onQty} />
+                    </td>
                     <td className="num" data-label="Παλέτες">{p.movePallets ?? <span className="dim">—</span>}</td>
                     <td className="num" data-label="Μένει">{fq(p.onsite - p.moveQty, 0)}</td>
                   </tr>
@@ -544,8 +595,8 @@ function MoveGroups({ items, picked, onPick, pickView }: { items: ItemPlan[]; pi
                                     {fd(l.expiry)}
                                   </td>
                                 )}
-                                <td data-label="Λίστα συλλογής">
-                                  <PickBox keys={[lineKey(l)]} picked={picked} onPick={onPick} label={`Λίστα συλλογής: ${l.item} ${l.lot} ${l.pos}`} />
+                                <td data-label="Pick list">
+                                  <PickBox keys={[lineKey(l)]} whole={l.item} picked={picked} onPick={onPick} disabled={p.manual != null} label={`Pick list: ${l.item} ${l.lot} ${l.pos}`} />
                                 </td>
                                 <td data-label="Θέση"><span className="rack">{l.pos}</span></td>
                                 <td className="num" data-label="Στη θέση">{fq(l.posQty)}</td>
@@ -616,6 +667,7 @@ function ItemsTable({
   onExclude,
   onPal,
   onLegacy,
+  onQty,
   returns,
 }: {
   rows: ItemPlan[];
@@ -623,6 +675,7 @@ function ItemsTable({
   onExclude: (i: string) => void;
   onPal: (i: string, q: number | null) => void;
   onLegacy: (i: string, text: string) => void;
+  onQty: (i: string, q: number | null) => void;
   returns?: boolean;
 }) {
   return (
@@ -653,7 +706,9 @@ function ItemsTable({
               <td className="num" data-label="/ μήνα">{i.perMonth ? fq(i.perMonth, 1) : "—"}</td>
               <td className="num" data-label="Κάλυψη">{i.cover == null ? (i.onsite > 0 ? "∞" : "—") : i.cover >= 24 ? `${fq(i.cover / 12, 1)} έτη` : `${fq(i.cover, 0)} μ.`}</td>
               <td className="num" data-label="Μένει">{fq(i.keep, 0)}</td>
-              <td className="num" data-label={returns ? "Πίσω" : "Φεύγει"}><b>{returns ? fq(i.returnQty, 0) : i.moveQty ? fq(i.moveQty, 0) : ""}</b></td>
+              <td className="num" data-label={returns ? "Πίσω" : "Φεύγει"}>
+                {returns ? <b>{fq(i.returnQty, 0)}</b> : i.movable > 0 ? <QtyInput item={i.item} value={i.moveQty} suggested={i.suggested ?? i.moveQty} manual={i.manual} onQty={onQty} /> : ""}
+              </td>
               <td className="num" data-label="Παλέτες">{returns ? "" : i.movePallets ?? (i.moveQty ? <span className="dim">—</span> : "")}</td>
               <td data-label="Ποσ./παλέτα"><PalInput item={i.item} qty={i.palQty} source={i.palSource} by={i.palBy} onPal={onPal} /></td>
               <td className="mono" data-label="Χρειάζεται πίσω">{fd(i.neededBack)}</td>
