@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import KpiTiles from "@/components/KpiTiles";
 import PalInput from "@/components/analysis/PalInput";
 import { createClient } from "@/lib/supabase/client";
+import { parseCodes, setLegacy } from "@/lib/legacy";
+import { siteOf } from "@/lib/site";
 import { CATEGORY_TXT, defaultAreaClass, normRel, planRelocation, withRelPallet, type AreaClass, type ItemPlan, type MoveLine, type RelRow } from "@/lib/relocation";
 
 type View = "lines" | "items" | "dead" | "returns" | "freed" | "areas";
@@ -21,7 +23,7 @@ type Saved = {
   partial: boolean;
   areaClass: Record<string, AreaClass>;
   excluded: string[];
-  room: string; // χώρος από τον οποίο φεύγει απόθεμα (π.χ. 20)· κενό = κατά περιοχή WMS
+  room: string; // χώρος από τον οποίο φεύγει απόθεμα (π.χ. 20)· "*" = όλοι· κενό = κατά περιοχή WMS
   legacy: string; // πρόθεμα παλιών κωδικών με ίδια περιγραφή (π.χ. 40 για τους 41)
 };
 const DEF: Saved = { prefix: "41", from: yearStart(), keepMonths: 3, includeNew: false, partial: true, areaClass: {}, excluded: [], room: "20", legacy: "40" };
@@ -88,6 +90,21 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
       setError(`Δεν αποθηκεύτηκε η ποσότητα/παλέτα για ${item}: ${error.message}`);
     }
   }
+  // χώροι της κεντρικής με απόθεμα του προθέματος (+ ο επιλεγμένος)
+  const rooms = useMemo(() => {
+    const set = new Set<string>(["20"]);
+    for (const r of rows ?? []) if (siteOf(r.pos) !== "external") set.add(r.pos.split(".")[0]);
+    if (s.room && s.room !== "*") set.add(s.room);
+    return [...set].sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
+  }, [rows, s.room]);
+  async function saveLegacy(item: string, text: string) {
+    try {
+      await setLegacy(item, parseCodes(text));
+      await load();
+    } catch (e) {
+      setError(`Δεν αποθηκεύτηκε ο παλιός κωδικός για ${item}: ${(e as Error).message}`);
+    }
+  }
   const toggleExcluded = (item: string) => save({ ...s, excluded: s.excluded.includes(item) ? s.excluded.filter((x) => x !== item) : [...s.excluded, item] });
   const setArea = (area: string, c: AreaClass) => save({ ...s, areaClass: { ...s.areaClass, [area]: c } });
 
@@ -126,7 +143,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
           Πρόθεμα κωδικού
           <input value={s.prefix} onChange={(e) => setS({ ...s, prefix: e.target.value })} placeholder="π.χ. 41" />
         </label>
-        <label className="field" title="Κωδικοί που αντικατέστησαν παλιούς με την ίδια περιγραφή: η κατανάλωση των παλιών μετράει μαζί (π.χ. 40 για τους 41)">
+        <label className="field" title="Πρόθεμα των παλιών κωδικών (π.χ. 40 για τους 41): η κατανάλωσή τους μετράει μαζί, με βάση την αντιστοίχιση κωδικών (✎ στο «Ανά κωδικό»)">
           Παλιοί κωδικοί
           <input value={s.legacy} onChange={(e) => setS({ ...s, legacy: e.target.value })} placeholder="π.χ. 40" />
         </label>
@@ -160,9 +177,17 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
               μήνες κατανάλωσης
             </span>
           </label>
-          <label className="field" title="Ανάλυση μόνο για ό,τι έχει απόθεμα σε αυτόν τον χώρο (1ο τμήμα θέσης) — μόνο από εκεί φεύγει. Κενό = κατά περιοχή του WMS.">
+          <label className="field" title="Από ποιον χώρο (1ο τμήμα θέσης) μπορεί να φύγει απόθεμα. «Όλοι» = κάθε θέση της κεντρικής. «Κατά περιοχή» = όπως ορίζεται στην καρτέλα Περιοχές.">
             Χώρος
-            <input value={s.room} onChange={(e) => save({ ...s, room: e.target.value.replace(/[^0-9]/g, "") })} placeholder="π.χ. 20" inputMode="numeric" style={{ width: 70 }} />
+            <select value={s.room} onChange={(e) => save({ ...s, room: e.target.value })}>
+              <option value="*">Όλοι οι χώροι της κεντρικής</option>
+              {rooms.map((r) => (
+                <option key={r} value={r}>
+                  Χώρος {r}
+                </option>
+              ))}
+              <option value="">Κατά περιοχή WMS</option>
+            </select>
           </label>
           <label className="st-check">
             <input type="checkbox" checked={s.partial} onChange={(e) => save({ ...s, partial: e.target.checked })} />
@@ -192,7 +217,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
             <b>{plan.params.prefix}*</b>: να φύγουν <b>{plan.totals.items}</b> κωδικοί, <b>{plan.totals.lines}</b> γραμμές θέσεων, <b>≈ {plan.totals.pallets} παλέτες</b>
             {plan.totals.palletsMissing > 0 && <span className="dim"> (+{plan.totals.palletsMissing} γραμμές χωρίς ποσότητα/παλέτα — συμπλήρωσέ τη στο «Ανά κωδικό»)</span>} ·{" "}
             <b>{plan.freedPositions.length}</b> θέσεις αδειάζουν εντελώς. Κατανάλωση {fq(plan.months, 1)} μηνών
-            {plan.params.room ? <> · μόνο απόθεμα στον χώρο <b>{plan.params.room}</b> ({plan.items.length} κωδικοί)</> : null}
+            {plan.params.room && plan.params.room !== "*" ? <> · μόνο απόθεμα στον χώρο <b>{plan.params.room}</b> ({plan.items.length} κωδικοί)</> : null}
             {plan.items.some((i) => i.legacyCodes) && (
               <>
                 {" "}· <b>{plan.items.filter((i) => i.legacyCodes).length}</b> κωδικοί με παλιό κωδικό ({fq(plan.items.reduce((t, i) => t + i.legacyOut, 0), 0)} τεμ. κατανάλωσης από τους παλιούς)
@@ -226,9 +251,9 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
           </div>
 
           {view === "lines" && <LinesTable rows={plan.lines.filter(m)} />}
-          {view === "items" && <ItemsTable rows={plan.items.filter(m)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} />}
-          {view === "dead" && <ItemsTable rows={dead.filter(m)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} />}
-          {view === "returns" && <ItemsTable rows={plan.returns.filter(m)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} returns />}
+          {view === "items" && <ItemsTable rows={plan.items.filter(m)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} />}
+          {view === "dead" && <ItemsTable rows={dead.filter(m)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} />}
+          {view === "returns" && <ItemsTable rows={plan.returns.filter(m)} excluded={s.excluded} onExclude={toggleExcluded} onPal={savePallet} onLegacy={saveLegacy} returns />}
           {view === "freed" && (
             <div className="rl-freed">
               {plan.freedPositions.filter((p) => !t || p.toLowerCase().includes(t)).map((p) => (
@@ -317,7 +342,54 @@ function LinesTable({ rows }: { rows: MoveLine[] }) {
   );
 }
 
-function ItemsTable({ rows, excluded, onExclude, onPal, returns }: { rows: ItemPlan[]; excluded: string[]; onExclude: (i: string) => void; onPal: (i: string, q: number | null) => void; returns?: boolean }) {
+function LegacyEdit({ item, codes, onSave }: { item: string; codes: string | null; onSave: (item: string, text: string) => void }) {
+  const [edit, setEdit] = useState(false);
+  const [v, setV] = useState(codes ?? "");
+  if (!edit)
+    return (
+      <div className="dim rl-legacy">
+        {codes ? <span title="Η κατανάλωση μετράει και τους παλιούς κωδικούς">πρώην {codes}</span> : <span>χωρίς παλιό κωδικό</span>}{" "}
+        <button type="button" className="rl-legacy-edit" title="Ορισμός / διόρθωση παλιού κωδικού" onClick={() => { setV(codes ?? ""); setEdit(true); }}>
+          ✎
+        </button>
+      </div>
+    );
+  const done = (save: boolean) => {
+    setEdit(false);
+    if (save && v.trim() !== (codes ?? "")) onSave(item, v);
+  };
+  return (
+    <input
+      className="rl-legacy-input"
+      autoFocus
+      value={v}
+      placeholder="π.χ. 40-00-163"
+      aria-label={`Παλιός κωδικός για ${item}`}
+      onChange={(e) => setV(e.target.value)}
+      onBlur={() => done(true)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") done(true);
+        if (e.key === "Escape") done(false);
+      }}
+    />
+  );
+}
+
+function ItemsTable({
+  rows,
+  excluded,
+  onExclude,
+  onPal,
+  onLegacy,
+  returns,
+}: {
+  rows: ItemPlan[];
+  excluded: string[];
+  onExclude: (i: string) => void;
+  onPal: (i: string, q: number | null) => void;
+  onLegacy: (i: string, text: string) => void;
+  returns?: boolean;
+}) {
   return (
     <div className="st-tablewrap">
       <table className="st-table st-cards">
@@ -333,11 +405,8 @@ function ItemsTable({ rows, excluded, onExclude, onPal, returns }: { rows: ItemP
             <tr key={i.item}>
               <td className="mono" data-label="Κωδικός">
                 {i.item}
-                {i.legacyCodes && (
-                  <div className="dim rl-legacy" title={`Η κατανάλωση μετράει και τους παλιούς κωδικούς με ίδια περιγραφή: ${fq(i.legacyOut, 0)} τεμ. από αυτούς`}>
-                    πρώην {i.legacyCodes}
-                  </div>
-                )}
+                <LegacyEdit item={i.item} codes={i.legacyCodes} onSave={onLegacy} />
+                {i.legacyOut > 0 && <div className="dim rl-legacy">{fq(i.legacyOut, 0)} τεμ. από τον παλιό</div>}
               </td>
               <td className="st-desc" data-label="Περιγραφή">{i.description}</td>
               <td data-label="Κατηγορία"><span className={`rl-cat ${i.category}`}>{CATEGORY_TXT[i.category]}</span></td>

@@ -357,6 +357,9 @@ if (per?.["Μέσος χρόνος / συσκευασία (δευτ.)"] !== 36) 
   const okR = !pr.items.some((i) => i.item === "41-00-003") && i4 && i4.onsite === 700 && i4.movable === 600 && i4.legacyCodes === "40-00-004" && i4.category !== "new" && i4.category !== "dead" && i4.lines.every((l) => l.pos.startsWith("20."));
   if (!okR) { console.error("πλάνο μεταφοράς χώρου: λάθος", i4 && { on: i4.onsite, mv: i4.movable, c: i4.category, lines: i4.lines.map((l) => l.pos) }, pr.items.map((i) => i.item)); process.exitCode = 1; }
   relocationWorkbook(XLSX, pr, { generatedAt: new Date(), userEmail: "alex@whs.local", filters: [], syncedAt: null });
+  const pa = planRelocation(rr, { prefix: "41", from: "2026-01-01", keepMonths: 3, includeNew: false, partial: true, areaClass: {}, excluded: [], room: "*", today: new Date("2026-11-06T10:00:00") });
+  const a4 = pa.items.find((i) => i.item === "41-00-004");
+  if (!(a4 && a4.movable === 700 && pa.items.find((i) => i.item === "41-00-003")?.offsite === 900)) { console.error("πλάνο μεταφοράς όλοι οι χώροι: λάθος", a4 && a4.movable); process.exitCode = 1; }
   console.log("πλάνο μεταφοράς: OK");
 }
 

@@ -41,7 +41,7 @@ export type RelParams = {
   areaClass: Record<string, AreaClass>;
   excluded: string[]; // κωδικοί που ο χρήστης κρατά όλους
   /** χώρος (1ο τμήμα θέσης, π.χ. "20"): μόνο από εκεί φεύγει απόθεμα· έξω = θέσεις εξωτερικής,
-   *  όλα τα άλλα σταθερά. Κενό = κατά περιοχή του WMS (areaClass). */
+   *  όλα τα άλλα σταθερά. "*" = όλοι οι χώροι της κεντρικής. Κενό = κατά περιοχή του WMS (areaClass). */
   room?: string;
   today?: Date;
 };
@@ -146,7 +146,13 @@ export function planRelocation(rows: RelRow[], params: RelParams): RelPlan {
   const clsArea = (area: string) => params.areaClass[area] ?? defaultAreaClass(area);
   // με χώρο: κατά θέση (χώρος -> μεταφέρσιμη, εξωτερική -> εξωτερική, αλλού -> σταθερή)
   const clsRow = (r: RelRow): AreaClass =>
-    !room ? clsArea(r.area) : r.pos.split(".")[0] === room ? "movable" : siteOf(r.pos) === "external" ? "offsite" : "fixed";
+    !room
+      ? clsArea(r.area)
+      : siteOf(r.pos) === "external"
+        ? "offsite"
+        : room === "*" || r.pos.split(".")[0] === room
+          ? "movable"
+          : "fixed";
   const excluded = new Set(params.excluded);
 
   const areaMap = new Map<string, { area: string; rows: number; qty: number; cls: AreaClass }>();
@@ -166,7 +172,7 @@ export function planRelocation(rows: RelRow[], params: RelParams): RelPlan {
     const pq = palletQty(h);
     const onsiteRows = rs.filter((r) => clsRow(r) !== "offsite");
     const movableRows = rs.filter((r) => clsRow(r) === "movable");
-    if (room && !movableRows.length) continue; // ανάλυση μόνο για ό,τι έχει απόθεμα στον χώρο
+    if (room && room !== "*" && !movableRows.length) continue; // ανάλυση μόνο για ό,τι έχει απόθεμα στον χώρο
     const onsite = onsiteRows.reduce((s, r) => s + r.qty, 0);
     const movable = movableRows.reduce((s, r) => s + r.qty, 0);
     const offsite = rs.filter((r) => clsRow(r) === "offsite").reduce((s, r) => s + r.qty, 0);

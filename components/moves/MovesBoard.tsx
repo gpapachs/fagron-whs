@@ -9,6 +9,7 @@ import { loadPdfFonts } from "@/lib/pdfFonts";
 import LivePill from "@/components/LivePill";
 import { useWmsLive } from "@/lib/live";
 import type { MoveRow } from "@/lib/exports";
+import { loadLegacy } from "@/lib/legacy";
 
 type F = { item: string; lot: string; serial: string; customer: string; from: string; to: string; fromPos: string; toPos: string; type: string; doc: string };
 const LIMIT = 2000;
@@ -30,6 +31,9 @@ export default function MovesBoard({ userEmail, role }: { userEmail: string | nu
   const [last, setLast] = useState<string | null | undefined>(undefined);
   const [auto, setAuto] = useState(true); // live: ξανατρέχει την αναζήτηση όταν έρθουν νέες κινήσεις
   const [newIds, setNewIds] = useState<Set<string>>(new Set());
+  // με αναζήτηση κωδικού: μαζί και οι κινήσεις των παλιών κωδικών του (π.χ. 40-… για 41-…)
+  const [withLegacy, setWithLegacy] = useState(true);
+  const [newOf, setNewOf] = useState<Map<string, string>>(new Map());
   const searched = rows !== null;
   const live = useWmsLive((sig) => {
     if (sig.key !== "moves") return;
@@ -54,7 +58,7 @@ export default function MovesBoard({ userEmail, role }: { userEmail: string | nu
   function filterLabels() {
     const out: string[] = [];
     if (f.from || f.to) out.push(`${f.from ? f.from.split("-").reverse().join("/") : "…"} – ${f.to ? f.to.split("-").reverse().join("/") : "…"}`);
-    if (f.item) out.push(`κωδικός ${f.item}`);
+    if (f.item) out.push(`κωδικός ${f.item}${withLegacy && newOf.size ? " (+ παλιοί κωδικοί)" : ""}`);
     if (f.lot) out.push(`batch ${f.lot}`);
     if (f.serial) out.push(`serial ${f.serial}`);
     if (f.customer) out.push(`πελάτης «${f.customer}»`);
@@ -78,7 +82,13 @@ export default function MovesBoard({ userEmail, role }: { userEmail: string | nu
       let q = createClient()
         .from("wms_moves_v")
         .select("id, moved_at, type, doc, item, description, lot, serial, qty, from_pos, to_pos, customer, username", { count: "exact" });
-      if (f.item.trim()) q = q.ilike("item", `${esc(f.item)}%`);
+      if (f.item.trim()) {
+        const olds = withLegacy ? await loadLegacy(f.item) : null;
+        const list = olds ? [...olds.newOf.keys()] : [];
+        setNewOf(olds?.newOf ?? new Map());
+        if (list.length && list.length <= 400) q = q.or(`item.ilike.${esc(f.item)}%,item.in.(${list.map((c) => `"${c}"`).join(",")})`);
+        else q = q.ilike("item", `${esc(f.item)}%`);
+      } else setNewOf(new Map());
       if (f.lot.trim()) q = q.ilike("lot", `%${esc(f.lot)}%`);
       if (f.serial.trim()) q = q.ilike("serial", `%${esc(f.serial)}%`);
       if (f.customer.trim()) q = q.ilike("customer", `%${esc(f.customer)}%`);
@@ -176,6 +186,9 @@ export default function MovesBoard({ userEmail, role }: { userEmail: string | nu
           {field("toPos", "Προς θέση", "π.χ. 99.")}
           {field("type", "Είδος κίνησης", "π.χ. αποστολή")}
           {field("doc", "Παραστατικό")}
+          <label className="st-check" title="Με αναζήτηση κωδικού, έρχονται και οι κινήσεις του παλιού κωδικού που αντικατέστησε (π.χ. 40-… για 41-…)">
+            <input type="checkbox" checked={withLegacy} onChange={(e) => setWithLegacy(e.target.checked)} /> Και οι παλιοί κωδικοί
+          </label>
           <div className="mv-buttons">
             <button type="submit" className="btn primary" disabled={loading}>
               {loading ? "Αναζήτηση…" : "Αναζήτηση"}
@@ -227,6 +240,11 @@ export default function MovesBoard({ userEmail, role }: { userEmail: string | nu
                       <button type="button" className="st-link" onClick={() => setF({ ...f, item: r.item })} title="Φίλτρο σε αυτόν τον κωδικό">
                         {r.item}
                       </button>
+                      {newOf.get(r.item) && (
+                        <div className="dim rl-legacy" title="Παλιός κωδικός — αντικαταστάθηκε">
+                          πρώην του {newOf.get(r.item)}
+                        </div>
+                      )}
                     </td>
                     <td className="st-desc" data-label="Περιγραφή">{r.description}</td>
                     <td className="mono" data-label="Batch">{r.lot}</td>
