@@ -781,6 +781,46 @@ function Sync-Positions([switch]$force) {
   Log ("Θέσεις WMS: {0} (στήλες: {1}){2}" -f $rows.Count, ($cols -join ', '), $(if ($gone) { " · αφαιρέθηκαν $gone" } else { '' }))
 }
 
+# Πρώτη εισαγωγή κάθε παρτίδας από ΟΛΟ το ιστορικό του WMS (οι κινήσεις στην εφαρμογή ξεκινούν 01/2026).
+# Για την «Εισαγωγή» στη Μεταφορά αποθέματος (και τον παλιό 40* κωδικό). Μία φορά την εβδομάδα. Μόνο SELECT.
+function Sync-LotReceipts([switch]$force) {
+  $mark = Join-Path $Here 'lot-receipts.last'
+  if (-not $force -and (Test-Path $mark) -and ((Get-Item $mark).LastWriteTime -gt (Get-Date).AddDays(-7))) { return }
+  # ανά έτος (μικρότερα ερωτήματα στο WMS), κρατάμε τη νωρίτερη ημερομηνία ανά κωδικό + παρτίδα
+  $first = @{}
+  $y0 = 2010; $o = Opt 'LOT_RECEIPT_FROM_YEAR'; if ($o -match '^\d{4}$') { $y0 = [int]$o }
+  for ($y = $y0; $y -le (Get-Date).Year; $y++) {
+    $q = @"
+select i.code as item, s.Lot as lot,
+       min(cast(cast(s.RecDate as date) as datetime) + cast(cast(s.RecTime as time) as datetime)) as first_at
+from dbo.ms_StockTrans s
+join dbo.ms_Item i on i.ID = s.ItemId
+left join dbo.ms_Pos pf on pf.ID = s.FromPosId
+join dbo.ms_Pos pt on pt.ID = s.ToPosId
+where s.RecDate >= '$($y)0101' and s.RecDate < '$($y + 1)0101' and pf.ID is null and coalesce(s.Lot, '') <> ''
+group by i.code, s.Lot
+"@
+    $t = Invoke-Sql $q
+    foreach ($r in $t.Rows) {
+      $at = $r['first_at']; if (-not ($at -is [DateTime])) { continue }
+      $k = (To-Str $r['item']).ToUpperInvariant() + "`t" + (To-Str $r['lot'])
+      if (-not $first.ContainsKey($k) -or $at -lt $first[$k]) { $first[$k] = $at }
+    }
+  }
+  $rows = New-Object Collections.ArrayList
+  foreach ($k in $first.Keys) {
+    $parts = $k -split "`t", 2; $at = $first[$k]
+    [void]$rows.Add(@{ item = $parts[0]; lot = $parts[1]; first_at = $at.ToString('yyyy-MM-ddTHH:mm:ss', $Inv) + ([DateTimeOffset]::new($at)).ToString('zzz') })
+  }
+  $size = 2000
+  for ($i = 0; $i -lt $rows.Count; $i += $size) {
+    $chunk = $rows.GetRange($i, [math]::Min($size, $rows.Count - $i)).ToArray()
+    [void](Sb-Request 'POST' '/rest/v1/rpc/wms_lot_receipt_upload' @{ p_rows = [object[]]$chunk })
+  }
+  Set-Content -Path $mark -Value (Get-Date -Format s) -Encoding UTF8
+  Log ("Εισαγωγές παρτίδων (όλο το ιστορικό): {0}" -f $rows.Count)
+}
+
 function Convert-Moves($t) {
   $names = @($t.Columns | ForEach-Object { $_.ColumnName.ToLowerInvariant() })
   $has = @{}; foreach ($n in $names) { $has[$n] = $true }
@@ -1227,6 +1267,7 @@ Sync-Moves
 try { Backfill-Moves } catch { Log ("Κινήσεις (αναδρομικά): " + $_) }
 try { Sync-ItemPack } catch { Log ("Παλέτες / συσκευασίες: " + $_) }
 try { Sync-Positions } catch { Log ("Θέσεις WMS: " + $_) }
+try { Sync-LotReceipts } catch { Log ("Εισαγωγές παρτίδων: " + $_) }
 foreach ($oc in 'SALEXPORTCL', 'SALEXPORTLS') { try { Sync-Orders $oc } catch { Log ("Orders $($oc): " + $_) } }
 try { Sync-Collecting 'SALEXPORTLS' } catch { Log ("Σε συλλογή: " + $_) }
 try { Refresh-Completed 'SALEXPORTLS' } catch { Log ("Ολοκληρωμένες / διαγραμμένες: " + $_) }

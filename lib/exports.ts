@@ -1382,6 +1382,7 @@ export function relocationWorkbook(XLSX: XLSXLib, p: RelPlanLike, meta: StockExp
         "Παρτίδα": l.lot,
         "Λήξη": dOnly(l.expiry),
         "Εισαγωγή παρτίδας": dOnly(l.received),
+        "Εισαγωγή από": l.receivedFrom ?? "",
         "Ποσότητα θέσης": l.posQty,
         "Να φύγει": l.moveQty,
         "Ολόκληρη": l.full ? "ναι" : "μέρος",
@@ -1389,7 +1390,7 @@ export function relocationWorkbook(XLSX: XLSXLib, p: RelPlanLike, meta: StockExp
         "Αδειάζει η θέση": l.freesPosition ? "ΝΑΙ" : "",
         "✓": "",
       })),
-      [16, 24, 12, 40, 18, 11, 13, 12, 11, 9, 8, 10, 5]
+      [16, 24, 12, 40, 18, 11, 13, 12, 12, 11, 9, 8, 10, 5]
     ),
     opt.sheet ?? "Λίστα μεταφοράς"
   );

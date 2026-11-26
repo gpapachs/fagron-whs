@@ -799,6 +799,7 @@ function LotTable({ p, lines: lines0, picked, onPick, onLot }: { p: ItemPlan; li
                                 {first && (
                                   <td className="mono" data-label="Εισαγωγή" rowSpan={span} title="Πρώτη παραλαβή της παρτίδας">
                                     {fd(l.received) || <span className="dim">—</span>}
+                                    {l.receivedFrom && <div className="dim rl-legacy" title="Η παρτίδα παρελήφθη αρχικά με τον παλιό κωδικό">από {l.receivedFrom}</div>}
                                   </td>
                                 )}
                                 <td data-label="Pick list">

@@ -29,6 +29,8 @@ export type RelRow = {
   legacy_codes: string | null;
   legacy_out_qty: number;
   legacy_first_move: string | null;
+  /** ο παλιός κωδικός από τον οποίο ήρθε η ημερομηνία εισαγωγής της παρτίδας */
+  lot_receipt_from?: string | null;
 };
 
 export type AreaClass = "movable" | "fixed" | "offsite";
@@ -61,6 +63,8 @@ export type MoveLine = {
   expiry: string | null;
   /** πρώτη παραλαβή (εισαγωγή) της παρτίδας στην αποθήκη */
   received: string | null;
+  /** η εισαγωγή βρέθηκε στον παλιό κωδικό (π.χ. 40-…) */
+  receivedFrom?: string | null;
   posQty: number;
   moveQty: number;
   full: boolean; // φεύγει όλη η γραμμή της θέσης
@@ -146,6 +150,7 @@ export function normRel(r: Record<string, unknown>): RelRow {
     legacy_codes: (r.legacy_codes as string | null) || null,
     legacy_out_qty: num(r.legacy_out_qty),
     legacy_first_move: (r.legacy_first_move as string | null) ?? null,
+    lot_receipt_from: (r.lot_receipt_from as string | null) ?? null,
   };
 }
 
@@ -401,7 +406,7 @@ export function explain(i: ItemPlan, params: RelParams, isNew: boolean): { short
 }
 
 function mk(r: RelRow, q: number, full: boolean, palQ: number | null): MoveLine {
-  return { item: r.item, description: r.description, pos: r.pos, area: r.area, lot: r.lot, expiry: r.expiry, received: r.lot_first_receipt, posQty: r.qty, moveQty: q, full, pallets: palletsFor(q, palQ), freesPosition: false };
+  return { item: r.item, description: r.description, pos: r.pos, area: r.area, lot: r.lot, expiry: r.expiry, received: r.lot_first_receipt, receivedFrom: r.lot_receipt_from ?? null, posQty: r.qty, moveQty: q, full, pallets: palletsFor(q, palQ), freesPosition: false };
 }
 
 export const CATEGORY_TXT: Record<Category, string> = {
