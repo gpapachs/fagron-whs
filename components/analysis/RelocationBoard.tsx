@@ -563,6 +563,20 @@ function AreasTable({ areas, render }: { areas: AreaRow[]; render: (a: AreaRow) 
   );
 }
 
+/** Τελευταία εισαγωγή: ημερομηνία + τεμάχια */
+function LastRcv({ i }: { i: ItemPlan }) {
+  const r = i.lastReceipt;
+  if (!r) return <span className="dim">—</span>;
+  return (
+    <span className="rl-lastrcv" title={r.qty == null ? "Από το ιστορικό του WMS (πριν από τις κινήσεις της εφαρμογής) — χωρίς τεμάχια" : "Τεμάχια που μπήκαν εκείνη την ημέρα"}>
+      <span className="mono">{fd(r.at)}</span>
+      {r.qty != null && <b> · {fq(r.qty, 0)} τεμ.</b>}
+      {r.from && <div className="dim rl-legacy">από {r.from}</div>}
+    </span>
+  );
+}
+const lastRcvAt = (i: ItemPlan) => i.lastReceipt?.at ?? null;
+
 const coverNum = (i: ItemPlan) => (i.cover == null ? (i.onsite > 0 ? Number.MAX_VALUE : null) : i.cover);
 
 /** Θέσεις από τις οποίες δεν παίρνουμε ποτέ απόθεμα (κοινές για όλους). */
@@ -676,6 +690,7 @@ function MoveGroups({
       { h: "Θέσεις", v: (p) => new Set(p.lines.map((l) => l.pos)).size, num: true },
       { h: "Κεντρική", v: (p) => p.onsite, num: true },
       { h: "Κάλυψη", v: coverNum, num: true },
+      { h: "Τελ. εισαγωγή", v: lastRcvAt, num: true, title: "Τελευταία εισαγωγή του κωδικού και τεμάχια" },
       { h: "Σύνολο να φύγει ✎", v: (p) => p.moveQty, num: true },
       { h: "Παλέτες", v: (p) => p.movePallets, num: true },
       { h: "Μένει", v: (p) => p.onsite - p.moveQty, num: true },
@@ -753,6 +768,7 @@ function MoveGroups({
                     </td>
                     <td className="num" data-label="Κεντρική">{fq(p.onsite, 0)}</td>
                     <td className="num" data-label="Κάλυψη">{p.cover == null ? <span title="Χωρίς ανάλωση">∞</span> : p.cover >= 24 ? `${fq(p.cover / 12, 1)} έτη` : `${fq(p.cover, 0)} μ.`}</td>
+                    <td className="num" data-label="Τελ. εισαγωγή"><LastRcv i={p} /></td>
                     <td className="num" data-label="Να φύγει">
                       <QtyInput item={p.item} value={p.moveQty} suggested={p.suggested ?? p.moveQty} manual={p.manual} onQty={onQty} />
                     </td>
@@ -761,7 +777,7 @@ function MoveGroups({
                   </tr>
                   {isOpen && (
                     <tr className="rl-sub">
-                      <td colSpan={12}>
+                      <td colSpan={13}>
                         {p.why.note && <p className="rl-why rl-why-note">✎ {p.why.note}</p>}
                         <ul className="rl-whylong" aria-label="Γιατί">
                           {p.why.long.map((t, k) => (
@@ -777,7 +793,7 @@ function MoveGroups({
             })}
             {!items.length && (
               <tr>
-                <td colSpan={12} className="st-empty">Τίποτα να μεταφερθεί με αυτές τις ρυθμίσεις.</td>
+                <td colSpan={13} className="st-empty">Τίποτα να μεταφερθεί με αυτές τις ρυθμίσεις.</td>
               </tr>
             )}
           </tbody>
@@ -917,6 +933,7 @@ function ItemsTable({
       { h: "Εξωτ.", v: (i) => i.offsite, num: true },
       { h: "/ μήνα", v: (i) => i.perMonth, num: true },
       { h: "Κάλυψη", v: coverNum, num: true },
+      { h: "Τελ. εισαγωγή", v: lastRcvAt, num: true, title: "Τελευταία εισαγωγή του κωδικού και τεμάχια" },
       { h: "Μένει", v: (i) => i.keep, num: true },
       { h: returns ? "Να έρθει πίσω" : "Φεύγει ✎", v: (i) => (returns ? i.returnQty : i.moveQty), num: true },
       { h: "Παλ.", v: (i) => (returns ? null : i.movePallets), num: true },
@@ -950,6 +967,7 @@ function ItemsTable({
               <td className="num" data-label="Εξωτερική">{i.offsite ? fq(i.offsite, 0) : ""}</td>
               <td className="num" data-label="/ μήνα">{i.perMonth ? fq(i.perMonth, 1) : "—"}</td>
               <td className="num" data-label="Κάλυψη">{i.cover == null ? (i.onsite > 0 ? "∞" : "—") : i.cover >= 24 ? `${fq(i.cover / 12, 1)} έτη` : `${fq(i.cover, 0)} μ.`}</td>
+              <td className="num" data-label="Τελ. εισαγωγή"><LastRcv i={i} /></td>
               <td className="num" data-label="Μένει">{fq(i.keep, 0)}</td>
               <td className="num" data-label={returns ? "Πίσω" : "Φεύγει"}>
                 {returns ? <b>{fq(i.returnQty, 0)}</b> : i.movable > 0 ? <QtyInput item={i.item} value={i.moveQty} suggested={i.suggested ?? i.moveQty} manual={i.manual} onQty={onQty} /> : ""}
@@ -964,7 +982,7 @@ function ItemsTable({
           ))}
           {!rows.length && (
             <tr>
-              <td colSpan={13} className="st-empty">Τίποτα.</td>
+              <td colSpan={14} className="st-empty">Τίποτα.</td>
             </tr>
           )}
         </tbody>

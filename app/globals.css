@@ -1621,3 +1621,4 @@ button.cell.wp-cell { font-size: 10px; height: 26px; padding: 0 6px; letter-spac
 .rl-lotqty { display: inline-flex; gap: 6px; align-items: center; justify-content: flex-end; }
 .rl-subtable tr.rl-stays td { color: var(--ink-dim); }
 .rl-why-note { color: var(--green, #2f8f5b); font-weight: 600; }
+.rl-lastrcv { white-space: nowrap; }

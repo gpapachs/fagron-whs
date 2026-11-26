@@ -31,6 +31,10 @@ export type RelRow = {
   legacy_first_move: string | null;
   /** ο παλιός κωδικός από τον οποίο ήρθε η ημερομηνία εισαγωγής της παρτίδας */
   lot_receipt_from?: string | null;
+  /** τελευταία εισαγωγή του κωδικού: ημερομηνία, τεμάχια της ημέρας, παλιός κωδικός αν ήρθε από εκεί */
+  item_last_receipt?: string | null;
+  item_last_receipt_qty?: number | null;
+  item_last_receipt_from?: string | null;
 };
 
 export type AreaClass = "movable" | "fixed" | "offsite";
@@ -101,6 +105,8 @@ export type ItemPlan = {
   effMonths: number; // μήνες στους οποίους μετρήθηκε η ανάλωση
   need: number; // ανάλωση μηνών + ανοιχτές παραγγελίες, πριν τη στρογγυλοποίηση σε παλέτες
   firstReceipt: string | null;
+  /** τελευταία εισαγωγή: ημερομηνία + τεμάχια (null αν είναι μόνο από το ιστορικό) + παλιός κωδικός */
+  lastReceipt?: { at: string; qty: number | null; from: string | null } | null;
   /** γιατί προτείνεται αυτή η κίνηση: σύντομα και αναλυτικά */
   why: { short: string; long: string[]; note?: string };
   /** ποσότητα που όρισε ο χρήστης (null = η προτεινόμενη) */
@@ -153,6 +159,9 @@ export function normRel(r: Record<string, unknown>): RelRow {
     legacy_out_qty: num(r.legacy_out_qty),
     legacy_first_move: (r.legacy_first_move as string | null) ?? null,
     lot_receipt_from: (r.lot_receipt_from as string | null) ?? null,
+    item_last_receipt: (r.item_last_receipt as string | null) ?? null,
+    item_last_receipt_qty: r.item_last_receipt_qty == null ? null : Number(r.item_last_receipt_qty),
+    item_last_receipt_from: (r.item_last_receipt_from as string | null) ?? null,
   };
 }
 
@@ -301,6 +310,7 @@ export function planRelocation(rows: RelRow[], params: RelParams): RelPlan {
       effMonths,
       need,
       firstReceipt: h.item_first_receipt,
+      lastReceipt: h.item_last_receipt ? { at: h.item_last_receipt, qty: h.item_last_receipt_qty ?? null, from: h.item_last_receipt_from ?? null } : null,
       why: { short: "", long: [] },
       manual,
       suggested,

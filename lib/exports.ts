@@ -1407,6 +1407,8 @@ export function relocationWorkbook(XLSX: XLSXLib, p: RelPlanLike, meta: StockExp
         "Κατανάλωση / μήνα": rnd(i.perMonth),
         "Κάλυψη (μήνες)": i.cover == null ? "—" : Math.round(i.cover),
         "Ανοιχτές παραγγελίες": i.demand || "",
+        "Τελευταία εισαγωγή": dOnly(i.lastReceipt?.at ?? null),
+        "Τεμ. τελευταίας εισαγωγής": i.lastReceipt?.qty != null ? rnd(i.lastReceipt.qty, 3) : "",
         "Να μείνει": rnd(i.keep, 3),
         "Να φύγει": rnd(i.moveQty, 3),
         "Παλέτες να φύγουν": i.movePallets ?? "",
@@ -1417,7 +1419,7 @@ export function relocationWorkbook(XLSX: XLSXLib, p: RelPlanLike, meta: StockExp
         "Κατανάλωση παλιών": i.legacyOut ? rnd(i.legacyOut, 3) : "",
         "Γιατί": [i.why?.note, ...(i.why?.long ?? [])].filter(Boolean).join(" "),
       })),
-      [12, 40, 16, 11, 11, 12, 10, 11, 11, 11, 10, 10, 14, 13, 16, 12, 90]
+      [12, 40, 16, 11, 11, 12, 10, 11, 13, 12, 11, 11, 10, 10, 14, 13, 16, 12, 90]
     ),
     "Ανά κωδικό"
   );
