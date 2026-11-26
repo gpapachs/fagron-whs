@@ -3,6 +3,11 @@
 Η έκδοση φαίνεται πάνω αριστερά, δίπλα στο λογότυπο (περάστε το ποντίκι για
 τον κωδικό build). Νέα έκδοση: αλλάζει το `version` στο `package.json`.
 
+## 1.56.2
+- Ζήτηση περιεκτών: αναγνώριση του **FSEE OPEN ORDERS** (Item Code / Qty Pending / Request Date / Customer /
+  Tradecode / Stock). Από τις ανοιχτές παραγγελίες μετράει μόνο ό,τι **πρέπει να παραχθεί**: εκκρεμότητα −
+  απόθεμα τελικού − πλάνο παραγωγής του ίδιου κωδικού (όχι διπλομέτρηση με το πλάνο)
+
 ## 1.56.1
 - Ζήτηση περιεκτών: αναγνώριση του **Production plan** (Code / Qty for Production / Production Date / Customer /
   Order Invoice)· μετράει ό,τι **μένει να παραχθεί** (Qty − Produced Qty) και όχι οι γραμμές με Completed = YES.

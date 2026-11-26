@@ -4,7 +4,7 @@
 import { siteOf } from "./site.ts";
 
 export type DemandKind = "plan" | "orders" | "wms";
-export type DemandLine = { kind: DemandKind; product: string; description: string | null; qty: number; due: string | null; ref: string | null };
+export type DemandLine = { kind: DemandKind; product: string; description: string | null; qty: number; due: string | null; ref: string | null; stock?: number | null };
 export type SpecComp = { code: string; description: string; qty: number; unit: string };
 export type Spec = { id: string; product_code: string; description: string; components: SpecComp[] };
 export type StockLite = { item: string; position: string; qty: number; description: string };
@@ -30,7 +30,7 @@ export type ContainerNeed = {
   firstDue: string | null;
   sources: NeedSource[];
 };
-export type DemandResult = { needs: ContainerNeed[]; noSpec: { product: string; description: string | null; qty: number; kinds: DemandKind[] }[]; lines: number };
+export type DemandResult = { orderInfo: Map<string, { pending: number; stock: number; plan: number; toMake: number }>; needs: ContainerNeed[]; noSpec: { product: string; description: string | null; qty: number; kinds: DemandKind[] }[]; lines: number };
 
 export function computeDemand(lines: DemandLine[], specs: Spec[], newOf: Map<string, string>, stock: StockLite[], until: string | null = null): DemandResult {
   // η πρώτη προδιαγραφή ανά τελικό (οι υπόλοιπες είναι εναλλακτικές)
@@ -43,11 +43,33 @@ export function computeDemand(lines: DemandLine[], specs: Spec[], newOf: Map<str
     else e.central += s.qty;
     st.set(s.item, e);
   }
+  // Ανοιχτές παραγγελίες: μετράει μόνο ό,τι δεν καλύπτεται από το απόθεμα του τελικού και από το πλάνο παραγωγής
+  // (αλλιώς οι ίδιοι περιέκτες θα μετρούσαν δύο φορές). Μοιράζεται στις γραμμές με σειρά ημερομηνίας.
+  const inScope = lines.filter((l) => !(until && l.due && l.due > until));
+  const planOf = new Map<string, number>();
+  for (const l of inScope) if (l.kind === "plan") planOf.set(l.product, (planOf.get(l.product) ?? 0) + l.qty);
+  const ordersBy = new Map<string, DemandLine[]>();
+  for (const l of inScope) if (l.kind === "orders") ordersBy.set(l.product, [...(ordersBy.get(l.product) ?? []), l]);
+  const effective: DemandLine[] = inScope.filter((l) => l.kind !== "orders");
+  const orderInfo = new Map<string, { pending: number; stock: number; plan: number; toMake: number }>();
+  for (const [prod, ls] of ordersBy) {
+    const pending = ls.reduce((t, l) => t + l.qty, 0);
+    const stockF = Math.max(0, ...ls.map((l) => l.stock ?? 0));
+    const plan = planOf.get(prod) ?? 0;
+    let toMake = Math.max(0, pending - stockF - plan);
+    orderInfo.set(prod, { pending, stock: stockF, plan, toMake });
+    for (const l of [...ls].sort((a, b) => (a.due ?? "9999").localeCompare(b.due ?? "9999")).reverse()) {
+      // οι νεότερες παραγγελίες μένουν ακάλυπτες πρώτες (οι παλιές εξυπηρετούνται από το απόθεμα)
+      if (toMake <= 0) break;
+      const q = Math.min(l.qty, toMake);
+      effective.push({ ...l, qty: q });
+      toMake -= q;
+    }
+  }
   const m = new Map<string, ContainerNeed>();
   const noSpec = new Map<string, { product: string; description: string | null; qty: number; kinds: Set<DemandKind> }>();
   let n = 0;
-  for (const l of lines) {
-    if (until && l.due && l.due > until) continue;
+  for (const l of effective) {
     n++;
     const spec = specOf.get(l.product.toUpperCase());
     if (!spec) {
@@ -86,6 +108,7 @@ export function computeDemand(lines: DemandLine[], specs: Spec[], newOf: Map<str
   });
   needs.sort((a, b) => b.short - a.short || b.fromExternal - a.fromExternal || b.total - a.total);
   return {
+    orderInfo,
     needs,
     noSpec: [...noSpec.values()].map((x) => ({ ...x, kinds: [...x.kinds] })).sort((a, b) => b.qty - a.qty),
     lines: n,
@@ -95,7 +118,7 @@ export function computeDemand(lines: DemandLine[], specs: Spec[], newOf: Map<str
 // ------------------------------------------------------------ Excel
 
 export type Cell = string | number | boolean | Date | null | undefined;
-export type ColMap = { product: number; qty: number; due: number; desc: number; ref: number; cust: number; produced: number; done: number };
+export type ColMap = { product: number; qty: number; due: number; desc: number; ref: number; cust: number; produced: number; done: number; stock: number };
 const CODE_RE = /^\d{2}-\d{2}-\d{3}/;
 const s = (v: Cell) => (v instanceof Date ? v.toISOString() : String(v ?? "")).trim();
 const norm = (v: Cell) => s(v).toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
@@ -161,7 +184,7 @@ export function detectColumns(rows: Cell[][]): { header: number; cols: ColMap; n
   const data = rows.slice(firstData, firstData + 300);
   const numeric = (c: number) => data.filter((r) => toNum(r[c]) != null).length;
   const dates = (c: number) => data.filter((r) => r[c] instanceof Date || /^\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}/.test(s(r[c]))).length;
-  let qty = pick(/QTY FOR PRODUCTION|ΠΡΟΣ ΠΑΡΑΓΩΓΗ|ΠΟΣΟΤΗΤΑ ΠΑΡΑΓΩΓΗΣ/, /^(ΠΟΣΟΤΗΤΑ|ΠΟΣ\.?|QTY|QUANTITY|ΤΕΜΑΧΙΑ|ΤΕΜ\.?|PCS)$/);
+  let qty = pick(/QTY FOR PRODUCTION|ΠΡΟΣ ΠΑΡΑΓΩΓΗ|ΠΟΣΟΤΗΤΑ ΠΑΡΑΓΩΓΗΣ/, /QTY PENDING|^PENDING|ΥΠΟΛΟΙΠ|ΕΚΚΡΕΜ/, /^(ΠΟΣΟΤΗΤΑ|ΠΟΣ\.?|QTY|QUANTITY|ΤΕΜΑΧΙΑ|ΤΕΜ\.?|PCS)$/);
   if (qty < 0) {
     const i = H.findIndex((h, k) => /ΠΟΣΟΤ|QTY|QUANT|ΤΕΜΑΧ/.test(h) && !/KG|NEEDED|RESERV|PRODUCED|ΠΑΡΗΧΘ|BULK/.test(h) && !used.includes(k));
     qty = i >= 0 ? i : [...Array(width).keys()].filter((c) => !used.includes(c)).sort((a, b) => numeric(b) - numeric(a))[0] ?? -1;
@@ -169,7 +192,7 @@ export function detectColumns(rows: Cell[][]): { header: number; cols: ColMap; n
   }
   const produced = pick(/^PRODUCED|ΠΑΡΗΧΘ|ΠΑΡΑΧΘ|ΕΚΤΕΛΕΣΜ/);
   const done = pick(/^COMPLETED$|ΟΛΟΚΛΗΡ/);
-  let due = pick(/PRODUCTION DATE|ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΓΩΓ|ΗΜ\.? ΠΑΡΑΓΩΓ/, /ΠΑΡΑΔΟΣ|DELIVERY|DUE DATE/, /^(ΗΜΕΡΟΜΗΝΙΑ|DATE|ΗΜ\/ΝΙΑ)$/);
+  let due = pick(/PRODUCTION DATE|ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΓΩΓ|ΗΜ\.? ΠΑΡΑΓΩΓ/, /^(REQUEST DATE|REQUESTED DATE|DUE DATE|ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΔΟΣΗΣ|ΠΑΡΑΔΟΣΗ)$/, /^(ESTIMATED DELIVERY DATE|DELIVERY DATE)$/, /^(ΗΜΕΡΟΜΗΝΙΑ|DATE|ΗΜ\/ΝΙΑ)$/);
   if (due < 0) {
     const best = [...Array(width).keys()].filter((c) => !used.includes(c)).sort((a, b) => dates(b) - dates(a))[0];
     due = best != null && dates(best) > 0 ? best : -1;
@@ -177,15 +200,17 @@ export function detectColumns(rows: Cell[][]): { header: number; cols: ColMap; n
   }
   const desc = pick(/^(DESCRIPTION|ΠΕΡΙΓΡΑΦΗ|ΠΕΡΙΓΡΑΦΗ ΕΙΔΟΥΣ|ITEM NAME|PRODUCT NAME)$/, /ΠΕΡΙΓΡ|DESCR/);
   const cust = pick(/^(CUSTOMER|ΠΕΛΑΤΗΣ|ΕΠΩΝΥΜΙΑ)$/, /^CUSTOMER(?! EXTRA)|ΠΕΛΑΤ/);
-  const ref = pick(/ORDER INVOICE|ΑΡ\.? ΠΑΡΑΓΓ|ΠΑΡΑΓΓΕΛΙΑ|ORDER NO|ORDER$/);
-  return { header, cols: { product, qty, due, desc, ref, cust, produced, done }, names };
+  const ref = pick(/ORDER INVOICE|TRADECODE|ΑΡ\.? ΠΑΡΑΓΓ|ΠΑΡΑΓΓΕΛΙΑ|ORDER NO|ORDER$/);
+  const stock = pick(/^(STOCK|ΑΠΟΘΕΜΑ|ΥΠΟΛΟΙΠΟ ΑΠΟΘΗΚΗΣ)$/);
+  return { header, cols: { product, qty, due, desc, ref, cust, produced, done, stock }, names };
 }
 
 const yes = (v: Cell) => /^(YES|ΝΑΙ|Y|TRUE|1|X|✓)$/i.test(s(v)) || v === true;
 
 /** Γραμμές ζήτησης: μένει να παραχθεί = ποσότητα − παραχθέντα· οι ολοκληρωμένες γραμμές δεν μετράνε */
-export function readDemand(rows: Cell[][], cols: ColMap, header: number): { product: string; description: string | null; qty: number; due: string | null; ref: string | null; row: number }[] {
-  const out: { product: string; description: string | null; qty: number; due: string | null; ref: string | null; row: number }[] = [];
+export type ReadLine = { product: string; description: string | null; qty: number; due: string | null; ref: string | null; row: number; stock: number | null };
+export function readDemand(rows: Cell[][], cols: ColMap, header: number): ReadLine[] {
+  const out: ReadLine[] = [];
   for (let i = header + 1; i < rows.length; i++) {
     const r = rows[i] ?? [];
     const code = s(r[cols.product]).toUpperCase().match(CODE_RE)?.[0];
@@ -202,6 +227,7 @@ export function readDemand(rows: Cell[][], cols: ColMap, header: number): { prod
       due: cols.due >= 0 ? toDate(r[cols.due]) : null,
       ref: ref || null,
       row: i + 1,
+      stock: cols.stock >= 0 ? toNum(r[cols.stock]) : null,
     });
   }
   return out;

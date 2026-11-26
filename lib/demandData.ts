@@ -42,11 +42,11 @@ export async function loadSpecs(): Promise<Spec[]> {
 export async function loadDemandLines(): Promise<{ lines: DemandLine[]; uploads: DemandUpload[] }> {
   const sb = createClient();
   const [rows, up] = await Promise.all([
-    fetchAll<{ kind: "plan" | "orders"; product: string; description: string | null; qty: number | string; due: string | null; ref: string | null }>(sb, "demand_lines", "kind, product, description, qty, due, ref", ["id"]).catch(() => []),
+    fetchAll<{ kind: "plan" | "orders"; product: string; description: string | null; qty: number | string; due: string | null; ref: string | null; stock: number | string | null }>(sb, "demand_lines", "kind, product, description, qty, due, ref, stock", ["id"]).catch(() => []),
     sb.from("demand_uploads").select("*"),
   ]);
   return {
-    lines: rows.map((r) => ({ ...r, qty: Number(r.qty) || 0 })),
+    lines: rows.map((r) => ({ ...r, qty: Number(r.qty) || 0, stock: r.stock == null ? null : Number(r.stock) })),
     uploads: ((up.data as DemandUpload[] | null) ?? []),
   };
 }

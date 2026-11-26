@@ -232,7 +232,7 @@ export default function DemandBoard() {
       { h: "Κωδικός", v: (n) => n.code },
       { h: "Περιγραφή", v: (n) => n.description },
       { h: "Πλάνο", v: (n) => n.need.plan, num: true },
-      { h: "Παραγγελίες", v: (n) => n.need.orders + n.need.wms, num: true },
+      { h: "Παραγγελίες", v: (n) => n.need.orders + n.need.wms, num: true, title: "Από τις ανοιχτές παραγγελίες, μόνο ό,τι δεν καλύπτεται από απόθεμα τελικού και πλάνο παραγωγής" },
       { h: "Σύνολο", v: (n) => n.total, num: true },
       { h: "Κεντρική", v: (n) => n.central, num: true },
       { h: "Εξωτερική", v: (n) => n.external, num: true },
@@ -322,6 +322,7 @@ export default function DemandBoard() {
                 ["ref", "Αρ. παραγγελίας"],
                 ["produced", "Παραχθέντα (αφαιρούνται)"],
                 ["done", "Ολοκληρωμένο (δεν μετράει)"],
+                ["stock", "Απόθεμα τελικού (παραγγελίες)"],
               ] as const
             ).map(([key, label]) => (
               <label key={key} className="field">
@@ -426,6 +427,12 @@ export default function DemandBoard() {
         </p>
       ) : (
         <>
+          {res.orderInfo.size > 0 && (
+            <p className="dim dm-foot">
+              Ανοιχτές παραγγελίες: {fq(res.orderInfo.size)} τελικά — μετράει μόνο ό,τι δεν καλύπτεται από το απόθεμα του τελικού και το πλάνο παραγωγής:{" "}
+              <b>{fq([...res.orderInfo.values()].filter((v) => v.toMake > 0).length)}</b> τελικά, <b>{fq([...res.orderInfo.values()].reduce((t, v) => t + v.toMake, 0))}</b> τεμ. να παραχθούν επιπλέον.
+            </p>
+          )}
           <KpiTiles
             active={view}
             onPick={(k) => setView(k as View)}
