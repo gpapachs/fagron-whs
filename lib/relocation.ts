@@ -51,6 +51,8 @@ export type RelParams = {
   lotQty?: Record<string, number>;
   /** θέσεις από τις οποίες δεν φεύγει ποτέ απόθεμα (ακριβής κωδικός ή αρχή του, π.χ. «06.01») */
   skipPos?: string[];
+  /** θέσεις που ανήκουν σε χώρο με άλλο πρόθεμα: κωδικός θέσης (ή αρχή του) -> χώρος */
+  posRoom?: Record<string, string>;
   today?: Date;
 };
 export type Category = "dead" | "new" | "slow" | "active" | "excluded";
@@ -180,12 +182,14 @@ export function planRelocation(rows: RelRow[], params: RelParams): RelPlan {
     const c = clsRow0(r);
     return c === "movable" && skipped(r.pos) ? "fixed" : c;
   };
+  const extra = Object.entries(params.posRoom ?? {});
+  const roomOf = (pos: string) => extra.find(([c]) => pos === c || pos.startsWith(`${c}.`))?.[1] ?? pos.split(".")[0];
   const clsRow0 = (r: RelRow): AreaClass =>
     !room
       ? clsArea(r.area)
       : siteOf(r.pos) === "external"
         ? "offsite"
-        : room === "*" || r.pos.split(".")[0] === room
+        : room === "*" || roomOf(r.pos) === room
           ? "movable"
           : "fixed";
   const excluded = new Set(params.excluded);

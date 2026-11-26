@@ -67,6 +67,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
   const [shared, setShared] = useState<Record<string, PickRec>>({});
   const [sharedInfo, setSharedInfo] = useState<{ by: string | null; at: string | null }>({ by: null, at: null });
   const [skip, setSkip] = useState<string[]>([]);
+  const [posRoom, setPosRoom] = useState<Record<string, string>>({});
   const picked = useMemo(() => new Set(Object.values(shared).flatMap((r) => r.keys)), [shared]);
   const manualMap = useMemo(() => Object.fromEntries(Object.entries(shared).filter(([, r]) => r.manual != null).map(([i, r]) => [i, Number(r.manual)])), [shared]);
   const lotMap = useMemo(() => Object.assign({}, ...Object.values(shared).map((r) => r.lot_qty ?? {})) as Record<string, number>, [shared]);
@@ -94,6 +95,8 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
     setSharedInfo({ by: last?.updated_by ?? null, at: last?.updated_at ?? null });
     const { data: sk } = await sb.from("relocation_skip_pos").select("code").order("code");
     setSkip(((sk as { code: string }[] | null) ?? []).map((r) => r.code));
+    const { data: pr } = await sb.from("relocation_pos_room").select("code, room").order("code");
+    setPosRoom(Object.fromEntries(((pr as { code: string; room: string }[] | null) ?? []).map((r) => [r.code, r.room])));
   }
   const reloadShared = useCoalesced(() => loadShared(), 800);
   useWmsLive((sig) => {
@@ -159,6 +162,16 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
     lot_qty[key] = qty ?? 0;
     putRecs({ [p.item]: { manual: null, lot_qty, keys: [itemKey(p.item)] } });
   };
+  async function saveRoomExtra(text: string) {
+    const room = s.room;
+    const codes = [...new Set(text.split(/[\s,;]+/).map((c) => c.trim()).filter(Boolean))];
+    setPosRoom((cur) => ({ ...Object.fromEntries(Object.entries(cur).filter(([, r]) => r !== room)), ...Object.fromEntries(codes.map((c) => [c, room])) }));
+    const { error } = await createClient().rpc("relocation_pos_room_set", { p_room: room, p_codes: codes });
+    if (error) {
+      setError(`Δεν αποθηκεύτηκαν οι θέσεις του χώρου: ${error.message}`);
+      loadShared();
+    }
+  }
   async function saveSkip(text: string) {
     const codes = [...new Set(text.split(/[\s,;]+/).map((c) => c.trim()).filter(Boolean))];
     setSkip(codes);
@@ -211,6 +224,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
       manual: manualMap,
       lotQty: lotMap,
       skipPos: skip,
+      posRoom,
     });
     if (s.noLeaflets) {
       // θέση που κρατά και leaflets δεν «αδειάζει»
@@ -219,7 +233,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
       for (const l of p.lines) if (withLeaflets.has(l.pos)) l.freesPosition = false;
     }
     return p;
-  }, [rows, loaded, s.keepMonths, s.includeNew, s.partial, s.areaClass, s.excluded, s.room, s.noLeaflets, manualMap, lotMap, skip]);
+  }, [rows, loaded, s.keepMonths, s.includeNew, s.partial, s.areaClass, s.excluded, s.room, s.noLeaflets, manualMap, lotMap, skip, posRoom]);
 
   async function savePallet(item: string, qty: number | null) {
     const prev = rows;
@@ -333,6 +347,15 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
               <option value="">Κατά περιοχή WMS</option>
             </select>
           </label>
+          {s.room && s.room !== "*" && (
+            <CodesField
+              label={`Ανήκουν επίσης στον χώρο ${s.room}`}
+              title={`Θέσεις με άλλο πρόθεμα που είναι φυσικά μέσα στον χώρο ${s.room} (π.χ. 16.01.01.01). Χωρίστε με κόμμα· «16.01» = όλες οι θέσεις που ξεκινούν έτσι. Κοινό για όλους.`}
+              placeholder="π.χ. 16.01.01.01"
+              codes={Object.entries(posRoom).filter(([, r]) => r === s.room).map(([c]) => c)}
+              onSave={saveRoomExtra}
+            />
+          )}
           <SkipField codes={skip} onSave={saveSkip} />
           <label className="st-check">
             <input type="checkbox" checked={s.partial} onChange={(e) => save({ ...s, partial: e.target.checked })} />
@@ -544,18 +567,30 @@ const coverNum = (i: ItemPlan) => (i.cover == null ? (i.onsite > 0 ? Number.MAX_
 
 /** Θέσεις από τις οποίες δεν παίρνουμε ποτέ απόθεμα (κοινές για όλους). */
 function SkipField({ codes, onSave }: { codes: string[]; onSave: (text: string) => void }) {
+  return (
+    <CodesField
+      label="Δεν παίρνουμε από θέσεις"
+      title="Θέσεις από τις οποίες δεν φεύγει ποτέ απόθεμα — μετράνε όμως στην κεντρική. Χωρίστε με κόμμα· «06.01» = όλες οι θέσεις που ξεκινούν έτσι. Κοινό για όλους."
+      placeholder="π.χ. 06.01.01.02"
+      codes={codes}
+      onSave={onSave}
+    />
+  );
+}
+
+function CodesField({ label, title, placeholder, codes, onSave }: { label: string; title: string; placeholder: string; codes: string[]; onSave: (text: string) => void }) {
   const txt = codes.join(", ");
   const [v, setV] = useState(txt);
   useEffect(() => setV(txt), [txt]);
   return (
-    <label className="field rl-skip" title="Θέσεις από τις οποίες δεν φεύγει ποτέ απόθεμα — μετράνε όμως στην κεντρική. Χωρίστε με κόμμα· «06.01» = όλες οι θέσεις που ξεκινούν έτσι. Κοινό για όλους.">
-      Δεν παίρνουμε από θέσεις
+    <label className="field rl-skip" title={title}>
+      {label}
       <input
         value={v}
         onChange={(e) => setV(e.target.value)}
         onBlur={() => v.trim() !== txt && onSave(v)}
         onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), (e.target as HTMLInputElement).blur())}
-        placeholder="π.χ. 06.01.01.02"
+        placeholder={placeholder}
       />
     </label>
   );
