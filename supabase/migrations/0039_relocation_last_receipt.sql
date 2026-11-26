@@ -1,4 +1,4 @@
--- Μεταφορά: + τελευταία εισαγωγή κωδικού (ημερομηνία και τεμάχια της ημέρας).
+-- Μεταφορά: + τελευταία εισαγωγή κωδικού (ημερομηνία, τεμάχια της ημέρας, παλιός κωδικός αν ήρθε από εκεί).
 drop function if exists public.wms_relocation_data_v2(text, date, text);
 create function public.wms_relocation_data_v2(p_prefix text, p_from date, p_legacy text default null)
 returns table(item text, description text, pos text, area text, lot text, expiry date, qty numeric, lot_first_receipt timestamptz,

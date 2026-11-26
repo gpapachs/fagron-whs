@@ -14,6 +14,12 @@
     .\sync-stock.cmd -Probe 71-01-359 -Find 75   όλες οι τιμές ενός είδους στους πίνακες του WMS
     .\sync-stock.cmd -Moves     εύρεση πινάκων κινήσεων (-> wms-kiniseis.txt)
     .\sync-stock.cmd -Live      τρέχει συνέχεια: νέες κινήσεις + απόθεμα όσων κινήθηκαν, κάθε 30"
+    .\sync-stock.cmd -Report    η εβδομαδιαία αναφορά μεταφοράς σε relocation-report.html (χωρίς αποστολή)
+    .\sync-stock.cmd -SendReport   στέλνει την αναφορά τώρα από το Outlook
+
+  Αναφορά μεταφοράς: κάθε Πέμπτη 12:00 (REPORT_DAY / REPORT_TIME) το -Live και το sync στέλνουν από το Outlook
+  του υπολογιστή την αναφορά «Τι πρέπει να φύγει» στους REPORT_TO (χωρισμένοι με ;). Αν ο υπολογιστής ήταν
+  κλειστός, στέλνεται μόλις ξανατρέξει (έως την επόμενη εβδομάδα). REPORT_TO=off τη σταματά.
 
   Κινήσεις: αν υπάρχει το movements-query.sql, κάθε συγχρονισμός ανεβάζει και τις
   ΝΕΕΣ κινήσεις (από την τελευταία που υπάρχει στην εφαρμογή, αρχικά MOVES_DAYS ημέρες).
@@ -22,7 +28,7 @@
   Προαιρετικά SHIPMENTS_XLSX=<διαδρομή του FSSE SHIPMENTS .xlsx στο OneDrive> (αλλιώς αναζήτηση
   στους φακέλους OneDrive*). Στο -Live ανεβαίνει μέσα σε ~10" από κάθε αλλαγή του αρχείου.
 #>
-param([switch]$Test, [switch]$DryRun, [switch]$Force, [string]$Describe, [string]$Probe, [string]$Find, [switch]$Moves, [switch]$Live, [switch]$Orders)
+param([switch]$Test, [switch]$DryRun, [switch]$Force, [string]$Describe, [string]$Probe, [string]$Find, [switch]$Moves, [switch]$Live, [switch]$Orders, [switch]$Report, [switch]$SendReport)
 
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
@@ -821,6 +827,55 @@ group by i.code, s.Lot
   Log ("Εισαγωγές παρτίδων (όλο το ιστορικό): {0}" -f $rows.Count)
 }
 
+# ------------------------------------------------------------------ εβδομαδιαία αναφορά μεταφοράς (Outlook)
+$script:ReportFailAt = $null
+function Get-RelocationReport {
+  $r = Sb-Request 'GET' '/functions/v1/relocation-report' $null
+  if (-not $r -or $r.error) { throw ("αναφορά: " + $(if ($r) { $r.error } else { 'κενή απάντηση' })) }
+  return $r
+}
+function Send-RelocationReport([switch]$now, [switch]$preview) {
+  $to = Opt 'REPORT_TO'; if (-not $to) { $to = 'george.papachristos@fagron.gr; apostolis.maravas@fagron.gr' }
+  if ($to -eq 'off' -and -not $preview) { return }
+  $mark = Join-Path $Here 'relocation-report.last'
+  if (-not $now -and -not $preview) {
+    # προθεσμία αυτής της εβδομάδας: η τελευταία Πέμπτη 12:00 που πέρασε
+    $day = Opt 'REPORT_DAY'; if (-not $day) { $day = 'Thursday' }
+    $time = Opt 'REPORT_TIME'; if ($time -notmatch '^\d{1,2}:\d{2}$') { $time = '12:00' }
+    $hm = $time -split ':'
+    $due = (Get-Date).Date.AddHours([int]$hm[0]).AddMinutes([int]$hm[1])
+    $target = [int][DayOfWeek]$day
+    while ([int]$due.DayOfWeek -ne $target -or $due -gt (Get-Date)) { $due = $due.AddDays(-1) }
+    $last = $null
+    if (Test-Path $mark) { try { $last = [DateTime]::Parse((Get-Content $mark -Raw).Trim(), $Inv) } catch {} }
+    # πρώτη φορά: δεν στέλνει για εβδομάδες που πέρασαν — ξεκινά από την επόμενη προθεσμία
+    if (-not $last) { Set-Content -Path $mark -Value (Get-Date).ToString('s', $Inv) -Encoding UTF8; return }
+    if ($last -ge $due) { return }
+    if ($script:ReportFailAt -and ((Get-Date) - $script:ReportFailAt).TotalMinutes -lt 30) { return }
+  }
+  try {
+    $r = Get-RelocationReport
+    if ($preview) {
+      $f = Join-Path $Here 'relocation-report.html'
+      [IO.File]::WriteAllText($f, $r.html, (New-Object Text.UTF8Encoding $true))
+      Log ("Αναφορά μεταφοράς: {0} κωδικοί -> {1}" -f $r.count, $f)
+      return
+    }
+    $ol = New-Object -ComObject Outlook.Application
+    $m = $ol.CreateItem(0)
+    $m.To = $to
+    $m.Subject = $r.subject
+    $m.HTMLBody = $r.html
+    $m.Send()
+    Set-Content -Path $mark -Value (Get-Date).ToString('s', $Inv) -Encoding UTF8
+    $script:ReportFailAt = $null
+    Log ("Αναφορά μεταφοράς στάλθηκε σε {0} ({1} κωδικοί)" -f $to, $r.count)
+  } catch {
+    $script:ReportFailAt = Get-Date
+    Log ("Αναφορά μεταφοράς: " + $_)
+  }
+}
+
 function Convert-Moves($t) {
   $names = @($t.Columns | ForEach-Object { $_.ColumnName.ToLowerInvariant() })
   $has = @{}; foreach ($n in $names) { $has[$n] = $true }
@@ -934,6 +989,7 @@ function Run-Live {
     try { Refresh-Collecting 'SALEXPORTLS' } catch { Log ("Live (γραμμές σε συλλογή): " + $_) }
     try { Sync-Shipments } catch { Log ("Live (αποστολές): " + $_) }
     try { Sync-Positions } catch { Log ("Live (θέσεις): " + $_) }
+    Send-RelocationReport
     # κάθε ~2 λεπτά: λίστες ανοιχτές στην εφαρμογή που ολοκληρώθηκαν στο WMS
     $cycle++
     if ($cycle % [math]::Max(1, [int](120 / $secs)) -eq 0) { try { Refresh-Completed 'SALEXPORTLS' } catch { Log ("Live (ολοκληρωμένες): " + $_) } }
@@ -1194,6 +1250,7 @@ if ($Probe) { Probe-Item $Probe $Find; exit 0 }
 if ($Moves) { Discover-Moves; exit 0 }
 if ($Live) { Run-Live; exit 0 }
 if ($Orders) { Discover-Orders; exit 0 }
+if ($Report -or $SendReport) { Sb-Login; Send-RelocationReport -now:$SendReport -preview:$Report; exit 0 }
 
 $queryFile = Join-Path $Here 'stock-query.sql'
 if (-not (Test-Path $queryFile)) { Fail 'Δεν βρέθηκε το stock-query.sql.' }
@@ -1268,6 +1325,7 @@ try { Backfill-Moves } catch { Log ("Κινήσεις (αναδρομικά): " 
 try { Sync-ItemPack } catch { Log ("Παλέτες / συσκευασίες: " + $_) }
 try { Sync-Positions } catch { Log ("Θέσεις WMS: " + $_) }
 try { Sync-LotReceipts } catch { Log ("Εισαγωγές παρτίδων: " + $_) }
+Send-RelocationReport
 foreach ($oc in 'SALEXPORTCL', 'SALEXPORTLS') { try { Sync-Orders $oc } catch { Log ("Orders $($oc): " + $_) } }
 try { Sync-Collecting 'SALEXPORTLS' } catch { Log ("Σε συλλογή: " + $_) }
 try { Refresh-Completed 'SALEXPORTLS' } catch { Log ("Ολοκληρωμένες / διαγραμμένες: " + $_) }
