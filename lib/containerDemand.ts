@@ -11,8 +11,10 @@ export type StockLite = { item: string; position: string; qty: number; descripti
 
 export const KIND_TXT: Record<DemandKind, string> = { plan: "Πλάνο παραγωγής", orders: "Ανοιχτές παραγγελίες", wms: "Λίστες WMS" };
 
-/** υλικό συσκευασίας = όχι πρώτη ύλη (00*) ούτε τελικό (71*) */
-export const isPackaging = (code: string) => !!code && !/^(00|71)-/.test(code) && !code.includes("#");
+/** υλικό συσκευασίας: περιέκτες / καπάκια / σακούλες κ.λπ. (40* παλιοί, 41* νέοι, 42*) — όχι πρώτες ύλες (60*),
+ *  ετικέτες (25*) ή άλλα τελικά/ημιέτοιμα */
+export const PACK_RE = /^(40|41|42)-/;
+export const isPackaging = (code: string) => PACK_RE.test(code) && !code.includes("#");
 
 export type NeedSource = { kind: DemandKind; product: string; productDesc: string | null; productQty: number; perUnit: number; need: number; due: string | null; ref: string | null; specCode: string };
 export type ContainerNeed = {
@@ -231,4 +233,36 @@ export function readDemand(rows: Cell[][], cols: ColMap, header: number): ReadLi
     });
   }
   return out;
+}
+
+// ------------------------------------------------------------ BOM (ERP: produced_item_code / ingredient_item_code)
+
+export type FlatSpecLine = { spec_id: string; product_code: string; product_desc: string; code: string; description: string; qty: number; unit: string };
+
+/** Πίνακας BOM με επικεφαλίδες produced_item_code, ingredient_item_code, …· κρατά μόνο υλικά συσκευασίας.
+ *  null = δεν είναι αυτή η μορφή. Ποσότητα ανά τεμάχιο = ingredient_primaryqty / produced_primaryqty. */
+export function parseBomTable(rows: Cell[][]): { lines: FlatSpecLine[]; products: number; total: number } | null {
+  const hi = rows.findIndex((r) => r.some((c) => norm(c) === "PRODUCED_ITEM_CODE") && r.some((c) => norm(c) === "INGREDIENT_ITEM_CODE"));
+  if (hi < 0) return null;
+  const H = rows[hi].map((c) => norm(c));
+  const col = (n: string) => H.indexOf(n);
+  const cP = col("PRODUCED_ITEM_CODE"), cPD = col("PRODUCED_ITEM_DESCR"), cPQ = col("PRODUCED_ITEM_PRIMARYQTY");
+  const cI = col("INGREDIENT_ITEM_CODE"), cID = col("INGREDIENT_ITEM_DESCR"), cIQ = col("INGREDIENT_ITEM_PRIMARYQTY");
+  const lines: FlatSpecLine[] = [];
+  const prods = new Set<string>();
+  let total = 0;
+  for (let i = hi + 1; i < rows.length; i++) {
+    const r = rows[i] ?? [];
+    const p = s(r[cP]).toUpperCase();
+    const c = s(r[cI]).toUpperCase();
+    if (!p || !c) continue;
+    total++;
+    prods.add(p);
+    if (!isPackaging(c)) continue;
+    const pq = (cPQ >= 0 ? toNum(r[cPQ]) : 1) || 1;
+    const iq = cIQ >= 0 ? toNum(r[cIQ]) : null;
+    if (iq == null || iq <= 0) continue;
+    lines.push({ spec_id: p, product_code: p, product_desc: cPD >= 0 ? s(r[cPD]) : "", code: c, description: cID >= 0 ? s(r[cID]) : "", qty: iq / pq, unit: "" });
+  }
+  return { lines, products: prods.size, total };
 }

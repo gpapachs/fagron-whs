@@ -9,7 +9,7 @@ import { createClient } from "@/lib/supabase/client";
 import { loadLegacy } from "@/lib/legacy";
 import { ago, useCoalesced, useWmsLive } from "@/lib/live";
 import { displayUser } from "@/lib/users";
-import { computeDemand, detectColumns, readDemand, KIND_TXT, type Cell, type ColMap, type ContainerNeed, type DemandLine, type Spec, type StockLite } from "@/lib/containerDemand";
+import { computeDemand, detectColumns, parseBomTable, readDemand, KIND_TXT, type Cell, type ColMap, type ContainerNeed, type DemandLine, type Spec, type StockLite } from "@/lib/containerDemand";
 import { loadDemandLines, loadSpecs, loadStockFor, loadWmsOrderLines, type DemandUpload } from "@/lib/demandData";
 import { parseRecipeRows } from "@/lib/repack";
 
@@ -159,12 +159,26 @@ export default function DemandBoard() {
       const XLSX = await import("xlsx");
       const wb = XLSX.read(await f.arrayBuffer(), { cellDates: true });
       const rows = XLSX.utils.sheet_to_json<Cell[]>(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: "" });
-      const { recipes, warnings } = parseRecipeRows(rows as never);
-      if (!recipes.length) throw new Error("Δεν βρέθηκαν προδιαγραφές — χρειάζεται η ίδια εξαγωγή ERP με τις προδιαγραφές του Repack.");
-      const flat = recipes.flatMap((r) => r.components.map((c) => ({ spec_id: r.id, product_code: r.product_code, product_desc: r.description, code: c.code, description: c.description, qty: c.qty, unit: c.unit })));
-      const { error: err } = await createClient().rpc("prod_specs_replace", { p_rows: flat, p_file: f.name });
-      if (err) throw new Error(err.message);
-      setNotice(`Προδιαγραφές παραγωγής: ${recipes.length} τελικά, ${flat.length} γραμμές από «${f.name}».${warnings.length ? ` (${warnings.length} παρατηρήσεις)` : ""}`);
+      // α) πίνακας BOM (produced_item_code / ingredient_item_code) β) η εξαγωγή του Repack
+      const bom = parseBomTable(rows);
+      let flat: { spec_id: string; product_code: string; product_desc: string; code: string; description: string; qty: number; unit: string }[];
+      let msg: string;
+      if (bom) {
+        flat = bom.lines;
+        msg = `${bom.products} τελικά (${bom.total} γραμμές) — κρατήθηκαν ${flat.length} γραμμές υλικών συσκευασίας`;
+      } else {
+        const { recipes, warnings } = parseRecipeRows(rows as never);
+        if (!recipes.length) throw new Error("Δεν βρέθηκαν προδιαγραφές (ούτε στήλες produced_item_code / ingredient_item_code).");
+        flat = recipes.flatMap((r) => r.components.filter((c) => /^(40|41|42)-/.test(c.code)).map((c) => ({ spec_id: r.id, product_code: r.product_code, product_desc: r.description, code: c.code, description: c.description, qty: c.qty, unit: c.unit })));
+        msg = `${recipes.length} τελικά, ${flat.length} γραμμές υλικών συσκευασίας${warnings.length ? ` (${warnings.length} παρατηρήσεις)` : ""}`;
+      }
+      if (!flat.length) throw new Error("Καμία γραμμή υλικού συσκευασίας (40* / 41* / 42*).");
+      const sb = createClient();
+      for (let i = 0; i < flat.length; i += 2000) {
+        const { error: err } = await sb.rpc("prod_specs_replace", { p_rows: flat.slice(i, i + 2000), p_file: f.name, p_append: i > 0 });
+        if (err) throw new Error(err.message);
+      }
+      setNotice(`Προδιαγραφές παραγωγής από «${f.name}»: ${msg}.`);
       await loadAll();
     } catch (er) {
       setError(`Οι προδιαγραφές δεν φορτώθηκαν: ${(er as Error).message}`);
@@ -292,7 +306,7 @@ export default function DemandBoard() {
                   {uploads.find((u) => u.kind === "specs")!.file_name} · {ago(uploads.find((u) => u.kind === "specs")!.uploaded_at)} · μαζί με του Repack: {fq(specs?.length)} τελικά
                 </>
               ) : (
-                <>Μόνο του Repack ({fq(specs?.length)} τελικά 00* / 71*) — ανέβασε την ίδια εξαγωγή ERP για τα τελικά της παραγωγής</>
+                <>Μόνο του Repack ({fq(specs?.length)} τελικά 00* / 71*) — ανέβασε το BOM του ERP (produced_item_code / ingredient_item_code)</>
               )}
             </div>
           </div>
@@ -422,7 +436,7 @@ export default function DemandBoard() {
       ) : !res.lines ? (
         <p className="rp-hint">
           Ανέβασε το Excel με το <b>πλάνο παραγωγής</b> ή τις <b>ανοιχτές παραγγελίες</b> (κωδικός τελικού + ποσότητα, προαιρετικά ημερομηνία). Μέσω των προδιαγραφών ({fq(specs?.length)} τελικά, ίδιες με
-          το Repack) βγαίνει πόσα υλικά συσκευασίας χρειάζονται — κάθε υλικό που δεν είναι 00* ή 71* — σε σχέση με το απόθεμα κεντρικής και εξωτερικής. Οι παλιοί κωδικοί 40* των προδιαγραφών
+          το Repack) βγαίνει πόσα υλικά συσκευασίας (40* / 41* / 42*) χρειάζονται, σε σχέση με το απόθεμα κεντρικής και εξωτερικής. Οι παλιοί κωδικοί 40* των προδιαγραφών
           μετράνε στους νέους 41*.
         </p>
       ) : (
@@ -556,7 +570,7 @@ export default function DemandBoard() {
         </>
       )}
       <p className="dim dm-foot">
-        Προδιαγραφές: {fq(specs?.length)} τελικά (ίδιες με το Repack — ανεβαίνουν εκεί). Μετράνε τα υλικά με κωδικό που δεν είναι 00* ή 71*· για εναλλακτικές προδιαγραφές του ίδιου τελικού
+        Προδιαγραφές: {fq(specs?.length)} τελικά (ίδιες με το Repack — ανεβαίνουν εκεί). Μετράνε τα υλικά συσκευασίας 40* / 41* / 42* (όχι πρώτες ύλες 60*, ετικέτες 25* κ.λπ.)· για εναλλακτικές προδιαγραφές του ίδιου τελικού
         χρησιμοποιείται η πρώτη. Οι ανάγκες μετράνε και στη «Μεταφορά αποθέματος» (δεν προτείνεται να φύγει ό,τι χρειάζεται).
       </p>
     </div>
