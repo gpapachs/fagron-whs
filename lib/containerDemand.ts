@@ -95,7 +95,7 @@ export function computeDemand(lines: DemandLine[], specs: Spec[], newOf: Map<str
 // ------------------------------------------------------------ Excel
 
 export type Cell = string | number | Date | null | undefined;
-export type ColMap = { product: number; qty: number; due: number; desc: number; ref: number };
+export type ColMap = { product: number; qty: number; due: number; desc: number; ref: number; cust: number; produced: number; done: number };
 const CODE_RE = /^\d{2}-\d{2}-\d{3}/;
 const s = (v: Cell) => (v instanceof Date ? v.toISOString() : String(v ?? "")).trim();
 const norm = (v: Cell) => s(v).toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
@@ -125,49 +125,82 @@ export function toDate(v: Cell): string | null {
   return iso ? iso[0] : null;
 }
 
-/** Βρίσκει γραμμή επικεφαλίδων και στήλες (κωδικός, ποσότητα, ημερομηνία, περιγραφή, αναφορά) */
+/** Βρίσκει γραμμή επικεφαλίδων και στήλες (κωδικός, ποσότητα, ημερομηνία, περιγραφή, αναφορά, πελάτης, παραχθέντα, ολοκληρωμένο) */
 export function detectColumns(rows: Cell[][]): { header: number; cols: ColMap; names: string[] } {
   const width = Math.max(0, ...rows.slice(0, 200).map((r) => r.length));
-  // στήλη κωδικού: εκεί που ταιριάζουν οι περισσότεροι κωδικοί τύπου 71-00-052
-  const hits = Array.from({ length: width }, (_, c) => rows.slice(0, 500).filter((r) => CODE_RE.test(s(r[c]))).length);
-  const product = hits.indexOf(Math.max(...hits, 0));
-  const firstData = rows.findIndex((r) => CODE_RE.test(s(r[product])));
+  const hits = Array.from({ length: width }, (_, c) => rows.slice(0, 800).filter((r) => CODE_RE.test(s(r[c]))).length);
+  // γραμμή επικεφαλίδων: η πρώτη με ≥3 κείμενα πάνω από τα δεδομένα
+  const anyCode = rows.findIndex((r) => r.some((x) => CODE_RE.test(s(x))));
   let header = -1;
-  for (let i = Math.max(0, firstData - 1); i >= Math.max(0, firstData - 6); i--) if (rows[i]?.filter((x) => s(x)).length >= 2) {
-    header = i;
-    break;
-  }
+  for (let i = Math.max(0, anyCode - 1); i >= Math.max(0, anyCode - 8); i--)
+    if ((rows[i] ?? []).filter((x) => s(x) && !CODE_RE.test(s(x)) && typeof x !== "number").length >= 2) {
+      header = i;
+      break;
+    }
   const names = Array.from({ length: width }, (_, c) => (header >= 0 ? s(rows[header][c]) : "") || `Στήλη ${c + 1}`);
   const H = names.map((n) => norm(n));
-  const find = (re: RegExp, not: number[] = []) => H.findIndex((h, i) => re.test(h) && !not.includes(i));
-  const data = rows.slice(Math.max(0, firstData), firstData + 300);
+  const used: number[] = [];
+  const pick = (...res: RegExp[]) => {
+    for (const re of res) {
+      const i = H.findIndex((h, k) => re.test(h) && !used.includes(k));
+      if (i >= 0) {
+        used.push(i);
+        return i;
+      }
+    }
+    return -1;
+  };
+  // κωδικός τελικού: στήλη «Code / Κωδικός είδους», όχι πελάτη ή bulk
+  let product = pick(/^(CODE|ITEM CODE|ITEM|ΚΩΔΙΚΟΣ|ΚΩΔΙΚΟΣ ΕΙΔΟΥΣ|ΚΩΔ\.? ΕΙΔΟΥΣ|ΕΙΔΟΣ|PRODUCT CODE|ΚΩΔΙΚΟΣ ΤΕΛΙΚΟΥ)$/);
+  if (product < 0) {
+    const cands = [...Array(width).keys()].filter((c) => !/CUS|ΠΕΛΑΤ|BULK|ΧΥΜ/.test(H[c]) && !used.includes(c));
+    product = cands.sort((a, b) => hits[b] - hits[a])[0] ?? -1;
+    if (product >= 0) used.push(product);
+  }
+  const firstData = Math.max(header + 1, rows.findIndex((r) => CODE_RE.test(s(r[product]))));
+  const data = rows.slice(firstData, firstData + 300);
   const numeric = (c: number) => data.filter((r) => toNum(r[c]) != null).length;
   const dates = (c: number) => data.filter((r) => r[c] instanceof Date || /^\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}/.test(s(r[c]))).length;
-  let qty = find(/ΠΟΣΟΤ|ΠΟΣ\b|QTY|QUANT|ΤΕΜΑΧ|ΤΕΜ\b|PCS|UNITS|ΠΑΡΤΙΔΑ ΠΑΡ|BATCH SIZE|ΣΥΝΟΛΟ/, [product]);
-  if (qty < 0) qty = [...Array(width).keys()].filter((c) => c !== product).sort((a, b) => numeric(b) - numeric(a))[0] ?? -1;
-  let due = find(/ΗΜΕΡΟΜ|ΗΜ\/ΝΙΑ|DATE|ΠΑΡΑΔΟΣ|DELIVERY|DUE|ΕΒΔΟΜ|WEEK/, [product, qty]);
-  if (due < 0) {
-    const best = [...Array(width).keys()].filter((c) => c !== product && c !== qty).sort((a, b) => dates(b) - dates(a))[0];
-    due = best != null && dates(best) > 0 ? best : -1;
+  let qty = pick(/QTY FOR PRODUCTION|ΠΡΟΣ ΠΑΡΑΓΩΓΗ|ΠΟΣΟΤΗΤΑ ΠΑΡΑΓΩΓΗΣ/, /^(ΠΟΣΟΤΗΤΑ|ΠΟΣ\.?|QTY|QUANTITY|ΤΕΜΑΧΙΑ|ΤΕΜ\.?|PCS)$/);
+  if (qty < 0) {
+    const i = H.findIndex((h, k) => /ΠΟΣΟΤ|QTY|QUANT|ΤΕΜΑΧ/.test(h) && !/KG|NEEDED|RESERV|PRODUCED|ΠΑΡΗΧΘ|BULK/.test(h) && !used.includes(k));
+    qty = i >= 0 ? i : [...Array(width).keys()].filter((c) => !used.includes(c)).sort((a, b) => numeric(b) - numeric(a))[0] ?? -1;
+    if (qty >= 0) used.push(qty);
   }
-  const desc = find(/ΠΕΡΙΓΡ|DESCR|ΟΝΟΜΑΣ|ΠΡΟΙΟΝ|PRODUCT NAME|ITEM NAME/, [product, qty, due]);
-  const ref = find(/ΠΑΡΑΓΓ|ORDER|ΠΕΛΑΤ|CUSTOMER|ΕΝΤΟΛ|ΠΑΡΤ|LOT|BATCH|ΑΡ\./, [product, qty, due, desc]);
-  return { header, cols: { product, qty, due, desc, ref }, names };
+  const produced = pick(/^PRODUCED|ΠΑΡΗΧΘ|ΠΑΡΑΧΘ|ΕΚΤΕΛΕΣΜ/);
+  const done = pick(/^COMPLETED$|ΟΛΟΚΛΗΡ/);
+  let due = pick(/PRODUCTION DATE|ΗΜΕΡΟΜΗΝΙΑ ΠΑΡΑΓΩΓ|ΗΜ\.? ΠΑΡΑΓΩΓ/, /ΠΑΡΑΔΟΣ|DELIVERY|DUE DATE/, /^(ΗΜΕΡΟΜΗΝΙΑ|DATE|ΗΜ\/ΝΙΑ)$/);
+  if (due < 0) {
+    const best = [...Array(width).keys()].filter((c) => !used.includes(c)).sort((a, b) => dates(b) - dates(a))[0];
+    due = best != null && dates(best) > 0 ? best : -1;
+    if (due >= 0) used.push(due);
+  }
+  const desc = pick(/^(DESCRIPTION|ΠΕΡΙΓΡΑΦΗ|ΠΕΡΙΓΡΑΦΗ ΕΙΔΟΥΣ|ITEM NAME|PRODUCT NAME)$/, /ΠΕΡΙΓΡ|DESCR/);
+  const cust = pick(/^(CUSTOMER|ΠΕΛΑΤΗΣ|ΕΠΩΝΥΜΙΑ)$/, /^CUSTOMER(?! EXTRA)|ΠΕΛΑΤ/);
+  const ref = pick(/ORDER INVOICE|ΑΡ\.? ΠΑΡΑΓΓ|ΠΑΡΑΓΓΕΛΙΑ|ORDER NO|ORDER$/);
+  return { header, cols: { product, qty, due, desc, ref, cust, produced, done }, names };
 }
 
+const yes = (v: Cell) => /^(YES|ΝΑΙ|Y|TRUE|1|X|✓)$/i.test(s(v)) || v === true;
+
+/** Γραμμές ζήτησης: μένει να παραχθεί = ποσότητα − παραχθέντα· οι ολοκληρωμένες γραμμές δεν μετράνε */
 export function readDemand(rows: Cell[][], cols: ColMap, header: number): { product: string; description: string | null; qty: number; due: string | null; ref: string | null; row: number }[] {
   const out: { product: string; description: string | null; qty: number; due: string | null; ref: string | null; row: number }[] = [];
   for (let i = header + 1; i < rows.length; i++) {
     const r = rows[i] ?? [];
     const code = s(r[cols.product]).toUpperCase().match(CODE_RE)?.[0];
-    const q = cols.qty >= 0 ? toNum(r[cols.qty]) : null;
+    let q = cols.qty >= 0 ? toNum(r[cols.qty]) : null;
     if (!code || q == null || q <= 0) continue;
+    if (cols.done >= 0 && yes(r[cols.done])) continue;
+    if (cols.produced >= 0) q -= Math.max(0, toNum(r[cols.produced]) ?? 0);
+    if (q <= 0) continue;
+    const ref = [cols.cust >= 0 ? s(r[cols.cust]) : "", cols.ref >= 0 ? s(r[cols.ref]) : ""].filter(Boolean).join(" · ");
     out.push({
       product: code,
       description: cols.desc >= 0 ? s(r[cols.desc]) || null : null,
       qty: q,
       due: cols.due >= 0 ? toDate(r[cols.due]) : null,
-      ref: cols.ref >= 0 ? s(r[cols.ref]) || null : null,
+      ref: ref || null,
       row: i + 1,
     });
   }

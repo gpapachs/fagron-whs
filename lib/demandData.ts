@@ -8,11 +8,18 @@ import { inChunks } from "@/lib/salesData";
 import { RESERVED_FROM } from "@/lib/repackLive";
 import { computeDemand, type DemandLine, type Spec, type StockLite } from "@/lib/containerDemand";
 
-export type DemandUpload = { kind: "plan" | "orders"; file_name: string | null; rows: number | null; uploaded_at: string; uploaded_by: string | null };
+export type DemandUpload = { kind: "plan" | "orders" | "specs"; file_name: string | null; rows: number | null; uploaded_at: string; uploaded_by: string | null };
 
+/** προδιαγραφές: πρώτα οι προδιαγραφές παραγωγής (Ζήτηση περιεκτών), μετά του Repack */
 export async function loadSpecs(): Promise<Spec[]> {
   const sb = createClient();
-  const [recs, comps] = await Promise.all([
+  const [prod, recs, comps] = await Promise.all([
+    fetchAll<{ spec_id: string; product_code: string; product_desc: string | null; code: string; description: string | null; qty: number | string; unit: string | null }>(
+      sb,
+      "prod_spec_lines",
+      "spec_id, product_code, product_desc, code, description, qty, unit",
+      ["id"]
+    ).catch(() => []),
     fetchAll<{ id: string; product_code: string; description: string }>(sb, "repack_recipes", "id, product_code, description", ["sort", "id"]),
     fetchAll<{ recipe_id: string; code: string; description: string; qty: number | string; unit: string }>(sb, "repack_components", "recipe_id, code, description, qty, unit", ["recipe_id", "sort"]),
   ]);
@@ -23,7 +30,13 @@ export async function loadSpecs(): Promise<Spec[]> {
     return s;
   });
   for (const c of comps) by.get(c.recipe_id)?.components.push({ code: c.code, description: c.description, qty: Number(c.qty) || 0, unit: c.unit });
-  return specs;
+  const pm = new Map<string, Spec>();
+  for (const l of prod) {
+    const sp = pm.get(l.spec_id) ?? { id: l.spec_id, product_code: l.product_code, description: l.product_desc ?? "", components: [] };
+    sp.components.push({ code: l.code, description: l.description ?? "", qty: Number(l.qty) || 0, unit: l.unit ?? "" });
+    pm.set(l.spec_id, sp);
+  }
+  return [...pm.values(), ...specs];
 }
 
 export async function loadDemandLines(): Promise<{ lines: DemandLine[]; uploads: DemandUpload[] }> {

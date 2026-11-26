@@ -11,6 +11,7 @@ import { ago, useCoalesced, useWmsLive } from "@/lib/live";
 import { displayUser } from "@/lib/users";
 import { computeDemand, detectColumns, readDemand, KIND_TXT, type Cell, type ColMap, type ContainerNeed, type DemandLine, type Spec, type StockLite } from "@/lib/containerDemand";
 import { loadDemandLines, loadSpecs, loadStockFor, loadWmsOrderLines, type DemandUpload } from "@/lib/demandData";
+import { parseRecipeRows } from "@/lib/repack";
 
 const fq = (n: number | null | undefined) => (n == null ? "" : n.toLocaleString("el-GR", { maximumFractionDigits: 0 }));
 const fz = (n: number) => (n > 0.5 ? fq(n) : "—");
@@ -23,6 +24,7 @@ export default function DemandBoard() {
   const [lines, setLines] = useState<DemandLine[]>([]);
   const [uploads, setUploads] = useState<DemandUpload[]>([]);
   const [specs, setSpecs] = useState<Spec[] | null>(null);
+  const specRef = useRef<HTMLInputElement>(null);
   const [newOf, setNewOf] = useState<Map<string, string>>(new Map());
   const [stock, setStock] = useState<StockLite[]>([]);
   const [wms, setWms] = useState<DemandLine[]>([]);
@@ -57,7 +59,7 @@ export default function DemandBoard() {
 
   async function loadAll() {
     try {
-      const [d, sp, lg] = await Promise.all([loadDemandLines(), specs ? Promise.resolve(specs) : loadSpecs(), loadLegacy("")]);
+      const [d, sp, lg] = await Promise.all([loadDemandLines(), loadSpecs(), loadLegacy("")]);
       setLines(d.lines);
       setUploads(d.uploads);
       setSpecs(sp);
@@ -142,6 +144,30 @@ export default function DemandBoard() {
       await loadAll();
     } catch (er) {
       setError(`Δεν αποθηκεύτηκε: ${(er as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function onSpecFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    setError(null);
+    setNotice(null);
+    setBusy("specs");
+    try {
+      const XLSX = await import("xlsx");
+      const wb = XLSX.read(await f.arrayBuffer(), { cellDates: true });
+      const rows = XLSX.utils.sheet_to_json<Cell[]>(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: "" });
+      const { recipes, warnings } = parseRecipeRows(rows as never);
+      if (!recipes.length) throw new Error("Δεν βρέθηκαν προδιαγραφές — χρειάζεται η ίδια εξαγωγή ERP με τις προδιαγραφές του Repack.");
+      const flat = recipes.flatMap((r) => r.components.map((c) => ({ spec_id: r.id, product_code: r.product_code, product_desc: r.description, code: c.code, description: c.description, qty: c.qty, unit: c.unit })));
+      const { error: err } = await createClient().rpc("prod_specs_replace", { p_rows: flat, p_file: f.name });
+      if (err) throw new Error(err.message);
+      setNotice(`Προδιαγραφές παραγωγής: ${recipes.length} τελικά, ${flat.length} γραμμές από «${f.name}».${warnings.length ? ` (${warnings.length} παρατηρήσεις)` : ""}`);
+      await loadAll();
+    } catch (er) {
+      setError(`Οι προδιαγραφές δεν φορτώθηκαν: ${(er as Error).message}`);
     } finally {
       setBusy(null);
     }
@@ -257,7 +283,27 @@ export default function DemandBoard() {
             </div>
           );
         })}
+        <div className="dm-up">
+          <div>
+            <b>Προδιαγραφές παραγωγής</b>
+            <div className="dim">
+              {uploads.find((u) => u.kind === "specs") ? (
+                <>
+                  {uploads.find((u) => u.kind === "specs")!.file_name} · {ago(uploads.find((u) => u.kind === "specs")!.uploaded_at)} · μαζί με του Repack: {fq(specs?.length)} τελικά
+                </>
+              ) : (
+                <>Μόνο του Repack ({fq(specs?.length)} τελικά 00* / 71*) — ανέβασε την ίδια εξαγωγή ERP για τα τελικά της παραγωγής</>
+              )}
+            </div>
+          </div>
+          <span className="st-actions">
+            <button type="button" className="btn primary sm" onClick={() => specRef.current?.click()} disabled={busy === "specs"}>
+              {busy === "specs" ? "Φόρτωση…" : "Ανέβασμα Excel"}
+            </button>
+          </span>
+        </div>
         <input ref={fileRef} type="file" accept=".xlsx,.xlsm,.xls,.csv" hidden onChange={onFile} />
+        <input ref={specRef} type="file" accept=".xlsx,.xlsm,.xls" hidden onChange={onSpecFile} />
       </div>
 
       {pending && (
@@ -272,7 +318,10 @@ export default function DemandBoard() {
                 ["qty", "Ποσότητα *"],
                 ["due", "Ημερομηνία"],
                 ["desc", "Περιγραφή"],
-                ["ref", "Αναφορά (παραγγελία / πελάτης)"],
+                ["cust", "Πελάτης"],
+                ["ref", "Αρ. παραγγελίας"],
+                ["produced", "Παραχθέντα (αφαιρούνται)"],
+                ["done", "Ολοκληρωμένο (δεν μετράει)"],
               ] as const
             ).map(([key, label]) => (
               <label key={key} className="field">
