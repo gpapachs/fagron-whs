@@ -88,9 +88,31 @@ ${body || `<tr>${td("Τίποτα να μεταφερθεί αυτή την εβ
 Αυτόματη αναφορά της εφαρμογής Fagron WHS — κάθε Πέμπτη 12:00.</p>
 </body></html>`;
 
+  // απλή μορφή για αποστολή μέσω Microsoft 365 (επιτρέπει μόνο βασικά tags: πίνακες, p, b, br — όχι style/span)
+  const h = (v: string) => `<th>${v}</th>`;
+  const c = (v: string) => `<td>${v}</td>`;
+  const rows365 = items
+    .map((i) => {
+      const lr = i.lastReceipt;
+      const last = lr ? `${fd(lr.at)}${lr.qty != null ? ` · ${n0(lr.qty)} τεμ.` : ""}${lr.from ? ` (από ${esc(lr.from)})` : ""}` : "—";
+      const why = [i.why.note, i.why.short].filter(Boolean).map((w) => esc(w)).join("<br>");
+      return `<tr>${c(`<b>${esc(i.item)}</b>${i.legacyCodes ? `<br>πρώην ${esc(i.legacyCodes)}` : ""}${cfg.picked.has(i.item) ? "<br>✓ Pick list" : ""}`)}${c(esc(i.description))}${c(CATEGORY_TXT[i.category])}${c(n0(i.onsite))}${c(i.perMonth ? n0(i.perMonth) : "0")}${c(cover(i))}${c(last)}${c(`<b>${n0(i.moveQty)}</b>`)}${c(i.movePallets == null ? "—" : String(i.movePallets))}${c(why)}</tr>`;
+    })
+    .join("");
+  const html365 = `<p>Καλημέρα,</p>
+<p>Η εβδομαδιαία ανάλυση για τη μεταφορά αποθέματος <b>${esc(cfg.prefix)}*</b> από τον <b>χώρο ${esc(cfg.room)}</b> στην εξωτερική αποθήκη (ανάλωση από ${fd(cfg.from)}, κρατάμε κάλυψη ${cfg.keepMonths} μηνών στην κεντρική, μαζί με την κατανάλωση των παλιών κωδικών 40*, χωρίς leaflets).</p>
+<p><b>${items.length}</b> κωδικοί · <b>${n0(p.totals.moveQty)}</b> τεμάχια · περίπου <b>${pal}</b> παλέτες · <b>${p.freedPositions.length}</b> θέσεις αδειάζουν${cfg.picked.size ? ` · <b>${cfg.picked.size}</b> ήδη στο Pick list` : ""}</p>
+<p>Ταξινόμηση: μεγαλύτερη κάλυψη πρώτα (∞ = απόθεμα χωρίς ανάλωση).</p>
+<table border="1" cellpadding="4" cellspacing="0">
+<tr>${h("Κωδικός")}${h("Περιγραφή")}${h("Κατηγορία")}${h("Κεντρική")}${h("/ μήνα")}${h("Κάλυψη")}${h("Τελ. εισαγωγή")}${h("Να φύγει")}${h("Παλέτες")}${h("Αιτιολογία")}</tr>
+${rows365 || `<tr>${c("Τίποτα να μεταφερθεί αυτή την εβδομάδα.")}</tr>`}
+</table>
+<p>Λεπτομέρειες ανά παρτίδα / θέση και Pick list (PDF/Excel): <a href="${esc(cfg.appUrl)}">Fagron WHS → Ανάλυση → Μεταφορά αποθέματος</a></p>
+<p>Αυτόματη αναφορά της εφαρμογής Fagron WHS — κάθε Πέμπτη 12:00.</p>`;
+
   const text = [
     `Μεταφορά σε εξωτερική — ${items.length} κωδικοί, ${n0(p.totals.moveQty)} τεμ., ~${p.totals.pallets} παλέτες`,
     ...items.map((i) => `${i.item} ${i.description ?? ""} — να φύγει ${n0(i.moveQty)} — ${i.why.short}`),
   ].join("\n");
-  return { subject, html, text, count: items.length };
+  return { subject, html, html365, text, count: items.length };
 }

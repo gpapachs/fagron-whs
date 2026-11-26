@@ -837,6 +837,8 @@ function Get-RelocationReport {
 function Send-RelocationReport([switch]$now, [switch]$preview) {
   $to = Opt 'REPORT_TO'; if (-not $to) { $to = 'george.papachristos@fagron.gr; apostolis.maravas@fagron.gr' }
   if ($to -eq 'off' -and -not $preview) { return }
+  # η αποστολή γίνεται πλέον από το Microsoft 365 (προγραμματισμένη εργασία)· από το Outlook μόνο αν REPORT_VIA=outlook
+  if (-not $now -and -not $preview -and (Opt 'REPORT_VIA') -ne 'outlook') { return }
   $mark = Join-Path $Here 'relocation-report.last'
   if (-not $now -and -not $preview) {
     # προθεσμία αυτής της εβδομάδας: η τελευταία Πέμπτη 12:00 που πέρασε
