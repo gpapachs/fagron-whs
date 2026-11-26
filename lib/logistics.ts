@@ -159,7 +159,7 @@ const table = (rows: [string, string][]) =>
 /** Αίτημα προσφοράς προς μία μεταφορική (με το προσωπικό της link) */
 export function rfqEmail(r: Rfq, carrier: Carrier, token: string, sender: string) {
   const link = quoteLink(token);
-  const deadline = r.quote_deadline ? new Date(r.quote_deadline).toLocaleString("el-GR", { timeZone: "Europe/Athens", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+  const deadline = r.quote_deadline ? new Date(r.quote_deadline).toLocaleString("el-GR", { timeZone: "Europe/Athens", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }) : "";
   const subject = `Αίτημα προσφοράς / Quote request ${r.ref} — ${route(r)}${r.pickup_date ? ` — ${dmy(r.pickup_date)}` : ""}`;
   const html = `<p>Καλημέρα σας${carrier.contact ? ` κ. ${esc(carrier.contact)}` : ""},</p>
 <p>Παρακαλούμε για την προσφορά σας για την παρακάτω μεταφορά${deadline ? ` έως <b>${esc(deadline)}</b>` : ""}.</p>

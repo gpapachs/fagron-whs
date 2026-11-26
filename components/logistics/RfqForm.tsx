@@ -82,7 +82,13 @@ export default function RfqForm({ initial, userEmail, onSaved, onCancel }: { ini
     onSaved(id);
   }
 
-  const dl = d.quote_deadline ? new Date(d.quote_deadline).toISOString().slice(0, 16) : "";
+  // datetime-local θέλει τοπική ώρα (όχι UTC)
+  const dl = d.quote_deadline
+    ? (() => {
+        const t = new Date(d.quote_deadline);
+        return new Date(t.getTime() - t.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+      })()
+    : "";
   return (
     <form className="lg-form" onSubmit={save}>
       <div className="lg-row">
