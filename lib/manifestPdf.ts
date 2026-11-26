@@ -95,13 +95,15 @@ export function manifestPdf(jsPDF: Any, autoTable: (d: Any, o: Any) => void, fon
   };
   const side = (s: "from" | "to") => {
     const g = (k: string) => ((r as unknown as Record<string, string | null>)[`${s}_${k}`] ?? "") as string;
-    return [g("company"), g("address"), [g("zip"), g("city")].filter(Boolean).join(" "), g("country")];
+    const mine = (r.direction === "import" ? "from" : "to") === s;
+    const contact = mine ? [r.site_contact, r.site_phone, r.site_hours].filter(Boolean).join(" · ") : "";
+    return [g("company"), g("address"), [g("zip"), g("city")].filter(Boolean).join(" "), g("country"), contact];
   };
   const half = (R - L - 4) / 2;
   let y = 32;
-  box(L, y, half, 30, "Φόρτωση / Shipper — pick-up", side("from"));
-  box(L + half + 4, y, half, 30, "Παράδοση / Consignee — delivery", side("to"));
-  y += 34;
+  box(L, y, half, 32, "Φόρτωση / Shipper — pick-up", side("from"));
+  box(L + half + 4, y, half, 32, "Παράδοση / Consignee — delivery", side("to"));
+  y += 36;
   const mode = MODES.find((x) => x.key === r.mode);
   box(L, y, half, 30, "Μεταφορική / Carrier", [
     carrier?.name ?? "",

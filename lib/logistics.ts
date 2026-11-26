@@ -50,6 +50,15 @@ export type Rfq = {
   temp: string | null;
   value_eur: number | null;
   customer: string | null;
+  customer_code?: string | null;
+  customer_address?: string | null;
+  customer_city?: string | null;
+  customer_zip?: string | null;
+  customer_country?: string | null;
+  other_site?: boolean;
+  site_contact?: string | null;
+  site_phone?: string | null;
+  site_hours?: string | null;
   order_ref: string | null;
   notes: string | null;
   internal_notes: string | null;
@@ -97,6 +106,10 @@ export type Quote = {
   created_at: string;
   created_by: string | null;
 };
+
+export type PartnerSite = { id: string; partner_code: string | null; partner_name: string; label: string | null; company: string | null; address: string | null; city: string; zip: string | null; country: string | null; contact: string | null; phone: string | null; hours: string | null; notes: string | null; created_at: string };
+/** πλευρά του πελάτη / προμηθευτή: εξαγωγή -> παράδοση (to), εισαγωγή -> φόρτωση (from) */
+export const partnerSide = (dir: Direction | undefined | null) => (dir === "import" ? "from" : "to");
 
 export type ManifestLine = { desc: string; pallets: string; packages: string; weight: string; dims: string; adr: string; notes: string };
 export type Manifest = { lines: ManifestLine[]; plate: string; driver: string; loading_time: string; instructions: string; docs: string[]; issued_at?: string };
@@ -167,6 +180,10 @@ export function loadRows(r: Rfq): [string, string][] {
     ["Φόρτωση / Pick-up", place(r, "from")],
     ["Παράδοση / Delivery", place(r, "to")],
     ["Ημ. φόρτωσης / Pick-up date", dmy(r.pickup_date)],
+    [
+      r.direction === "import" ? "Επαφή φόρτωσης / Pick-up contact" : "Επαφή παράδοσης / Delivery contact",
+      [r.site_contact, r.site_phone, r.site_hours ? `ωράριο / hours ${r.site_hours}` : ""].filter(Boolean).join(" · "),
+    ],
     ["Παράδοση έως / Deliver by", dmy(r.delivery_by)],
     ["Incoterm", r.incoterm ?? ""],
     ["Εμπόρευμα / Goods", r.goods ?? ""],

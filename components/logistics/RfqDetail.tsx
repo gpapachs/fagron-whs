@@ -317,6 +317,21 @@ export default function RfqDetail({ rfq, data, userEmail, onBack, reload }: { rf
                   <td>{fm(rfq.value_eur)} €</td>
                 </tr>
               )}
+              {rfq.customer && (
+                <tr>
+                  <th>{rfq.direction === "import" ? "Προμηθευτής" : "Πελάτης"}</th>
+                  <td>
+                    {rfq.customer}
+                    {rfq.customer_code ? <span className="dim"> · {rfq.customer_code}</span> : null}
+                    {rfq.other_site && (
+                      <div className="dim">
+                        Έδρα: {[rfq.customer_address, [rfq.customer_zip, rfq.customer_city].filter(Boolean).join(" "), rfq.customer_country].filter(Boolean).join(", ") || "—"} ·{" "}
+                        <b>διαφορετικός τόπος {rfq.direction === "import" ? "φόρτωσης" : "παράδοσης"}</b>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              )}
               {rfq.order_ref && (
                 <tr>
                   <th>Παραγγελία / PO</th>

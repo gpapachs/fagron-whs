@@ -1,8 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { HOME, INCOTERMS, MODES, type Direction, type Rfq } from "@/lib/logistics";
+import { HOME, INCOTERMS, MODES, partnerSide, type Direction, type PartnerSite, type Rfq } from "@/lib/logistics";
+import { loadPartners, searchPartners } from "@/components/logistics/partnerData";
+import type { Partner } from "@/components/logistics/PartnersTab";
+
+const ADDR = ["company", "address", "city", "zip", "country"] as const;
+// πεδία έδρας πελάτη <-> πεδία τόπου (company <- όνομα πελάτη)
+const custKey = (k: (typeof ADDR)[number]) => (k === "company" ? "customer" : `customer_${k}`) as keyof Rfq;
+/** Παλιά αιτήματα χωρίς έδρα πελάτη: η έδρα = ο τόπος της πλευράς του πελάτη */
+function withCustomer(d: Draft): Draft {
+  if (d.customer_address || d.customer_city) return d;
+  const side = partnerSide(d.direction);
+  const x: Draft = { ...d };
+  for (const k of ADDR) if (k !== "company") (x as Record<string, unknown>)[custKey(k)] = (d as Record<string, unknown>)[`${side}_${k}`] ?? null;
+  if (!x.customer) x.customer = (d as Record<string, unknown>)[`${side}_company`] as string | null;
+  return x;
+}
 
 export type Draft = Partial<Rfq>;
 /** «1.234,5» / «12,5» / «12.5» -> αριθμός */
@@ -31,7 +46,95 @@ export function emptyRfq(direction: Direction): Draft {
 
 /** Φόρμα αιτήματος (νέο ή επεξεργασία). onSaved με το id. */
 export default function RfqForm({ initial, userEmail, onSaved, onCancel }: { initial: Draft; userEmail: string | null; onSaved: (id: string) => void; onCancel: () => void }) {
-  const [d, setD] = useState<Draft>(initial);
+  const [d, setD] = useState<Draft>(() => withCustomer(initial));
+  const [partners, setPartners] = useState<Partner[] | null>(null);
+  const [q, setQ] = useState("");
+  const [showHits, setShowHits] = useState(false);
+  const [sites, setSites] = useState<PartnerSite[]>([]);
+  const [siteMsg, setSiteMsg] = useState<string | null>(null);
+  const side = partnerSide(d.direction);
+  const other = !!d.other_site;
+  const kind = d.direction === "import" ? "supplier" : "customer";
+  const who = kind === "customer" ? "πελάτη" : "προμηθευτή";
+
+  // αποθηκευμένοι τόποι του πελάτη (κωδικός WMS ή όνομα)
+  async function loadSites(code: string | null | undefined, name: string | null | undefined) {
+    if (!code && !name) return setSites([]);
+    const sb = createClient();
+    const res = code
+      ? await sb.from("partner_sites").select("*").or(`partner_code.eq."${code.replace(/"/g, "")}",partner_name.ilike."${(name ?? "").replace(/["\\]/g, "")}"`).order("created_at")
+      : await sb.from("partner_sites").select("*").ilike("partner_name", (name ?? "").replace(/[%_]/g, "")).order("created_at");
+    setSites((res.data as PartnerSite[] | null) ?? []);
+  }
+  useEffect(() => {
+    loadSites(d.customer_code, d.customer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d.customer_code]);
+
+  /** αλλαγή στοιχείου έδρας: αν ο τόπος είναι ο ίδιος, ενημερώνεται και ο τόπος */
+  const setCust = (k: (typeof ADDR)[number], v: string) =>
+    setD((x) => ({ ...x, [custKey(k)]: v, ...(x.other_site ? {} : { [`${partnerSide(x.direction)}_${k}`]: v }) }));
+  const pickPartner = (p: Partner) => {
+    setD((x) => {
+      const sd = partnerSide(x.direction);
+      const vals = { company: p.name ?? "", address: p.address ?? "", city: p.city ?? "", zip: p.zip ?? "", country: p.country ?? "" };
+      const y: Draft = { ...x, customer_code: p.code, customer: vals.company, customer_address: vals.address, customer_city: vals.city, customer_zip: vals.zip, customer_country: vals.country };
+      if (!x.other_site) for (const k of ADDR) (y as Record<string, unknown>)[`${sd}_${k}`] = vals[k];
+      return y;
+    });
+    setQ("");
+    setShowHits(false);
+  };
+  const toggleOther = (on: boolean) =>
+    setD((x) => {
+      const y: Draft = { ...x, other_site: on };
+      // επιστροφή στην έδρα: ο τόπος ξαναγίνεται ίδιος με τη διεύθυνση του πελάτη
+      if (!on) for (const k of ADDR) (y as Record<string, unknown>)[`${partnerSide(x.direction)}_${k}`] = (x as Record<string, unknown>)[custKey(k)] ?? "";
+      return y;
+    });
+  const pickSite = (id: string) => {
+    const st = sites.find((x) => x.id === id);
+    if (!st) return;
+    setD((x) => {
+      const sd = partnerSide(x.direction);
+      return {
+        ...x,
+        other_site: true,
+        [`${sd}_company`]: st.company ?? x.customer ?? "",
+        [`${sd}_address`]: st.address ?? "",
+        [`${sd}_city`]: st.city,
+        [`${sd}_zip`]: st.zip ?? "",
+        [`${sd}_country`]: st.country ?? "",
+        site_contact: st.contact ?? x.site_contact,
+        site_phone: st.phone ?? x.site_phone,
+        site_hours: st.hours ?? x.site_hours,
+      };
+    });
+  };
+  async function saveSite() {
+    const g = (k: string) => ((d as Record<string, unknown>)[`${side}_${k}`] as string | null) || null;
+    if (!d.customer || !g("city")) return setSiteMsg(`Συμπληρώστε ${who} και πόλη του τόπου.`);
+    const { error } = await createClient()
+      .from("partner_sites")
+      .insert({
+        partner_code: d.customer_code || null,
+        partner_name: d.customer,
+        label: [g("company"), g("city")].filter(Boolean).join(", "),
+        company: g("company"),
+        address: g("address"),
+        city: g("city"),
+        zip: g("zip"),
+        country: g("country"),
+        contact: d.site_contact || null,
+        phone: d.site_phone || null,
+        hours: d.site_hours || null,
+        created_by: userEmail,
+      });
+    if (error) return setSiteMsg(error.message);
+    setSiteMsg(`Ο τόπος αποθηκεύτηκε στον ${who} — θα τον βρίσκεις στη λίστα «Αποθηκευμένοι τόποι».`);
+    loadSites(d.customer_code, d.customer);
+  }
+  const hits = partners && q.trim().length >= 2 ? searchPartners(partners, q, kind) : [];
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = (k: keyof Rfq, v: unknown) => setD((x) => ({ ...x, [k]: v }));
@@ -118,31 +221,132 @@ export default function RfqForm({ initial, userEmail, onSaved, onCancel }: { ini
             ))}
           </select>
         </label>
-        {txt("customer", d.direction === "export" ? "Πελάτης" : "Προμηθευτής")}
         {txt("order_ref", "Αρ. παραγγελίας / PO")}
       </div>
 
+      <fieldset>
+        <legend>
+          {kind === "customer" ? "Πελάτης" : "Προμηθευτής"} — έδρα{d.customer_code ? <span className="dim"> · {d.customer_code}</span> : null}
+        </legend>
+        <div className="lg-row">
+          <label className="field lg-wide lg-search">
+            Αναζήτηση στο WMS
+            <input
+              value={q}
+              placeholder={`επωνυμία, κωδικός, πόλη ή ΑΦΜ ${who}`}
+              onFocus={() => {
+                setShowHits(true);
+                if (!partners) loadPartners().then(setPartners, () => setPartners([]));
+              }}
+              onBlur={() => setTimeout(() => setShowHits(false), 200)}
+              onChange={(e) => (setQ(e.target.value), setShowHits(true))}
+            />
+            {showHits && q.trim().length >= 2 && (
+              <ul className="lg-hits">
+                {!partners && <li className="dim">Φόρτωση…</li>}
+                {partners && !hits.length && <li className="dim">Δεν βρέθηκε — συμπλήρωσε τα στοιχεία με το χέρι.</li>}
+                {hits.map((p) => (
+                  <li key={p.id}>
+                    <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => pickPartner(p)}>
+                      <b>{p.name}</b> <span className="dim">{[p.code, [p.zip, p.city].filter(Boolean).join(" "), p.country].filter(Boolean).join(" · ")}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </label>
+        </div>
+        <div className="lg-row">
+          <label className="field lg-wide">
+            Επωνυμία
+            <input value={d.customer ?? ""} onChange={(e) => setCust("company", e.target.value)} />
+          </label>
+          <label className="field lg-wide">
+            Διεύθυνση
+            <input value={d.customer_address ?? ""} onChange={(e) => setCust("address", e.target.value)} />
+          </label>
+          <label className="field">
+            Τ.Κ.
+            <input value={d.customer_zip ?? ""} onChange={(e) => setCust("zip", e.target.value)} />
+          </label>
+          <label className="field">
+            Πόλη
+            <input value={d.customer_city ?? ""} onChange={(e) => setCust("city", e.target.value)} />
+          </label>
+          <label className="field">
+            Χώρα
+            <input value={d.customer_country ?? ""} onChange={(e) => setCust("country", e.target.value.toUpperCase())} placeholder="π.χ. DE" />
+          </label>
+        </div>
+      </fieldset>
+
       <div className="lg-cols">
-        <fieldset>
-          <legend>Φόρτωση</legend>
-          {txt("from_company", "Εταιρεία")}
-          {txt("from_address", "Διεύθυνση")}
-          <div className="lg-row">
-            {txt("from_zip", "Τ.Κ.")}
-            {txt("from_city", "Πόλη *")}
-            {txt("from_country", "Χώρα", { ph: "π.χ. DE" })}
-          </div>
-        </fieldset>
-        <fieldset>
-          <legend>Παράδοση</legend>
-          {txt("to_company", "Εταιρεία")}
-          {txt("to_address", "Διεύθυνση")}
-          <div className="lg-row">
-            {txt("to_zip", "Τ.Κ.")}
-            {txt("to_city", "Πόλη *")}
-            {txt("to_country", "Χώρα", { ph: "π.χ. DE" })}
-          </div>
-        </fieldset>
+        {(["from", "to"] as const).map((sd) => {
+          const mine = sd === side;
+          const locked = mine && !other;
+          const f = (k: (typeof ADDR)[number], label: string, ph?: string) => {
+            const key = `${sd}_${k}` as keyof Rfq;
+            return (
+              <label className="field">
+                {label}
+                <input
+                  value={(d[key] as string | null | undefined) ?? ""}
+                  placeholder={ph}
+                  disabled={locked}
+                  onChange={(e) => set(key, k === "country" ? e.target.value.toUpperCase() : e.target.value)}
+                />
+              </label>
+            );
+          };
+          return (
+            <fieldset key={sd} className={mine && other ? "lg-site-other" : ""}>
+              <legend>{sd === "from" ? "Φόρτωση" : "Παράδοση"}</legend>
+              {mine && (
+                <label className="st-check">
+                  <input type="checkbox" checked={other} onChange={(e) => toggleOther(e.target.checked)} />
+                  Διαφορετικός τόπος {sd === "from" ? "φόρτωσης" : "παράδοσης"} από τη διεύθυνση του {who}
+                </label>
+              )}
+              {mine && other && sites.length > 0 && (
+                <label className="field">
+                  Αποθηκευμένοι τόποι του {who}
+                  <select value="" onChange={(e) => pickSite(e.target.value)}>
+                    <option value="">— επιλογή ({sites.length}) —</option>
+                    {sites.map((st) => (
+                      <option key={st.id} value={st.id}>
+                        {st.label || [st.company, st.city].filter(Boolean).join(", ")}
+                        {st.address ? ` — ${st.address}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {locked && <p className="dim lg-note">Ίδιος με τη διεύθυνση του {who} — τσέκαρε το παραπάνω για άλλο τόπο (αποθήκη, εργοστάσιο, 3PL…).</p>}
+              {f("company", mine && other ? "Εταιρεία / τόπος" : "Εταιρεία")}
+              {f("address", "Διεύθυνση")}
+              <div className="lg-row">
+                {f("zip", "Τ.Κ.")}
+                {f("city", "Πόλη *")}
+                {f("country", "Χώρα", "π.χ. DE")}
+              </div>
+              {mine && (
+                <div className="lg-row">
+                  {txt("site_contact", "Υπεύθυνος στον τόπο")}
+                  {txt("site_phone", "Τηλέφωνο")}
+                  {txt("site_hours", "Ωράριο", { ph: "π.χ. Δε–Πα 08:00–15:00" })}
+                </div>
+              )}
+              {mine && other && (
+                <span className="st-actions">
+                  <button type="button" className="btn ghost sm" onClick={saveSite}>
+                    ★ Αποθήκευση τόπου στον {who}
+                  </button>
+                  {siteMsg && <span className="dim">{siteMsg}</span>}
+                </span>
+              )}
+            </fieldset>
+          );
+        })}
       </div>
 
       <fieldset>

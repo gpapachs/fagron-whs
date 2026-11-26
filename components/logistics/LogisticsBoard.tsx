@@ -22,6 +22,12 @@ function fromPartner(dir: Direction, p: Partner): Draft {
   return {
     ...emptyRfq(dir),
     customer: p.name ?? "",
+    customer_code: p.code,
+    customer_address: p.address ?? "",
+    customer_city: p.city ?? "",
+    customer_zip: p.zip ?? "",
+    customer_country: p.country ?? "",
+    other_site: false,
     [`${side}_company`]: p.name ?? "",
     [`${side}_address`]: p.address ?? "",
     [`${side}_city`]: p.city ?? "",
