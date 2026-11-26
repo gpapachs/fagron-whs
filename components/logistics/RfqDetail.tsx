@@ -9,7 +9,7 @@ import RoundPanel from "@/components/logistics/RoundPanel";
 import DocsCard from "@/components/logistics/DocsCard";
 import ManifestCard from "@/components/logistics/ManifestCard";
 import { downloadDoc, logEvent, queueMail, type LogData } from "@/components/logistics/data";
-import { awardEmail, htmlToText, mailtoHref, dmy, DIR_TXT, loadRows, MODE_TXT, quoteLink, rankQuotes, rfqEmail, route, STATUS_TONE, STATUS_TXT, suggestCarriers, type Quote, type Rfq } from "@/lib/logistics";
+import { roundSaving, awardEmail, htmlToText, mailtoHref, dmy, DIR_TXT, loadRows, MODE_TXT, quoteLink, rankQuotes, rfqEmail, route, STATUS_TONE, STATUS_TXT, suggestCarriers, type Quote, type Rfq } from "@/lib/logistics";
 
 const fm = (n: number | null | undefined, d = 2) => (n == null ? "" : n.toLocaleString("el-GR", { minimumFractionDigits: 0, maximumFractionDigits: d }));
 const toNum = (s: string) => {
@@ -480,6 +480,14 @@ export default function RfqDetail({ rfq, data, userEmail, onBack, reload }: { rf
         ) : (
           <p className="dim">Καμία προσφορά ακόμα. Οι μεταφορικές απαντούν από το link του email ή τις καταχωρείς εδώ.</p>
         )}
+        {!open && (() => {
+          const sv = roundSaving(rfq, quotes);
+          return sv && sv.saving > 0 ? (
+            <p className="lg-saving">
+              Κέρδος από τους γύρους τιμών: <b>{fm(sv.saving)} €</b> ({fm(sv.base)} → {fm(sv.now)} €, −{fm((sv.saving / sv.base) * 100, 1)}%)
+            </p>
+          ) : null;
+        })()}
         {open && ranked.length > 0 && (
           <RoundPanel key={`${rfq.round_no ?? 0}`} rfq={rfq} quotes={quotes} invites={invites} cById={cById} sender={sender} userEmail={userEmail} onDone={done} />
         )}

@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { logEvent, queueMail } from "@/components/logistics/data";
-import { roundEmail, roundTarget, type Carrier, type Invite, type Quote, type Rfq } from "@/lib/logistics";
+import { roundEmail, roundSaving, roundTarget, type Carrier, type Invite, type Quote, type Rfq } from "@/lib/logistics";
 
 const fm = (n: number | null | undefined) => (n == null ? "" : n.toLocaleString("el-GR", { maximumFractionDigits: 2 }));
 const toNum = (s: string) => {
@@ -51,6 +51,7 @@ export default function RoundPanel({
   const tgt = target.trim() ? toNum(target) : auto;
   const active = (rfq.round_no ?? 0) > 0 && rfq.round_deadline && new Date(rfq.round_deadline) > new Date();
   const answered = useMemo(() => quotes.filter((q) => (q.round_no ?? 0) === rfq.round_no && rfq.round_no), [quotes, rfq.round_no]);
+  const sv = roundSaving(rfq, quotes);
   const inRound = invites.filter((i) => (i.round_no ?? 0) === rfq.round_no && rfq.round_no);
 
   async function send() {
@@ -67,7 +68,7 @@ export default function RoundPanel({
       const no = (rfq.round_no ?? 0) + 1;
       const { error } = await sb
         .from("rfqs")
-        .update({ round_no: no, round_target: tgt, round_currency: "EUR", round_pct: toNum(pct), round_deadline: dl.toISOString() })
+        .update({ round_no: no, round_target: tgt, round_currency: "EUR", round_pct: toNum(pct), round_deadline: dl.toISOString(), ...(rfq.round_baseline == null ? { round_baseline: lowest } : {}) })
         .eq("id", rfq.id);
       if (error) throw new Error(error.message);
       const upd = await sb.from("rfq_invites").update({ round_no: no }).in("id", list.map((i) => i.id));
@@ -101,6 +102,11 @@ export default function RoundPanel({
           <b>Γύρος τιμών {rfq.round_no}</b> — τιμή-στόχος <b>{fm(rfq.round_target)} {rfq.round_currency ?? "EUR"}</b>, προθεσμία{" "}
           {rfq.round_deadline ? new Date(rfq.round_deadline).toLocaleString("el-GR", { dateStyle: "short", timeStyle: "short" }) : ""}
           {active ? " (ανοιχτός)" : " (έληξε)"} · νέες τιμές: {answered.length} / {inRound.length}
+        </p>
+      )}
+      {sv && sv.saving > 0 && (
+        <p className="lg-saving">
+          {sv.final ? "Κέρδος από τους γύρους" : "Κέρδος μέχρι στιγμής"}: <b>{fm(sv.saving)} €</b> ({fm(sv.base)} → {fm(sv.now)} €, −{fm((sv.saving / sv.base) * 100)}%)
         </p>
       )}
       {!open ? (

@@ -1691,3 +1691,6 @@ tr.lg-won td { background: color-mix(in srgb, var(--green, #2f8f5b) 9%, transpar
 .lg-mf td:first-child input { min-width: 200px; }
 .qf-docs { list-style: none; padding: 0; margin: 6px 0 0; display: flex; flex-direction: column; gap: 4px; }
 .qf-round { background: #fff7e0; border: 1px solid #e8c24a; border-radius: 10px; padding: 10px 14px; }
+.lg-saving { margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--free-bg); color: var(--ink); }
+.lg-saving b { color: var(--free); }
+.lg-saved { font-size: 11.5px; color: var(--free); font-weight: 700; }

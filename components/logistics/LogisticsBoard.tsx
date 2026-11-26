@@ -13,7 +13,7 @@ import { loadLogistics, type LogData } from "@/components/logistics/data";
 import { useCoalesced, useWmsLive } from "@/lib/live";
 import { dmy, DIR_TXT, MODE_TXT, route, STATUS_TONE, STATUS_TXT, type Direction, type Rfq } from "@/lib/logistics";
 
-type Tab = "open" | "transit" | "done" | "carriers" | "partners";
+type Tab = "open" | "transit" | "done" | "saved" | "carriers" | "partners";
 const fm = (n: number | null | undefined) => (n == null ? "" : n.toLocaleString("el-GR", { maximumFractionDigits: 2 }));
 
 /** Νέο αίτημα με τα στοιχεία πελάτη (εξαγωγή: παραλήπτης) ή προμηθευτή (εισαγωγή: αποστολέας) */
@@ -67,10 +67,14 @@ export default function LogisticsBoard({ userEmail, role }: { userEmail: string 
       open: rfqs.filter((r) => ["draft", "sent", "quoted"].includes(r.status)),
       transit: rfqs.filter((r) => ["awarded", "in_transit"].includes(r.status)),
       done: rfqs.filter((r) => ["delivered", "cancelled"].includes(r.status)),
+      saved: rfqs.filter((r) => (r.round_saving ?? 0) > 0 && r.status !== "cancelled"),
     }),
     [rfqs]
   );
   const selected = rfqs.find((r) => r.id === sel || r.ref === sel) ?? null;
+  const savings = rfqs.filter((r) => (r.round_saving ?? 0) > 0 && r.status !== "cancelled");
+  const savedTotal = savings.reduce((t, r) => t + (r.round_saving ?? 0), 0);
+  const savedBase = savings.reduce((t, r) => t + (r.round_baseline ?? 0), 0);
   const pendingMail = (data?.mails ?? []).filter((m) => m.status === "pending").length;
   const errMail = (data?.mails ?? []).filter((m) => m.status === "error").length;
 
@@ -164,6 +168,13 @@ export default function LogisticsBoard({ userEmail, role }: { userEmail: string 
                 { key: "transit", label: "Σε εξέλιξη", value: groups.transit.length, tone: "orange", hint: "Ανατεθειμένα και σε μεταφορά" },
                 { key: "done", label: "Ολοκληρωμένα", value: groups.done.length, tone: "green", hint: "Παραδόθηκαν ή ακυρώθηκαν" },
                 { key: "carriers", label: "Μεταφορικές", value: data?.carriers.filter((c) => c.active).length ?? 0, tone: "neutral", hint: "Μητρώο μεταφορικών" },
+                {
+                  key: "saved",
+                  label: "Κέρδος γύρων τιμών",
+                  value: `${fm(Math.round(savedTotal))} €`,
+                  tone: "green",
+                  hint: savings.length ? `${savings.length} αιτήματα · −${fm(savedBase ? (savedTotal / savedBase) * 100 : 0)}% από τις αρχικές χαμηλότερες` : "Από τους γύρους τιμής-στόχου",
+                },
                 { key: "partners", label: "Πελάτες / Προμηθευτές", value: "WMS", tone: "neutral", hint: "Ελλάδα / εξωτερικό, από το WMS" },
               ]}
             />
@@ -215,6 +226,7 @@ export default function LogisticsBoard({ userEmail, role }: { userEmail: string 
                             <td data-label={tab === "open" ? "Απαντήσεις" : "Μεταφορική"}>{tab === "open" ? (inv.length ? `${qs.length} / ${inv.length}` : "—") : carrierOf(r)}</td>
                             <td className="num" data-label={tab === "open" ? "Καλύτερη" : "Κόστος"}>
                               {tab === "open" ? (best(r) != null ? `${fm(best(r))} €` : "") : r.final_cost != null ? `${fm(r.final_cost)} €` : ""}
+                              {(r.round_saving ?? 0) > 0 && <div className="lg-saved">−{fm(r.round_saving)} € γύροι</div>}
                             </td>
                             <td data-label="Κατάσταση">
                               {tab === "transit" && r.eta ? <span className="mono">{dmy(r.eta)} </span> : null}

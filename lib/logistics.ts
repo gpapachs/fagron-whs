@@ -67,6 +67,9 @@ export type Rfq = {
   round_currency?: string | null;
   round_pct?: number | null;
   round_deadline?: string | null;
+  round_baseline?: number | null;
+  round_saving?: number | null;
+  round_saving_at?: string | null;
   manifest?: Manifest | null;
   created_at: string;
   created_by: string | null;
@@ -304,4 +307,20 @@ ${list}
 ${token ? `<p>Τα στοιχεία και τα έγγραφα είναι και εδώ / Details and documents also here: <a href="${esc(quoteLink(token))}">${esc(quoteLink(token))}</a></p>` : ""}
 <p>Ευχαριστούμε / Thank you,<br>${esc(sender)}<br>Fagron Hellas — Logistics</p>`;
   return { subject, html };
+}
+
+/** Κέρδος γύρων: βάση = χαμηλότερη πριν τον 1ο γύρο. Αν δεν έχει γίνει ανάθεση: δυνητικό, με τη σημερινή χαμηλότερη. */
+export function roundSaving(r: Rfq, quotes: Quote[]): { base: number; now: number; saving: number; final: boolean } | null {
+  if (r.round_baseline == null) return null;
+  const base = r.round_baseline;
+  const aw = quotes.find((q) => q.id === r.awarded_quote);
+  if (aw) {
+    if (aw.currency !== "EUR") return null;
+    const saving = r.round_saving ?? Math.max(0, Math.min(base, aw.first_price ?? aw.price) - aw.price);
+    return { base, now: aw.price, saving, final: true };
+  }
+  const eur = quotes.filter((q) => q.currency === "EUR" && q.rfq_id === r.id);
+  if (!eur.length) return null;
+  const low = Math.min(...eur.map((q) => q.price));
+  return { base, now: low, saving: Math.max(0, base - low), final: false };
 }

@@ -21,7 +21,7 @@ export async function loadLogistics(): Promise<LogData> {
   ]);
   return {
     rfqs: rfqs
-      .map((r) => ({ ...r, round_target: n(r.round_target), round_pct: n(r.round_pct), pallets: n(r.pallets), packages: n(r.packages), weight_kg: n(r.weight_kg), volume_m3: n(r.volume_m3), ldm: n(r.ldm), value_eur: n(r.value_eur), final_cost: n(r.final_cost) }) as Rfq)
+      .map((r) => ({ ...r, round_baseline: n(r.round_baseline), round_saving: n(r.round_saving), round_target: n(r.round_target), round_pct: n(r.round_pct), pallets: n(r.pallets), packages: n(r.packages), weight_kg: n(r.weight_kg), volume_m3: n(r.volume_m3), ldm: n(r.ldm), value_eur: n(r.value_eur), final_cost: n(r.final_cost) }) as Rfq)
       .reverse(),
     carriers,
     invites,
