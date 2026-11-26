@@ -57,6 +57,8 @@ export type RelParams = {
   skipPos?: string[];
   /** θέσεις που ανήκουν σε χώρο με άλλο πρόθεμα: κωδικός θέσης (ή αρχή του) -> χώρος */
   posRoom?: Record<string, string>;
+  /** ζήτηση από πλάνο παραγωγής / ανοιχτές παραγγελίες μέσω προδιαγραφών, ανά κωδικό (Ζήτηση περιεκτών) */
+  extraDemand?: Record<string, number>;
   today?: Date;
 };
 export type Category = "dead" | "new" | "slow" | "active" | "excluded";
@@ -89,6 +91,8 @@ export type ItemPlan = {
   perMonth: number;
   cover: number | null; // μήνες κάλυψης στην κεντρική σήμερα
   demand: number;
+  /** μέρος της ζήτησης από πλάνο παραγωγής / παραγγελίες (προδιαγραφές) */
+  planDemand?: number;
   keep: number;
   moveQty: number;
   movePallets: number | null;
@@ -228,7 +232,8 @@ export function planRelocation(rows: RelRow[], params: RelParams): RelPlan {
     const firstT = h.item_first_move ? new Date(h.item_first_move).getTime() : fromT;
     const effMonths = Math.max(1, (t0 - Math.max(fromT, firstT)) / DAY / 30.4);
     const perMonth = h.item_out_qty / effMonths;
-    const demand = h.open_demand;
+    const planDemand = params.extraDemand?.[item] ?? 0;
+    const demand = h.open_demand + planDemand;
     // νέος κωδικός: πρώτη παραλαβή τις τελευταίες 90 ημέρες χωρίς καμία κίνηση πριν από αυτήν
     // (όχι απλή εσωτερική μετακίνηση παλιού αποθέματος)
     const rcvT = h.item_first_receipt ? new Date(h.item_first_receipt).getTime() : null;
@@ -294,6 +299,7 @@ export function planRelocation(rows: RelRow[], params: RelParams): RelPlan {
       perMonth,
       cover: perMonth > 0 ? onsite / perMonth : null,
       demand,
+      planDemand,
       keep: isFinite(keep) ? keep : onsite,
       moveQty,
       movePallets: pq.qty ? lines.reduce((s, l) => s + (l.pallets ?? 0), 0) : null,
@@ -381,7 +387,9 @@ export function explain(i: ItemPlan, params: RelParams, isNew: boolean): { short
   const from = dmy(params.from);
   const legacy = i.legacyCodes ? ` (μαζί ${n0(i.legacyOut)} από τον παλιό ${i.legacyCodes})` : "";
   const cons = i.outQty > 0 ? `Ανάλωση ${n0(i.outQty)} σε ${n1(i.effMonths)} μήνες${legacy} = ${n1(i.perMonth)}/μήνα.` : `Καμία ανάλωση από ${from}${i.legacyCodes ? ` (ούτε στον παλιό ${i.legacyCodes})` : ""}.`;
-  const dem = i.demand > 0 ? ` + ανοιχτές παραγγελίες ${n0(i.demand)}` : "";
+  const pd = i.planDemand ?? 0;
+  const od = i.demand - pd;
+  const dem = `${od > 0 ? ` + ανοιχτές παραγγελίες ${n0(od)}` : ""}${pd > 0 ? ` + πλάνο/παραγγελίες τελικών ${n0(pd)}` : ""}`;
   const pal = i.palQty && i.keep > i.need + 1e-6 ? `, σε ολόκληρες παλέτες των ${n0(i.palQty)} = ${n0(i.keep)}` : "";
   const long: string[] = [cons];
   if (i.category === "excluded") return { short: "Επιλέχθηκε «Κράτα όλο» — μένει.", long: [...long, "Ο κωδικός εξαιρέθηκε χειροκίνητα από τη μεταφορά."] };
@@ -390,6 +398,7 @@ export function explain(i: ItemPlan, params: RelParams, isNew: boolean): { short
       short: `Νέος κωδικός (πρώτη παραλαβή ${dmy(i.firstReceipt)}) χωρίς ανάλωση ακόμη — μένει.`,
       long: [...long, `Ήρθε για πρώτη φορά ${dmy(i.firstReceipt)}, λιγότερο από 90 ημέρες. Μένει μέχρι να φανεί η κατανάλωσή του (ή τσέκαρε «Να φύγουν και οι νέοι κωδικοί»).`],
     };
+  if (pd > 0) long.push(`Χρειάζεται για το πλάνο παραγωγής / τις παραγγελίες τελικών (μέσω προδιαγραφών): ${n0(pd)}.`);
   if (i.outQty <= 0 && i.demand <= 0) {
     long.push(`Χωρίς ανάλωση και χωρίς ανοιχτές παραγγελίες δεν χρειάζεται απόθεμα στην κεντρική → φεύγει ό,τι είναι σε μεταφέρσιμες θέσεις (${n0(i.movable)}).`);
     if (isNew) long.push("Είναι νέος κωδικός· φεύγει επειδή είναι τσεκαρισμένο «Να φύγουν και οι νέοι κωδικοί».");

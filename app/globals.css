@@ -1622,3 +1622,15 @@ button.cell.wp-cell { font-size: 10px; height: 26px; padding: 0 6px; letter-spac
 .rl-subtable tr.rl-stays td { color: var(--ink-dim); }
 .rl-why-note { color: var(--green, #2f8f5b); font-weight: 600; }
 .rl-lastrcv { white-space: nowrap; }
+/* ζήτηση περιεκτών */
+.dm-uploads { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; margin: 6px 0 12px; }
+.dm-up { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.dm-up .dim { font-size: 12px; margin-top: 2px; }
+.dm-map { padding: 12px 14px; margin-bottom: 12px; border: 1px solid var(--accent, #2563eb); border-radius: 12px; background: var(--surface); }
+.dm-cols { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0; }
+.dm-cols select { min-width: 180px; }
+.dm-r { color: var(--red, #c0392b); }
+.dm-o { color: var(--orange, #d9822b); }
+tr.rl-grow.dm-short td:first-child { box-shadow: inset 3px 0 0 var(--red, #c0392b); }
+tr.rl-grow.dm-ext td:first-child { box-shadow: inset 3px 0 0 var(--orange, #d9822b); }
+.dm-foot { font-size: 12px; margin-top: 10px; }

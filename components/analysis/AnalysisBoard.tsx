@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import { analyse, normReceipt, sumPallets, sumStock, withPallet, type Analysis, type Batch, type Coverage, type FifoCase, type PalSource, type ReceiptRow } from "@/lib/analysis";
 import PalInput from "@/components/analysis/PalInput";
 import RelocationBoard from "@/components/analysis/RelocationBoard";
+import DemandBoard from "@/components/analysis/DemandBoard";
 import { isLeaflet } from "@/lib/leaflet";
 
 type View = "noConsumption" | "overstock" | "fifo" | "expiring" | "toCheck" | "old" | "untouched" | "partial";
@@ -32,7 +33,7 @@ const VIEWS: { key: View; label: string; hint: string }[] = [
 ];
 
 export default function AnalysisBoard({ userEmail, role }: { userEmail: string | null; role: "admin" | "staff" }) {
-  const [mode, setMode] = useState<"receipts" | "relocate">("receipts");
+  const [mode, setMode] = useState<"receipts" | "relocate" | "demand">("receipts");
   const [prefix, setPrefix] = useState("60");
   const [from, setFrom] = useState(yearStart());
   const [raw, setRaw] = useState<{ rows: ReceiptRow[]; prefix: string; from: string } | null>(null);
@@ -70,7 +71,7 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
     try {
       const s = JSON.parse(window.localStorage.getItem(LS) ?? "{}");
       if (s.prefix) setPrefix(s.prefix);
-      if (s.mode === "relocate") setMode("relocate");
+      if (s.mode === "relocate" || s.mode === "demand") setMode(s.mode);
       if (s.from) setFrom(s.from);
     } catch {
       /* τίποτα */
@@ -183,17 +184,20 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
       <div className="wrap stock">
         <div className="header">
           <div className="titleblock">
-            <h1>{mode === "receipts" ? "Ανάλυση παραλαβών" : "Μεταφορά αποθέματος"}</h1>
+            <h1>{mode === "receipts" ? "Ανάλυση παραλαβών" : mode === "demand" ? "Ζήτηση περιεκτών" : "Μεταφορά αποθέματος"}</h1>
             <p>
               {mode === "receipts"
                 ? "Παρτίδες που ήρθαν από προμηθευτή από μια ημερομηνία και μετά, σε σχέση με το σημερινό απόθεμα: τι δεν έχει αναλωθεί, τι δεν κινείται, υπεραπόθεμα, FIFO, λήξεις."
-                : "Τι μπορεί να φύγει σε εξωτερική αποθήκη χωρίς να λείψει από την παραγωγή: μένει η κατανάλωση των επόμενων μηνών, φεύγει το υπόλοιπο, με λίστα θέσεων για την αποθήκη."}
+                : mode === "demand"
+                  ? "Πόσοι περιέκτες, καπάκια και υλικά συσκευασίας χρειάζονται για το πλάνο παραγωγής και τις ανοιχτές παραγγελίες (μέσω των προδιαγραφών), σε σχέση με το απόθεμα κεντρικής και εξωτερικής."
+                  : "Τι μπορεί να φύγει σε εξωτερική αποθήκη χωρίς να λείψει από την παραγωγή: μένει η κατανάλωση των επόμενων μηνών, φεύγει το υπόλοιπο, με λίστα θέσεων για την αποθήκη."}
             </p>
             <div className="an-modes" role="tablist">
               {(
                 [
                   ["receipts", "Ανάλυση παραλαβών"],
                   ["relocate", "Μεταφορά αποθέματος"],
+                  ["demand", "Ζήτηση περιεκτών"],
                 ] as const
               ).map(([k, l]) => (
                 <button
@@ -224,7 +228,9 @@ export default function AnalysisBoard({ userEmail, role }: { userEmail: string |
           </div>
         </div>
 
-        {mode === "relocate" ? (
+        {mode === "demand" ? (
+          <DemandBoard />
+        ) : mode === "relocate" ? (
           <RelocationBoard userEmail={userEmail} />
         ) : (
           <>

@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useColSort } from "@/components/analysis/colSort";
 import KpiTiles from "@/components/KpiTiles";
 import PalInput from "@/components/analysis/PalInput";
 import { createClient } from "@/lib/supabase/client";
@@ -31,6 +32,7 @@ type Saved = {
   legacy: string; // πρόθεμα παλιών κωδικών με ίδια περιγραφή (π.χ. 40 για τους 41)
   noLeaflets: boolean; // leaflets εκτός ανάλυσης
   sort: SortKey;
+  usePlan: boolean; // να μένει ό,τι χρειάζεται το πλάνο παραγωγής / οι παραγγελίες (Ζήτηση περιεκτών)
 };
 type SortKey = "default" | "cover" | "move" | "pallets" | "item";
 const SORT_TXT: Record<SortKey, string> = {
@@ -51,7 +53,7 @@ function sortItems(list: ItemPlan[], k: SortKey) {
   if (k === "item") a.sort((x, y) => x.item.localeCompare(y.item));
   return a;
 }
-const DEF: Saved = { prefix: "41", from: yearStart(), keepMonths: 3, includeNew: false, partial: true, areaClass: {}, excluded: [], room: "20", legacy: "40", noLeaflets: true, sort: "default" };
+const DEF: Saved = { prefix: "41", from: yearStart(), keepMonths: 3, includeNew: false, partial: true, areaClass: {}, excluded: [], room: "20", legacy: "40", noLeaflets: true, sort: "default", usePlan: true };
 
 export default function RelocationBoard({ userEmail }: { userEmail: string | null }) {
   const [s, setS] = useState<Saved>(DEF);
@@ -68,6 +70,10 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
   const [sharedInfo, setSharedInfo] = useState<{ by: string | null; at: string | null }>({ by: null, at: null });
   const [skip, setSkip] = useState<string[]>([]);
   const [posRoom, setPosRoom] = useState<Record<string, string>>({});
+  // ζήτηση από πλάνο παραγωγής / παραγγελίες (Ζήτηση περιεκτών)
+  const [extra, setExtra] = useState<{ byCode: Record<string, number>; lines: number }>({ byCode: {}, lines: 0 });
+  const loadExtra = () =>
+    import("@/lib/demandData").then((m) => m.loadContainerNeeds()).then(setExtra, () => setExtra({ byCode: {}, lines: 0 }));
   const picked = useMemo(() => new Set(Object.values(shared).flatMap((r) => r.keys)), [shared]);
   const manualMap = useMemo(() => Object.fromEntries(Object.entries(shared).filter(([, r]) => r.manual != null).map(([i, r]) => [i, Number(r.manual)])), [shared]);
   const lotMap = useMemo(() => Object.assign({}, ...Object.values(shared).map((r) => r.lot_qty ?? {})) as Record<string, number>, [shared]);
@@ -80,6 +86,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
       /* τίποτα */
     }
     loadShared();
+    loadExtra();
   }, []);
   async function loadShared() {
     const sb = createClient();
@@ -101,6 +108,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
   const reloadShared = useCoalesced(() => loadShared(), 800);
   useWmsLive((sig) => {
     if (sig.key === "relocation_pick") reloadShared();
+    if (sig.key === "demand") loadExtra();
   });
   // αλλαγή εγγραφών κωδικών (null = διαγραφή): αμέσως στην οθόνη, μετά στη βάση
   async function putRecs(recs: Record<string, PickRec | null>) {
@@ -225,6 +233,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
       lotQty: lotMap,
       skipPos: skip,
       posRoom,
+      extraDemand: s.usePlan ? extra.byCode : undefined,
     });
     if (s.noLeaflets) {
       // θέση που κρατά και leaflets δεν «αδειάζει»
@@ -233,7 +242,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
       for (const l of p.lines) if (withLeaflets.has(l.pos)) l.freesPosition = false;
     }
     return p;
-  }, [rows, loaded, s.keepMonths, s.includeNew, s.partial, s.areaClass, s.excluded, s.room, s.noLeaflets, manualMap, lotMap, skip, posRoom]);
+  }, [rows, loaded, s.keepMonths, s.includeNew, s.partial, s.areaClass, s.excluded, s.room, s.noLeaflets, manualMap, lotMap, skip, posRoom, extra, s.usePlan]);
 
   async function savePallet(item: string, qty: number | null) {
     const prev = rows;
@@ -369,6 +378,10 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
             <input type="checkbox" checked={s.includeNew} onChange={(e) => save({ ...s, includeNew: e.target.checked })} />
             Να φύγουν και οι νέοι κωδικοί
           </label>
+          <label className="st-check" title="Μένει στην κεντρική ό,τι χρειάζεται το πλάνο παραγωγής / οι ανοιχτές παραγγελίες τελικών (Ανάλυση → Ζήτηση περιεκτών)">
+            <input type="checkbox" checked={s.usePlan} onChange={(e) => save({ ...s, usePlan: e.target.checked })} />
+            Με το πλάνο παραγωγής{extra.lines ? ` (${extra.lines} γραμμές)` : " (δεν έχει ανέβει)"}
+          </label>
         </div>
       </form>
 
@@ -502,44 +515,6 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
   );
 }
 
-/** Ταξινόμηση με κλικ στην επικεφαλίδα: 1ο κλικ (αριθμοί: μεγαλύτερα πρώτα, κείμενο: Α→Ω), 2ο αντίστροφα, 3ο καμία. */
-type ColDef<T> = { h: ReactNode; v?: (x: T) => number | string | null | undefined; num?: boolean; title?: string };
-function useColSort<T>(cols: ColDef<T>[], rows: T[]) {
-  const [st, setSt] = useState<{ i: number; dir: 1 | -1 } | null>(null);
-  let sorted = rows;
-  const f = st ? cols[st.i]?.v : undefined;
-  if (st && f) {
-    const empty = (x: unknown) => x == null || x === "" || (typeof x === "number" && isNaN(x));
-    sorted = [...rows].sort((a, b) => {
-      const x = f(a);
-      const y = f(b);
-      if (empty(x)) return empty(y) ? 0 : 1; // κενά πάντα στο τέλος
-      if (empty(y)) return -1;
-      if (x === y) return 0;
-      const c = typeof x === "number" && typeof y === "number" ? (x < y ? -1 : 1) : String(x).localeCompare(String(y), "el", { numeric: true });
-      return c * st.dir;
-    });
-  }
-  const click = (i: number) =>
-    setSt((cur) => {
-      const first: 1 | -1 = cols[i].num ? -1 : 1;
-      if (!cur || cur.i !== i) return { i, dir: first };
-      return cur.dir === first ? { i, dir: (-first) as 1 | -1 } : null;
-    });
-  const head = cols.map((c, i) => (
-    <th key={i} title={c.title} aria-sort={st?.i === i ? (st.dir === 1 ? "ascending" : "descending") : undefined}>
-      {c.v ? (
-        <button type="button" onClick={() => click(i)} title="Ταξινόμηση">
-          {c.h}
-          <span className="st-arrow">{st?.i === i ? (st.dir === 1 ? "▲" : "▼") : ""}</span>
-        </button>
-      ) : (
-        c.h
-      )}
-    </th>
-  ));
-  return { sorted, head };
-}
 const lotsOf = (p: ItemPlan) => new Set(p.lines.map((l) => `${l.lot}|${l.expiry ?? ""}`)).size;
 
 type AreaRow = RelPlan["areas"][number];
