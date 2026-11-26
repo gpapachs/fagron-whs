@@ -1634,3 +1634,37 @@ button.cell.wp-cell { font-size: 10px; height: 26px; padding: 0 6px; letter-spac
 tr.rl-grow.dm-short td:first-child { box-shadow: inset 3px 0 0 var(--red, #c0392b); }
 tr.rl-grow.dm-ext td:first-child { box-shadow: inset 3px 0 0 var(--orange, #d9822b); }
 .dm-foot { font-size: 12px; margin-top: 10px; }
+/* logistics */
+.lg-form { display: flex; flex-direction: column; gap: 12px; }
+.lg-form fieldset { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px 12px; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.lg-form legend { font-weight: 700; font-size: 13px; padding: 0 6px; }
+.lg-form textarea { font: inherit; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--ink); resize: vertical; }
+.lg-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.lg-row .field { min-width: 120px; flex: 1 1 140px; }
+.lg-row .field.lg-wide, .lg-wide { flex: 2 1 280px; }
+.lg-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 12px; }
+.lg-detail { display: flex; flex-direction: column; gap: 12px; }
+.lg-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.lg-head h2 { margin: 0; font-size: 20px; }
+.lg-card { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 12px 14px; }
+.lg-card h3 { margin: 0 0 8px; font-size: 15px; }
+.lg-card h4 { margin: 12px 0 6px; font-size: 13px; }
+.lg-kv { border-collapse: collapse; font-size: 13px; width: 100%; }
+.lg-kv th { text-align: left; color: var(--ink-dim); font-weight: 600; padding: 3px 10px 3px 0; white-space: nowrap; vertical-align: top; }
+.lg-kv td { padding: 3px 0; }
+.lg-badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; margin-left: 6px; background: var(--surface-2); border: 1px solid var(--border); vertical-align: middle; }
+.lg-badge.green { background: color-mix(in srgb, var(--green, #2f8f5b) 15%, transparent); color: var(--green, #2f8f5b); border-color: transparent; }
+.lg-badge.blue { background: color-mix(in srgb, var(--accent, #2563eb) 14%, transparent); color: var(--accent, #2563eb); border-color: transparent; }
+.lg-badge.yellow { background: color-mix(in srgb, #d4a017 18%, transparent); color: #9a7300; border-color: transparent; }
+.lg-badge.orange { background: color-mix(in srgb, var(--orange, #d9822b) 16%, transparent); color: var(--orange, #d9822b); border-color: transparent; }
+.lg-badge.red { background: color-mix(in srgb, var(--red, #c0392b) 14%, transparent); color: var(--red, #c0392b); border-color: transparent; }
+.lg-pick { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-bottom: 8px; }
+.lg-events { list-style: none; padding: 0; margin: 0; font-size: 13px; display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow: auto; }
+.lg-click { cursor: pointer; }
+.lg-click:hover td { background: var(--surface-2); }
+tr.lg-won td { background: color-mix(in srgb, var(--green, #2f8f5b) 9%, transparent); }
+.lg-mq { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.qf { max-width: 860px; margin: 24px auto; padding: 0 16px 40px; display: flex; flex-direction: column; gap: 12px; }
+.qf h1 { font-size: 20px; margin: 0; }
+.qf .lg-kv { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 8px; }
+.qf-foot { font-size: 12px; margin-top: 16px; }

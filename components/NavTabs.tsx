@@ -11,6 +11,7 @@ const LINKS = [
   { href: "/sales", label: "Παραγγελίες" },
   { href: "/orders", label: "Εκτελεσμένες" },
   { href: "/shipments", label: "Αποστολές" },
+  { href: "/logistics", label: "Logistics" },
   { href: "/labels", label: "Ετικέτες" },
   { href: "/analysis", label: "Ανάλυση" },
 ];

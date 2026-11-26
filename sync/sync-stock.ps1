@@ -16,6 +16,7 @@
     .\sync-stock.cmd -Live      τρέχει συνέχεια: νέες κινήσεις + απόθεμα όσων κινήθηκαν, κάθε 30"
     .\sync-stock.cmd -Report    η εβδομαδιαία αναφορά μεταφοράς σε relocation-report.html (χωρίς αποστολή)
     .\sync-stock.cmd -SendReport   στέλνει την αναφορά τώρα από το Outlook
+    .\sync-stock.cmd -Outbox    στέλνει τώρα τα email της εφαρμογής (Logistics) που περιμένουν
 
   Αναφορά μεταφοράς: κάθε Πέμπτη 12:00 (REPORT_DAY / REPORT_TIME) το -Live και το sync στέλνουν από το Outlook
   του υπολογιστή την αναφορά «Τι πρέπει να φύγει» στους REPORT_TO (χωρισμένοι με ;). Αν ο υπολογιστής ήταν
@@ -28,7 +29,7 @@
   Προαιρετικά SHIPMENTS_XLSX=<διαδρομή του FSSE SHIPMENTS .xlsx στο OneDrive> (αλλιώς αναζήτηση
   στους φακέλους OneDrive*). Στο -Live ανεβαίνει μέσα σε ~10" από κάθε αλλαγή του αρχείου.
 #>
-param([switch]$Test, [switch]$DryRun, [switch]$Force, [string]$Describe, [string]$Probe, [string]$Find, [switch]$Moves, [switch]$Live, [switch]$Orders, [switch]$Report, [switch]$SendReport)
+param([switch]$Test, [switch]$DryRun, [switch]$Force, [string]$Describe, [string]$Probe, [string]$Find, [switch]$Moves, [switch]$Live, [switch]$Orders, [switch]$Report, [switch]$SendReport, [switch]$Outbox)
 
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
@@ -878,6 +879,35 @@ function Send-RelocationReport([switch]$now, [switch]$preview) {
   }
 }
 
+# ------------------------------------------------------------------ email από την εφαρμογή (Logistics) μέσω Outlook
+# Η εφαρμογή γράφει στο mail_outbox (αιτήματα προσφοράς, αναθέσεις)· εδώ φεύγουν από το Outlook αυτού του υπολογιστή.
+# MAIL_OUTBOX=off το σταματά.
+$script:OutboxFailAt = $null
+function Send-Outbox {
+  if ((Opt 'MAIL_OUTBOX') -eq 'off') { return }
+  if ($script:OutboxFailAt -and ((Get-Date) - $script:OutboxFailAt).TotalMinutes -lt 5) { return }
+  $list = @(Sb-Request 'GET' '/rest/v1/mail_outbox?status=eq.pending&select=id,to_addrs,cc_addrs,subject,html&order=id.asc&limit=20' $null)
+  if (-not $list.Count -or -not $list[0]) { return }
+  try { $ol = New-Object -ComObject Outlook.Application } catch { $script:OutboxFailAt = Get-Date; Log ("Email (Outlook): " + $_); return }
+  foreach ($m in $list) {
+    if (-not $m.id) { continue }
+    try {
+      $mail = $ol.CreateItem(0)
+      $mail.To = (@($m.to_addrs) -join '; ')
+      if (@($m.cc_addrs).Count) { $mail.CC = (@($m.cc_addrs) -join '; ') }
+      $mail.Subject = $m.subject
+      $mail.HTMLBody = $m.html
+      $mail.Send()
+      [void](Sb-Request 'POST' '/rest/v1/rpc/mail_outbox_done' @{ p_id = $m.id; p_ok = $true })
+      Log ("Email: {0} -> {1}" -f $m.subject, (@($m.to_addrs) -join ', '))
+    } catch {
+      $err = "$_"
+      try { [void](Sb-Request 'POST' '/rest/v1/rpc/mail_outbox_done' @{ p_id = $m.id; p_ok = $false; p_error = $err }) } catch {}
+      Log ("Email απέτυχε ({0}): {1}" -f $m.subject, $err)
+    }
+  }
+}
+
 function Convert-Moves($t) {
   $names = @($t.Columns | ForEach-Object { $_.ColumnName.ToLowerInvariant() })
   $has = @{}; foreach ($n in $names) { $has[$n] = $true }
@@ -992,6 +1022,7 @@ function Run-Live {
     try { Sync-Shipments } catch { Log ("Live (αποστολές): " + $_) }
     try { Sync-Positions } catch { Log ("Live (θέσεις): " + $_) }
     Send-RelocationReport
+    try { Send-Outbox } catch { Log ("Live (email): " + $_) }
     # κάθε ~2 λεπτά: λίστες ανοιχτές στην εφαρμογή που ολοκληρώθηκαν στο WMS
     $cycle++
     if ($cycle % [math]::Max(1, [int](120 / $secs)) -eq 0) { try { Refresh-Completed 'SALEXPORTLS' } catch { Log ("Live (ολοκληρωμένες): " + $_) } }
@@ -1252,6 +1283,7 @@ if ($Probe) { Probe-Item $Probe $Find; exit 0 }
 if ($Moves) { Discover-Moves; exit 0 }
 if ($Live) { Run-Live; exit 0 }
 if ($Orders) { Discover-Orders; exit 0 }
+if ($Outbox) { Sb-Login; Send-Outbox; exit 0 }
 if ($Report -or $SendReport) { Sb-Login; Send-RelocationReport -now:$SendReport -preview:$Report; exit 0 }
 
 $queryFile = Join-Path $Here 'stock-query.sql'
@@ -1328,6 +1360,7 @@ try { Sync-ItemPack } catch { Log ("Παλέτες / συσκευασίες: " +
 try { Sync-Positions } catch { Log ("Θέσεις WMS: " + $_) }
 try { Sync-LotReceipts } catch { Log ("Εισαγωγές παρτίδων: " + $_) }
 Send-RelocationReport
+try { Send-Outbox } catch { Log ("Email: " + $_) }
 foreach ($oc in 'SALEXPORTCL', 'SALEXPORTLS') { try { Sync-Orders $oc } catch { Log ("Orders $($oc): " + $_) } }
 try { Sync-Collecting 'SALEXPORTLS' } catch { Log ("Σε συλλογή: " + $_) }
 try { Refresh-Completed 'SALEXPORTLS' } catch { Log ("Ολοκληρωμένες / διαγραμμένες: " + $_) }
