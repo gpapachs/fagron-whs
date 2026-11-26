@@ -6,7 +6,8 @@ import { fetchAll } from "@/lib/supabase/fetchAll";
 import { loadLegacy } from "@/lib/legacy";
 import { inChunks } from "@/lib/salesData";
 import { RESERVED_FROM } from "@/lib/repackLive";
-import { computeDemand, type DemandLine, type Spec, type StockLite } from "@/lib/containerDemand";
+import { computeDemand, planInfoOf, type DemandLine, type Spec, type StockLite } from "@/lib/containerDemand";
+import type { PlanInfo } from "@/lib/relocation";
 
 export type DemandUpload = { kind: "plan" | "orders" | "specs"; file_name: string | null; rows: number | null; uploaded_at: string; uploaded_by: string | null };
 
@@ -86,9 +87,9 @@ export async function loadStockFor(codes: string[]): Promise<StockLite[]> {
 }
 
 /** για τη Μεταφορά αποθέματος: πόσα χρειάζονται ανά κωδικό συσκευασίας (πλάνο + παραγγελίες Excel) */
-export async function loadContainerNeeds(): Promise<{ byCode: Record<string, number>; lines: number }> {
+export async function loadContainerNeeds(): Promise<{ byCode: Record<string, number>; info: Record<string, PlanInfo>; lines: number }> {
   const [{ lines }, specs, legacy] = await Promise.all([loadDemandLines(), loadSpecs(), loadLegacy("")]);
-  if (!lines.length) return { byCode: {}, lines: 0 };
+  if (!lines.length) return { byCode: {}, info: {}, lines: 0 };
   const r = computeDemand(lines, specs, legacy.newOf, []);
-  return { byCode: Object.fromEntries(r.needs.map((n) => [n.code, n.total])), lines: r.lines };
+  return { byCode: Object.fromEntries(r.needs.map((n) => [n.code, n.total])), info: planInfoOf(r.needs), lines: r.lines };
 }

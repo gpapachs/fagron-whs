@@ -59,7 +59,17 @@ export type RelParams = {
   posRoom?: Record<string, string>;
   /** ζήτηση από πλάνο παραγωγής / ανοιχτές παραγγελίες μέσω προδιαγραφών, ανά κωδικό (Ζήτηση περιεκτών) */
   extraDemand?: Record<string, number>;
+  /** λεπτομέρειες της ζήτησης ανά κωδικό (για την αιτιολογία)· όταν δίνεται, έχουν ανέβει αρχεία πλάνου / παραγγελιών */
+  extraInfo?: Record<string, PlanInfo>;
   today?: Date;
+};
+export type PlanInfo = {
+  plan: number; // από το πλάνο παραγωγής
+  orders: number; // από τις ανοιχτές παραγγελίες (πέρα από απόθεμα τελικού + πλάνο)
+  wms: number; // από τις λίστες WMS
+  firstDue: string | null;
+  nProducts: number;
+  top: { product: string; desc: string | null; need: number; kind: "plan" | "orders" | "wms"; due: string | null }[];
 };
 export type Category = "dead" | "new" | "slow" | "active" | "excluded";
 export type MoveLine = {
@@ -93,6 +103,7 @@ export type ItemPlan = {
   demand: number;
   /** μέρος της ζήτησης από πλάνο παραγωγής / παραγγελίες (προδιαγραφές) */
   planDemand?: number;
+  planInfo?: PlanInfo | null;
   keep: number;
   moveQty: number;
   movePallets: number | null;
@@ -300,6 +311,7 @@ export function planRelocation(rows: RelRow[], params: RelParams): RelPlan {
       cover: perMonth > 0 ? onsite / perMonth : null,
       demand,
       planDemand,
+      planInfo: params.extraInfo ? params.extraInfo[item] ?? null : undefined,
       keep: isFinite(keep) ? keep : onsite,
       moveQty,
       movePallets: pq.qty ? lines.reduce((s, l) => s + (l.pallets ?? 0), 0) : null,
@@ -382,8 +394,35 @@ const n0 = (n: number) => Math.round(n).toLocaleString("el-GR");
 const n1 = (n: number) => n.toLocaleString("el-GR", { maximumFractionDigits: 1 });
 const dmy = (s: string | null) => (s ? s.slice(0, 10).split("-").reverse().join("/") : "");
 
-/** Η αιτιολόγηση της πρότασης για έναν κωδικό, με τα νούμερα που την έβγαλαν. */
+/** Η αιτιολόγηση της πρότασης για έναν κωδικό, με τα νούμερα που την έβγαλαν — μαζί με σχόλιο για πλάνο / παραγγελίες. */
 export function explain(i: ItemPlan, params: RelParams, isNew: boolean): { short: string; long: string[] } {
+  const base = explainBase(i, params, isNew);
+  if (i.planInfo === undefined) return base; // δεν έχουν ανέβει αρχεία πλάνου / παραγγελιών
+  const pi = i.planInfo;
+  const K = { plan: "πλάνο", orders: "παραγγελία", wms: "λίστα WMS" } as const;
+  if (!pi || pi.plan + pi.orders + pi.wms <= 0) {
+    return {
+      short: `${base.short} · Όχι σε πλάνο παραγωγής / ανοιχτές παραγγελίες.`,
+      long: [...base.long, "Πλάνο / παραγγελίες: δεν χρειάζεται σε κανένα τελικό του πλάνου παραγωγής ούτε στις ανοιχτές παραγγελίες (μέσω BOM)."],
+    };
+  }
+  const parts = [pi.plan > 0 ? `πλάνο ${n0(pi.plan)}` : "", pi.orders > 0 ? `παραγγελίες ${n0(pi.orders)}` : "", pi.wms > 0 ? `λίστες WMS ${n0(pi.wms)}` : ""].filter(Boolean).join(" + ");
+  const top = pi.top
+    .slice(0, 3)
+    .map((t) => `${t.product}${t.desc ? ` ${t.desc}` : ""} (${K[t.kind]}${t.due ? ` ${dmy(t.due)}` : ""}): ${n0(t.need)}`)
+    .join("· ");
+  const cover = i.onsite >= i.demand ? "η κεντρική τα καλύπτει" : `η κεντρική δεν φτάνει (λείπουν ${n0(i.demand - i.onsite)})`;
+  return {
+    short: `${base.short} · Πλάνο/παραγγελίες: ${parts}${pi.firstDue ? ` από ${dmy(pi.firstDue)}` : ""}.`,
+    long: [
+      ...base.long,
+      `Πλάνο / παραγγελίες: χρειάζονται ${parts} = ${n0(pi.plan + pi.orders + pi.wms)} για ${pi.nProducts} τελικ${pi.nProducts === 1 ? "ό" : "ά"}${pi.firstDue ? `, πρώτη ${dmy(pi.firstDue)}` : ""} — ${cover}. Κρατιούνται στην κεντρική πάνω από την ανάλωση.`,
+      ...(top ? [`Κυριότερα: ${top}.`] : []),
+    ],
+  };
+}
+
+function explainBase(i: ItemPlan, params: RelParams, isNew: boolean): { short: string; long: string[] } {
   const from = dmy(params.from);
   const legacy = i.legacyCodes ? ` (μαζί ${n0(i.legacyOut)} από τον παλιό ${i.legacyCodes})` : "";
   const cons = i.outQty > 0 ? `Ανάλωση ${n0(i.outQty)} σε ${n1(i.effMonths)} μήνες${legacy} = ${n1(i.perMonth)}/μήνα.` : `Καμία ανάλωση από ${from}${i.legacyCodes ? ` (ούτε στον παλιό ${i.legacyCodes})` : ""}.`;
@@ -398,7 +437,6 @@ export function explain(i: ItemPlan, params: RelParams, isNew: boolean): { short
       short: `Νέος κωδικός (πρώτη παραλαβή ${dmy(i.firstReceipt)}) χωρίς ανάλωση ακόμη — μένει.`,
       long: [...long, `Ήρθε για πρώτη φορά ${dmy(i.firstReceipt)}, λιγότερο από 90 ημέρες. Μένει μέχρι να φανεί η κατανάλωσή του (ή τσέκαρε «Να φύγουν και οι νέοι κωδικοί»).`],
     };
-  if (pd > 0) long.push(`Χρειάζεται για το πλάνο παραγωγής / τις παραγγελίες τελικών (μέσω προδιαγραφών): ${n0(pd)}.`);
   if (i.outQty <= 0 && i.demand <= 0) {
     long.push(`Χωρίς ανάλωση και χωρίς ανοιχτές παραγγελίες δεν χρειάζεται απόθεμα στην κεντρική → φεύγει ό,τι είναι σε μεταφέρσιμες θέσεις (${n0(i.movable)}).`);
     if (isNew) long.push("Είναι νέος κωδικός· φεύγει επειδή είναι τσεκαρισμένο «Να φύγουν και οι νέοι κωδικοί».");

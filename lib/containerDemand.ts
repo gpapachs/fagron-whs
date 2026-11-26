@@ -266,3 +266,27 @@ export function parseBomTable(rows: Cell[][]): { lines: FlatSpecLine[]; products
   }
   return { lines, products: prods.size, total };
 }
+
+/** Σύνοψη ανά κωδικό για την αιτιολογία της Μεταφοράς */
+export function planInfoOf(needs: ContainerNeed[]) {
+  const out: Record<string, { plan: number; orders: number; wms: number; firstDue: string | null; nProducts: number; top: { product: string; desc: string | null; need: number; kind: DemandKind; due: string | null }[] }> = {};
+  for (const n of needs) {
+    const byP = new Map<string, { product: string; desc: string | null; need: number; kind: DemandKind; due: string | null }>();
+    for (const x of n.sources) {
+      const k = `${x.product}|${x.kind}`;
+      const e = byP.get(k) ?? { product: x.product, desc: x.productDesc, need: 0, kind: x.kind, due: x.due };
+      e.need += x.need;
+      if (x.due && (!e.due || x.due < e.due)) e.due = x.due;
+      byP.set(k, e);
+    }
+    out[n.code] = {
+      plan: n.need.plan,
+      orders: n.need.orders,
+      wms: n.need.wms,
+      firstDue: n.firstDue,
+      nProducts: new Set(n.sources.map((x) => x.product)).size,
+      top: [...byP.values()].sort((a, b) => b.need - a.need).slice(0, 5),
+    };
+  }
+  return out;
+}

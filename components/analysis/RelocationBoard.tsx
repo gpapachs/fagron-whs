@@ -10,7 +10,7 @@ import { siteOf } from "@/lib/site";
 import { isLeaflet } from "@/lib/leaflet";
 import { ago, useCoalesced, useWmsLive } from "@/lib/live";
 import { displayUser } from "@/lib/users";
-import { CATEGORY_TXT, defaultAreaClass, itemKey, lineKey, normRel, pickPlan, planRelocation, withRelPallet, type AreaClass, type ItemPlan, type MoveLine, type RelPlan, type RelRow } from "@/lib/relocation";
+import { CATEGORY_TXT, defaultAreaClass, itemKey, lineKey, normRel, pickPlan, planRelocation, withRelPallet, type AreaClass, type ItemPlan, type MoveLine, type PlanInfo, type RelPlan, type RelRow } from "@/lib/relocation";
 
 type View = "lines" | "pick" | "items" | "dead" | "returns" | "freed" | "areas";
 const LS = "relocation.v1";
@@ -71,9 +71,9 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
   const [skip, setSkip] = useState<string[]>([]);
   const [posRoom, setPosRoom] = useState<Record<string, string>>({});
   // ζήτηση από πλάνο παραγωγής / παραγγελίες (Ζήτηση περιεκτών)
-  const [extra, setExtra] = useState<{ byCode: Record<string, number>; lines: number }>({ byCode: {}, lines: 0 });
+  const [extra, setExtra] = useState<{ byCode: Record<string, number>; info: Record<string, PlanInfo>; lines: number }>({ byCode: {}, info: {}, lines: 0 });
   const loadExtra = () =>
-    import("@/lib/demandData").then((m) => m.loadContainerNeeds()).then(setExtra, () => setExtra({ byCode: {}, lines: 0 }));
+    import("@/lib/demandData").then((m) => m.loadContainerNeeds()).then(setExtra, () => setExtra({ byCode: {}, info: {}, lines: 0 }));
   const picked = useMemo(() => new Set(Object.values(shared).flatMap((r) => r.keys)), [shared]);
   const manualMap = useMemo(() => Object.fromEntries(Object.entries(shared).filter(([, r]) => r.manual != null).map(([i, r]) => [i, Number(r.manual)])), [shared]);
   const lotMap = useMemo(() => Object.assign({}, ...Object.values(shared).map((r) => r.lot_qty ?? {})) as Record<string, number>, [shared]);
@@ -234,6 +234,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
       skipPos: skip,
       posRoom,
       extraDemand: s.usePlan ? extra.byCode : undefined,
+      extraInfo: s.usePlan && extra.lines ? extra.info : undefined,
     });
     if (s.noLeaflets) {
       // θέση που κρατά και leaflets δεν «αδειάζει»
