@@ -21,3 +21,22 @@ export function loadPdfFonts(): Promise<PdfFontPair> {
     });
   return cache;
 }
+
+// Logo της Fagron (JPEG από το public/fagron-logo.svg) για τα PDF
+let logoCache: Promise<string> | null = null;
+export function loadLogo(): Promise<string> {
+  const base = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+  logoCache ??= fetch(`${base}/fagron-logo.jpg`)
+    .then(async (res) => {
+      if (!res.ok) throw new Error(`logo (${res.status})`);
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      let bin = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return "data:image/jpeg;base64," + btoa(bin);
+    })
+    .catch((e) => {
+      logoCache = null;
+      throw e;
+    });
+  return logoCache;
+}

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { loadPdfFonts } from "@/lib/pdfFonts";
+import { loadLogo, loadPdfFonts } from "@/lib/pdfFonts";
 import { logEvent, queueMail, uploadDoc } from "@/components/logistics/data";
 import { manifestFromRfq, manifestTotals } from "@/lib/manifestPdf";
 import { DOC_TXT, manifestEmail, type Carrier, type Invite, type Manifest, type ManifestLine, type Quote, type Rfq, type RfqDoc } from "@/lib/logistics";
@@ -45,8 +45,14 @@ export default function ManifestCard({
   const setLine = (i: number, k: keyof ManifestLine, v: string) => setM({ ...m, lines: m.lines.map((l, j) => (j === i ? { ...l, [k]: v } : l)) });
 
   async function build() {
-    const [{ jsPDF }, { autoTable }, { manifestPdf }, fonts] = await Promise.all([import("jspdf"), import("jspdf-autotable"), import("@/lib/manifestPdf"), loadPdfFonts()]);
-    return manifestPdf(jsPDF, autoTable, fonts, rfq, carrier, quote, { ...m, docs: m.docs.map((x) => x.trim()).filter(Boolean) }, sender);
+    const [{ jsPDF }, { autoTable }, { manifestPdf }, fonts, logo] = await Promise.all([
+      import("jspdf"),
+      import("jspdf-autotable"),
+      import("@/lib/manifestPdf"),
+      loadPdfFonts(),
+      loadLogo().catch(() => null),
+    ]);
+    return manifestPdf(jsPDF, autoTable, fonts, rfq, carrier, quote, { ...m, docs: m.docs.map((x) => x.trim()).filter(Boolean) }, sender, logo);
   }
 
   async function preview() {

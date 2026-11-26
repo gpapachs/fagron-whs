@@ -8,6 +8,7 @@ import RfqForm from "@/components/logistics/RfqForm";
 import RoundPanel from "@/components/logistics/RoundPanel";
 import DocsCard from "@/components/logistics/DocsCard";
 import ManifestCard from "@/components/logistics/ManifestCard";
+import HazardCard from "@/components/logistics/HazardCard";
 import { downloadDoc, logEvent, queueMail, type LogData } from "@/components/logistics/data";
 import { roundSaving, awardEmail, htmlToText, mailtoHref, dmy, DIR_TXT, loadRows, MODE_TXT, quoteLink, rankQuotes, rfqEmail, route, STATUS_TONE, STATUS_TXT, suggestCarriers, type Quote, type Rfq } from "@/lib/logistics";
 
@@ -629,6 +630,8 @@ export default function RfqDetail({ rfq, data, userEmail, onBack, reload }: { rf
       )}
 
       <DocsCard rfq={rfq} docs={docs} userEmail={userEmail} reload={reload} />
+
+      <HazardCard rfq={rfq} docs={docs} userEmail={userEmail} onDone={done} />
 
       <div className="lg-cols">
         <section className="lg-card">

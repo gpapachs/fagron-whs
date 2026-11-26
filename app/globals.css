@@ -1703,3 +1703,8 @@ tr.lg-won td { background: color-mix(in srgb, var(--green, #2f8f5b) 9%, transpar
 .lg-site-other { border-color: var(--reserved) !important; background: var(--reserved-bg); }
 .lg-note { margin: 4px 0; font-size: 12.5px; }
 input:disabled { opacity: .75; }
+.lg-hz input { width: 100%; min-width: 60px; font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); }
+.lg-hz td:nth-child(2) input { min-width: 180px; }
+.lg-hz input.lg-cas { min-width: 90px; }
+.lg-hz input.lg-un { min-width: 44px; width: 56px; }
+.lg-small { font-size: 12px; }

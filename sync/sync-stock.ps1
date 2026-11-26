@@ -945,7 +945,8 @@ function Send-Outbox {
         # συνημμένα από το Supabase Storage (bucket «logistics») -> προσωρινός φάκελος -> Outlook
         $tmp = Join-Path ([IO.Path]::GetTempPath()) ("FagronOutbox\" + $m.id)
         [void](New-Item -ItemType Directory -Force -Path $tmp)
-        $atts = & $call $mail 'Attachments' $BF::GetProperty @()
+        # απευθείας κλήση (όχι μέσω scriptblock): η συλλογή Attachments θα «ξεδιπλωνόταν» στο pipeline σε $null
+        $atts = [System.__ComObject].InvokeMember('Attachments', $BF::GetProperty, $null, $mail, $null)
         foreach ($a in @($m.attachments)) {
           $name = ([string]$a.name) -replace '[\\/:*?"<>|]', '_'
           if (-not $name) { $name = 'file' }
@@ -953,7 +954,7 @@ function Send-Outbox {
           $segs = (([string]$a.path) -split '/') | ForEach-Object { [Uri]::EscapeDataString($_) }
           $h = @{ apikey = $SbKey; Authorization = "Bearer $($script:Token)" }
           Invoke-WebRequest -Uri ("$SbUrl/storage/v1/object/logistics/" + ($segs -join '/')) -Headers $h -OutFile $file -UseBasicParsing -TimeoutSec 120
-          [void](& $call $atts 'Add' $BF::InvokeMethod @($file))
+          [void]([System.__ComObject].InvokeMember('Add', $BF::InvokeMethod, $null, $atts, [object[]]@([string]$file)))
         }
       }
       [void](& $call $mail 'Send' $BF::InvokeMethod @())

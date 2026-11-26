@@ -7,7 +7,8 @@ type Fonts = { regular: string; bold: string };
 const F = "DejaVu";
 const INK: [number, number, number] = [17, 24, 39];
 const DIM: [number, number, number] = [100, 116, 139];
-const ACCENT: [number, number, number] = [20, 33, 61];
+const RED: [number, number, number] = [206, 48, 44]; // Fagron #CE302C
+const RED_BG: [number, number, number] = [251, 234, 233];
 const LINE: [number, number, number] = [203, 213, 225];
 const caps = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
 const dmy = (s: string | null | undefined) => (s ? s.slice(0, 10).split("-").reverse().join("/") : "");
@@ -40,7 +41,7 @@ export function manifestTotals(m: Manifest) {
   return { pallets: sum("pallets"), packages: sum("packages"), weight: sum("weight") };
 }
 
-export function manifestPdf(jsPDF: Any, autoTable: (d: Any, o: Any) => void, fonts: Fonts, r: Rfq, carrier: Carrier | null, q: Quote | null, m: Manifest, by: string) {
+export function manifestPdf(jsPDF: Any, autoTable: (d: Any, o: Any) => void, fonts: Fonts, r: Rfq, carrier: Carrier | null, q: Quote | null, m: Manifest, by: string, logo?: string | null) {
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4", compress: true });
   doc.addFileToVFS("DejaVu.ttf", fonts.regular);
   doc.addFont("DejaVu.ttf", F, "normal");
@@ -51,35 +52,47 @@ export function manifestPdf(jsPDF: Any, autoTable: (d: Any, o: Any) => void, fon
   const L = 14;
   const R = W - 14;
 
-  // κεφαλίδα
-  doc.setFillColor(...ACCENT);
-  doc.rect(L, 12, 3, 14, "F");
+  // κεφαλίδα: logo αριστερά, τίτλος / αναφορά δεξιά, κόκκινα
+  let tx = L;
+  if (logo) {
+    doc.addImage(logo, "JPEG", L, 11, 47, 10.4);
+    tx = L + 52;
+  } else {
+    doc.setFillColor(...RED);
+    doc.rect(L, 12, 3, 14, "F");
+    tx = L + 6;
+  }
   doc.setFont(F, "bold");
-  doc.setFontSize(18);
-  doc.setTextColor(...INK);
-  doc.text("LOADING MANIFEST", L + 6, 19);
+  doc.setFontSize(17);
+  doc.setTextColor(...RED);
+  doc.text("LOADING MANIFEST", tx, 18);
   doc.setFont(F, "normal");
-  doc.setFontSize(10);
+  doc.setFontSize(9.5);
   doc.setTextColor(...DIM);
-  doc.text("Δελτίο φόρτωσης · Fagron Hellas — Logistics", L + 6, 25);
+  doc.text("Δελτίο φόρτωσης · Fagron Hellas — Logistics", tx, 24);
   doc.setFont(F, "bold");
   doc.setFontSize(13);
-  doc.setTextColor(...INK);
-  doc.text(r.ref, R, 19, { align: "right" });
+  doc.setTextColor(...RED);
+  doc.text(r.ref, R, 18, { align: "right" });
   doc.setFont(F, "normal");
   doc.setFontSize(8.5);
   doc.setTextColor(...DIM);
   const issued = new Date().toLocaleString("el-GR", { timeZone: "Europe/Athens", dateStyle: "short", timeStyle: "short" });
-  doc.text(`Έκδοση / Issued: ${issued}`, R, 25, { align: "right" });
+  doc.text(`Έκδοση / Issued: ${issued}`, R, 24, { align: "right" });
+  doc.setDrawColor(...RED);
+  doc.setLineWidth(0.6);
+  doc.line(L, 27.5, R, 27.5);
 
   // πλαίσια: αποστολέας / παραλήπτης
   const box = (x: number, y: number, w: number, h: number, title: string, lines: string[]) => {
     doc.setDrawColor(...LINE);
     doc.setLineWidth(0.3);
     doc.roundedRect(x, y, w, h, 1.5, 1.5, "S");
+    doc.setFillColor(...RED);
+    doc.rect(x, y + 1.5, 1.2, 5, "F");
     doc.setFont(F, "bold");
     doc.setFontSize(7.5);
-    doc.setTextColor(...DIM);
+    doc.setTextColor(...RED);
     doc.text(caps(title), x + 3, y + 5);
     doc.setFont(F, "normal");
     doc.setFontSize(9.5);
@@ -125,8 +138,8 @@ export function manifestPdf(jsPDF: Any, autoTable: (d: Any, o: Any) => void, fon
     startY: y,
     margin: { left: L, right: 14, bottom: 20 },
     styles: { font: F, fontSize: 9, textColor: INK, cellPadding: 2, lineColor: LINE, lineWidth: 0.15, valign: "top" },
-    headStyles: { font: F, fontStyle: "bold", fillColor: [241, 245, 249], textColor: [51, 65, 85], fontSize: 7.5 },
-    footStyles: { font: F, fontStyle: "bold", fillColor: [241, 245, 249], textColor: INK },
+    headStyles: { font: F, fontStyle: "bold", fillColor: RED, textColor: [255, 255, 255], fontSize: 7.5 },
+    footStyles: { font: F, fontStyle: "bold", fillColor: RED_BG, textColor: RED },
     head: [["#", "Περιγραφή / Description", "Παλέτες\nPallets", "Δέματα\nPackages", "Μικτό kg\nGross kg", "Διαστάσεις\nDimensions", "ADR (UN / class)", "Σημ. / Notes"]],
     body: m.lines.map((l, i) => [String(i + 1), l.desc, l.pallets, l.packages, fmt(numOf(l.weight)), l.dims, l.adr, l.notes]),
     foot: [["", "Σύνολο / Total", fmt(t.pallets, 0), fmt(t.packages, 0), fmt(t.weight), "", "", ""]],
@@ -150,8 +163,9 @@ export function manifestPdf(jsPDF: Any, autoTable: (d: Any, o: Any) => void, fon
     }
     doc.setFont(F, "bold");
     doc.setFontSize(9);
-    doc.setTextColor(...INK);
+    doc.setTextColor(...RED);
     doc.text(title, L, y);
+    doc.setTextColor(...INK);
     y += 4.5;
     doc.setFont(F, "normal");
     doc.setFontSize(9);
@@ -172,8 +186,9 @@ export function manifestPdf(jsPDF: Any, autoTable: (d: Any, o: Any) => void, fon
     }
     doc.setFont(F, "bold");
     doc.setFontSize(9);
-    doc.setTextColor(...INK);
+    doc.setTextColor(...RED);
     doc.text("Συνοδευτικά έγγραφα / Accompanying documents", L, y);
+    doc.setTextColor(...INK);
     y += 5;
     doc.setFont(F, "normal");
     doc.setDrawColor(...DIM);
@@ -198,8 +213,9 @@ export function manifestPdf(jsPDF: Any, autoTable: (d: Any, o: Any) => void, fon
     doc.roundedRect(x, y, third, 34, 1.5, 1.5, "S");
     doc.setFont(F, "bold");
     doc.setFontSize(7.5);
-    doc.setTextColor(...DIM);
+    doc.setTextColor(...RED);
     doc.text(caps(s), x + 3, y + 5);
+    doc.setTextColor(...DIM);
     doc.setFont(F, "normal");
     doc.text("Ονοματεπώνυμο / Name", x + 3, y + 14);
     doc.text("Ημ/νία & ώρα / Date & time", x + 3, y + 22);
