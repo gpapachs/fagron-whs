@@ -888,16 +888,20 @@ function Send-Outbox {
   if ($script:OutboxFailAt -and ((Get-Date) - $script:OutboxFailAt).TotalMinutes -lt 5) { return }
   $list = @(Sb-Request 'GET' '/rest/v1/mail_outbox?status=eq.pending&select=id,to_addrs,cc_addrs,subject,html&order=id.asc&limit=20' $null)
   if (-not $list.Count -or -not $list[0]) { return }
-  try { $ol = New-Object -ComObject Outlook.Application } catch { $script:OutboxFailAt = Get-Date; Log ("Email (Outlook): " + $_); return }
+  # late binding (IDispatch): δουλεύει και όταν η καταχώριση type library του Office είναι χαλασμένη
+  # (TYPE_E_CANTLOADLIBRARY / 0x80029C4A με το New-Object -ComObject)
+  $BF = [Reflection.BindingFlags]
+  $call = { param($o, $name, $flags, $argv) [System.__ComObject].InvokeMember($name, $flags, $null, $o, $argv) }
+  try { $ol = [Activator]::CreateInstance([Type]::GetTypeFromProgID('Outlook.Application')) } catch { $script:OutboxFailAt = Get-Date; Log ("Email (Outlook): " + $_); return }
   foreach ($m in $list) {
     if (-not $m.id) { continue }
     try {
-      $mail = $ol.CreateItem(0)
-      $mail.To = (@($m.to_addrs) -join '; ')
-      if (@($m.cc_addrs).Count) { $mail.CC = (@($m.cc_addrs) -join '; ') }
-      $mail.Subject = $m.subject
-      $mail.HTMLBody = $m.html
-      $mail.Send()
+      $mail = & $call $ol 'CreateItem' $BF::InvokeMethod @(0)
+      [void](& $call $mail 'To' $BF::SetProperty @((@($m.to_addrs) -join '; ')))
+      if (@($m.cc_addrs).Count) { [void](& $call $mail 'CC' $BF::SetProperty @((@($m.cc_addrs) -join '; '))) }
+      [void](& $call $mail 'Subject' $BF::SetProperty @([string]$m.subject))
+      [void](& $call $mail 'HTMLBody' $BF::SetProperty @([string]$m.html))
+      [void](& $call $mail 'Send' $BF::InvokeMethod @())
       [void](Sb-Request 'POST' '/rest/v1/rpc/mail_outbox_done' @{ p_id = $m.id; p_ok = $true })
       Log ("Email: {0} -> {1}" -f $m.subject, (@($m.to_addrs) -join ', '))
     } catch {

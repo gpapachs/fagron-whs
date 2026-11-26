@@ -6,7 +6,7 @@ import { displayUser } from "@/lib/users";
 import { ago } from "@/lib/live";
 import RfqForm from "@/components/logistics/RfqForm";
 import { logEvent, queueMail, type LogData } from "@/components/logistics/data";
-import { awardEmail, dmy, DIR_TXT, loadRows, MODE_TXT, quoteLink, rankQuotes, rfqEmail, route, STATUS_TONE, STATUS_TXT, suggestCarriers, type Quote, type Rfq } from "@/lib/logistics";
+import { awardEmail, htmlToText, mailtoHref, dmy, DIR_TXT, loadRows, MODE_TXT, quoteLink, rankQuotes, rfqEmail, route, STATUS_TONE, STATUS_TXT, suggestCarriers, type Quote, type Rfq } from "@/lib/logistics";
 
 const fm = (n: number | null | undefined, d = 2) => (n == null ? "" : n.toLocaleString("el-GR", { minimumFractionDigits: 0, maximumFractionDigits: d }));
 const toNum = (s: string) => {
@@ -89,6 +89,38 @@ export default function RfqDetail({ rfq, data, userEmail, onBack, reload }: { rf
       },
       "Η υπενθύμιση μπήκε στην ουρά."
     );
+
+  // χειροκίνητη αποστολή: άνοιγμα στο Outlook (mailto) / αντιγραφή με μορφοποίηση / σημείωση ως σταλμένο
+  const copyMail = async (subject: string, html: string) => {
+    try {
+      const ci = new ClipboardItem({ "text/html": new Blob([html], { type: "text/html" }), "text/plain": new Blob([htmlToText(html)], { type: "text/plain" }) });
+      await navigator.clipboard.write([ci]);
+      setNotice(`Αντιγράφηκε το κείμενο του email «${subject}» — επικόλλησέ το σε νέο email στο Outlook.`);
+    } catch {
+      await copy(htmlToText(html), "Αντιγράφηκε το κείμενο του email.");
+    }
+  };
+  const markSent = (id: number) =>
+    run(`ms-${id}`, async () => {
+      const { error } = await sb.rpc("mail_outbox_done", { p_id: id, p_ok: true, p_error: null });
+      if (error) throw new Error(error.message);
+      await logEvent(rfq.id, "Το email στάλθηκε χειροκίνητα", userEmail);
+    });
+  const cancelMail = (id: number) =>
+    run(`mc-${id}`, async () => {
+      const { error } = await sb.from("mail_outbox").update({ status: "cancelled" }).eq("id", id);
+      if (error) throw new Error(error.message);
+    });
+  const retryMail = (id: number) =>
+    run(`mr-${id}`, async () => {
+      const { error } = await sb.from("mail_outbox").update({ status: "pending", error: null }).eq("id", id);
+      if (error) throw new Error(error.message);
+    });
+  const inviteMail = (carrierId: string) => {
+    const c = cById.get(carrierId)!;
+    const inv = invites.find((i) => i.carrier_id === carrierId)!;
+    return { to: c.emails.length ? c.emails : inv.emails, ...rfqEmail(rfq, c, inv.token, sender) };
+  };
 
   const copy = async (t: string, msg: string) => {
     try {
@@ -317,9 +349,21 @@ export default function RfqDetail({ rfq, data, userEmail, onBack, reload }: { rf
                           Link
                         </button>
                         {open && (
-                          <button type="button" className="btn ghost sm" onClick={() => resend(i.carrier_id)} disabled={busy === `re-${i.carrier_id}`}>
+                          <button type="button" className="btn ghost sm" title="Ξανά μέσω του Outlook του υπολογιστή της αποθήκης" onClick={() => resend(i.carrier_id)} disabled={busy === `re-${i.carrier_id}`}>
                             Ξανά
                           </button>
+                        )}
+                        {open && (
+                          <a
+                            className="btn ghost sm"
+                            title="Άνοιγμα του email στο δικό σου Outlook (χειροκίνητη αποστολή)"
+                            href={(() => {
+                              const m = inviteMail(i.carrier_id);
+                              return mailtoHref(m.to, m.subject, m.html);
+                            })()}
+                          >
+                            ✉ Outlook
+                          </a>
                         )}
                       </td>
                     </tr>
@@ -545,7 +589,28 @@ export default function RfqDetail({ rfq, data, userEmail, onBack, reload }: { rf
                 <li key={m.id}>
                   <span className={`lg-badge ${m.status === "sent" ? "green" : m.status === "error" ? "red" : "yellow"}`}>{m.status === "sent" ? "στάλθηκε" : m.status === "error" ? "σφάλμα" : "σε αναμονή"}</span>{" "}
                   {m.to_addrs.join(", ")} <span className="dim">— {m.subject}</span>
-                  {m.error && <div className="dm-r">{m.error}</div>}
+                  {m.error && <div className="dm-r lg-err">{m.error.slice(0, 160)}</div>}
+                  {m.status !== "sent" && m.status !== "cancelled" && m.html && (
+                    <div className="st-actions lg-manual">
+                      <a className="btn ghost sm" href={mailtoHref(m.to_addrs, m.subject, m.html)} title="Ανοίγει νέο email στο Outlook σου με παραλήπτη, θέμα και κείμενο">
+                        ✉ Άνοιγμα στο Outlook
+                      </a>
+                      <button type="button" className="btn ghost sm" onClick={() => copyMail(m.subject, m.html!)} title="Αντιγραφή με μορφοποίηση — επικόλληση σε νέο email">
+                        Αντιγραφή κειμένου
+                      </button>
+                      <button type="button" className="btn primary sm" onClick={() => markSent(m.id)} disabled={busy === `ms-${m.id}`}>
+                        Το έστειλα ✓
+                      </button>
+                      {m.status === "error" && (
+                        <button type="button" className="btn ghost sm" onClick={() => retryMail(m.id)} disabled={busy === `mr-${m.id}`} title="Ξανά από το Outlook του υπολογιστή της αποθήκης">
+                          Ξανά αυτόματα
+                        </button>
+                      )}
+                      <button type="button" className="btn ghost sm" onClick={() => cancelMail(m.id)} disabled={busy === `mc-${m.id}`}>
+                        Ακύρωση
+                      </button>
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>

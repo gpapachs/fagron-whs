@@ -16,7 +16,7 @@ export async function loadLogistics(): Promise<LogData> {
     fetchAll<Invite>(sb, "rfq_invites", "*", ["created_at"]),
     fetchAll<Quote>(sb, "quotes", "*", ["created_at"]),
     fetchAll<RfqEvent>(sb, "rfq_events", "*", ["at"]),
-    sb.from("mail_outbox").select("id, to_addrs, subject, rfq_id, status, error, created_at, sent_at").order("id", { ascending: false }).limit(500),
+    sb.from("mail_outbox").select("id, to_addrs, cc_addrs, subject, html, rfq_id, status, error, created_at, sent_at").order("id", { ascending: false }).limit(500),
   ]);
   return {
     rfqs: rfqs

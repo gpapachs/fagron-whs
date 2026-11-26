@@ -1668,3 +1668,5 @@ tr.lg-won td { background: color-mix(in srgb, var(--green, #2f8f5b) 9%, transpar
 .qf h1 { font-size: 20px; margin: 0; }
 .qf .lg-kv { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 8px; }
 .qf-foot { font-size: 12px; margin-top: 16px; }
+.lg-manual { margin: 4px 0 8px; flex-wrap: wrap; }
+.lg-err { font-size: 12px; }

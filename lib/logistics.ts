@@ -86,7 +86,7 @@ export type Quote = {
   created_by: string | null;
 };
 export type RfqEvent = { id: number; rfq_id: string; at: string; by: string | null; text: string };
-export type Mail = { id: number; to_addrs: string[]; subject: string; rfq_id: string | null; status: "pending" | "sent" | "error" | "cancelled"; error: string | null; created_at: string; sent_at: string | null };
+export type Mail = { id: number; to_addrs: string[]; cc_addrs?: string[]; html?: string; subject: string; rfq_id: string | null; status: "pending" | "sent" | "error" | "cancelled"; error: string | null; created_at: string; sent_at: string | null };
 
 export const STATUS_TXT: Record<RfqStatus, string> = {
   draft: "Πρόχειρο",
@@ -211,3 +211,30 @@ export function rankQuotes(r: Rfq, quotes: Quote[]) {
 }
 
 export const parseList = (s: string) => [...new Set(s.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean))];
+
+/** HTML email -> απλό κείμενο (για mailto / χειροκίνητη αποστολή) */
+export function htmlToText(html: string) {
+  return html
+    .replace(/\r?\n/g, " ")
+    .replace(/<a [^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/gi, "$2: $1")
+    .replace(/<\/(p|tr|h\d)>|<br\s*\/?>/gi, "\n")
+    .replace(/<\/td>\s*<td[^>]*>/gi, ": ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .split("\n")
+    .map((l) => l.trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** mailto: για άνοιγμα στο πρόγραμμα email του χρήστη (Outlook) */
+export function mailtoHref(to: string[], subject: string, html: string) {
+  let body = htmlToText(html);
+  if (body.length > 1800) body = body.slice(0, 1800) + "\n…";
+  return `mailto:${to.map(encodeURIComponent).join(";")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
