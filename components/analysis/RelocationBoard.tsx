@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import KpiTiles from "@/components/KpiTiles";
 import PalInput from "@/components/analysis/PalInput";
 import { createClient } from "@/lib/supabase/client";
@@ -9,7 +9,7 @@ import { siteOf } from "@/lib/site";
 import { isLeaflet } from "@/lib/leaflet";
 import { ago, useCoalesced, useWmsLive } from "@/lib/live";
 import { displayUser } from "@/lib/users";
-import { CATEGORY_TXT, defaultAreaClass, itemKey, lineKey, normRel, pickPlan, planRelocation, withRelPallet, type AreaClass, type ItemPlan, type RelPlan, type RelRow } from "@/lib/relocation";
+import { CATEGORY_TXT, defaultAreaClass, itemKey, lineKey, normRel, pickPlan, planRelocation, withRelPallet, type AreaClass, type ItemPlan, type MoveLine, type RelPlan, type RelRow } from "@/lib/relocation";
 
 type View = "lines" | "pick" | "items" | "dead" | "returns" | "freed" | "areas";
 const LS = "relocation.v1";
@@ -451,17 +451,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
           )}
           {view === "areas" && (
             <div className="st-tablewrap">
-              <table className="st-table st-cards">
-                <thead>
-                  <tr>
-                    <th>Περιοχή</th>
-                    <th>Γραμμές</th>
-                    <th>Ποσότητα</th>
-                    <th>Μετράει ως</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {plan.areas.map((a) => (
+              <AreasTable areas={plan.areas} render={(a) => (
                     <tr key={a.area}>
                       <td data-label="Περιοχή">{a.area || <span className="dim">(χωρίς όνομα)</span>}</td>
                       <td className="num" data-label="Γραμμές">{a.rows}</td>
@@ -476,9 +466,7 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
                         </select>
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  )} />
               <p className="rp-hint">
                 <b>Μεταφέρσιμη</b>: μετράει στην κεντρική και μπορεί να φύγει · <b>Σταθερή</b>: μετράει στην κεντρική αλλά δεν μετακινείται (π.χ. αναλώσεων, εισερχόμενα) ·{" "}
                 <b>Εξωτερική</b>: ήδη έξω — δεν μετράει στην κεντρική.
@@ -491,7 +479,69 @@ export default function RelocationBoard({ userEmail }: { userEmail: string | nul
   );
 }
 
-/** Τι φεύγει: πρώτα ανά κωδικό, και με κλικ οι παρτίδες / θέσεις του κωδικού. */
+/** Ταξινόμηση με κλικ στην επικεφαλίδα: 1ο κλικ (αριθμοί: μεγαλύτερα πρώτα, κείμενο: Α→Ω), 2ο αντίστροφα, 3ο καμία. */
+type ColDef<T> = { h: ReactNode; v?: (x: T) => number | string | null | undefined; num?: boolean; title?: string };
+function useColSort<T>(cols: ColDef<T>[], rows: T[]) {
+  const [st, setSt] = useState<{ i: number; dir: 1 | -1 } | null>(null);
+  let sorted = rows;
+  const f = st ? cols[st.i]?.v : undefined;
+  if (st && f) {
+    const empty = (x: unknown) => x == null || x === "" || (typeof x === "number" && isNaN(x));
+    sorted = [...rows].sort((a, b) => {
+      const x = f(a);
+      const y = f(b);
+      if (empty(x)) return empty(y) ? 0 : 1; // κενά πάντα στο τέλος
+      if (empty(y)) return -1;
+      if (x === y) return 0;
+      const c = typeof x === "number" && typeof y === "number" ? (x < y ? -1 : 1) : String(x).localeCompare(String(y), "el", { numeric: true });
+      return c * st.dir;
+    });
+  }
+  const click = (i: number) =>
+    setSt((cur) => {
+      const first: 1 | -1 = cols[i].num ? -1 : 1;
+      if (!cur || cur.i !== i) return { i, dir: first };
+      return cur.dir === first ? { i, dir: (-first) as 1 | -1 } : null;
+    });
+  const head = cols.map((c, i) => (
+    <th key={i} title={c.title} aria-sort={st?.i === i ? (st.dir === 1 ? "ascending" : "descending") : undefined}>
+      {c.v ? (
+        <button type="button" onClick={() => click(i)} title="Ταξινόμηση">
+          {c.h}
+          <span className="st-arrow">{st?.i === i ? (st.dir === 1 ? "▲" : "▼") : ""}</span>
+        </button>
+      ) : (
+        c.h
+      )}
+    </th>
+  ));
+  return { sorted, head };
+}
+const lotsOf = (p: ItemPlan) => new Set(p.lines.map((l) => `${l.lot}|${l.expiry ?? ""}`)).size;
+
+type AreaRow = RelPlan["areas"][number];
+function AreasTable({ areas, render }: { areas: AreaRow[]; render: (a: AreaRow) => ReactNode }) {
+  const ts = useColSort<AreaRow>(
+    [
+      { h: "Περιοχή", v: (a) => a.area },
+      { h: "Γραμμές", v: (a) => a.rows, num: true },
+      { h: "Ποσότητα", v: (a) => a.qty, num: true },
+      { h: "Μετράει ως", v: (a) => a.cls },
+    ],
+    areas
+  );
+  return (
+    <table className="st-table st-cards">
+      <thead>
+        <tr>{ts.head}</tr>
+      </thead>
+      <tbody>{ts.sorted.map(render)}</tbody>
+    </table>
+  );
+}
+
+const coverNum = (i: ItemPlan) => (i.cover == null ? (i.onsite > 0 ? Number.MAX_VALUE : null) : i.cover);
+
 /** Θέσεις από τις οποίες δεν παίρνουμε ποτέ απόθεμα (κοινές για όλους). */
 function SkipField({ codes, onSave }: { codes: string[]; onSave: (text: string) => void }) {
   const txt = codes.join(", ");
@@ -562,6 +612,7 @@ function QtyInput({ item, value, suggested, manual, max, onQty }: { item: string
   );
 }
 
+/** Τι φεύγει: πρώτα ανά κωδικό, και με κλικ οι παρτίδες / θέσεις του κωδικού. */
 function MoveGroups({
   items,
   picked,
@@ -579,6 +630,23 @@ function MoveGroups({
 }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const allKeys = items.flatMap((i) => i.lines.map(lineKey));
+  const gs = useColSort<ItemPlan>(
+    [
+      { h: "" },
+      { h: "✓", v: (p) => (picked.has(itemKey(p.item)) || p.lines.some((l) => picked.has(lineKey(l))) ? 1 : 0), num: true, title: "Στο Pick list" },
+      { h: "Κωδικός", v: (p) => p.item },
+      { h: "Περιγραφή", v: (p) => p.description },
+      { h: "Κατηγορία", v: (p) => CATEGORY_TXT[p.category] },
+      { h: "Παρτίδες", v: (p) => lotsOf(p), num: true },
+      { h: "Θέσεις", v: (p) => new Set(p.lines.map((l) => l.pos)).size, num: true },
+      { h: "Κεντρική", v: (p) => p.onsite, num: true },
+      { h: "Κάλυψη", v: coverNum, num: true },
+      { h: "Σύνολο να φύγει ✎", v: (p) => p.moveQty, num: true },
+      { h: "Παλέτες", v: (p) => p.movePallets, num: true },
+      { h: "Μένει", v: (p) => p.onsite - p.moveQty, num: true },
+    ],
+    items
+  );
   const nPicked = allKeys.filter((k) => picked.has(k) || picked.has(itemKey(k.split("|")[0]))).length;
   const toggle = (i: string) =>
     setOpen((cur) => {
@@ -587,7 +655,6 @@ function MoveGroups({
       else n.add(i);
       return n;
     });
-  const lotsOf = (p: ItemPlan) => new Set(p.lines.map((l) => `${l.lot}|${l.expiry ?? ""}`)).size;
   return (
     <>
       <div className="rl-groupbar">
@@ -614,14 +681,10 @@ function MoveGroups({
       <div className="st-tablewrap">
         <table className="st-table st-cards rl-groups">
           <thead>
-            <tr>
-              {["", "✓", "Κωδικός", "Περιγραφή", "Κατηγορία", "Παρτίδες", "Θέσεις", "Κεντρική", "Κάλυψη", "Σύνολο να φύγει ✎", "Παλέτες", "Μένει"].map((h, i) => (
-                <th key={i}>{h}</th>
-              ))}
-            </tr>
+            <tr>{gs.head}</tr>
           </thead>
           <tbody>
-            {items.map((p) => {
+            {gs.sorted.map((p) => {
               const isOpen = open.has(p.item);
               const keys = p.lines.map(lineKey);
               const freed = p.lines.filter((l) => l.freesPosition).length;
@@ -668,21 +731,56 @@ function MoveGroups({
                             <li key={k}>{t}</li>
                           ))}
                         </ul>
+                        <LotTable p={p} lines={lines} picked={picked} onPick={onPick} onLot={onLot} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
+            {!items.length && (
+              <tr>
+                <td colSpan={12} className="st-empty">Τίποτα να μεταφερθεί με αυτές τις ρυθμίσεις.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function LotTable({ p, lines: lines0, picked, onPick, onLot }: { p: ItemPlan; lines: MoveLine[]; picked: Set<string>; onPick: (k: string[], on: boolean) => void; onLot: (p: ItemPlan, key: string, q: number | null) => void }) {
+  const ts = useColSort<MoveLine>(
+    [
+      { h: "Παρτίδα", v: (l) => l.lot },
+      { h: "Λήξη", v: (l) => l.expiry },
+      { h: "Εισαγωγή", v: (l) => l.received },
+      { h: "✓", v: (l) => (picked.has(lineKey(l)) || picked.has(itemKey(l.item)) ? (l.moveQty > 0 ? 1 : 0) : 0), num: true, title: "Στο Pick list" },
+      { h: "Θέση", v: (l) => l.pos },
+      { h: "Στη θέση", v: (l) => l.posQty, num: true },
+      { h: "Να φύγει ✎", v: (l) => l.moveQty, num: true },
+      { h: "Παλέτες", v: (l) => l.pallets, num: true },
+      { h: "" },
+    ],
+    lines0
+  );
+  const lines = ts.sorted;
+  const same = (a: MoveLine, b: MoveLine) => a.lot === b.lot && (a.expiry ?? "") === (b.expiry ?? "");
+  return (
                         <table className="st-table rl-subtable">
                           <thead>
-                            <tr>
-                              {["Παρτίδα", "Λήξη", "Εισαγωγή", "✓", "Θέση", "Στη θέση", "Να φύγει ✎", "Παλέτες", ""].map((h, i) => (
-                                <th key={i}>{h}</th>
-                              ))}
-                            </tr>
+                            <tr>{ts.head}</tr>
                           </thead>
                           <tbody>
                             {lines.map((l, idx) => {
-                              // μία παρτίδα σε πολλές θέσεις: παρτίδα / λήξη / σύνολο μία φορά
-                              const key = `${l.lot}|${l.expiry ?? ""}`;
-                              const first = idx === 0 || `${lines[idx - 1].lot}|${lines[idx - 1].expiry ?? ""}` !== key;
-                              const span = first ? lines.filter((x) => `${x.lot}|${x.expiry ?? ""}` === key).length : 0;
-                              const lotQty = first ? lines.filter((x) => `${x.lot}|${x.expiry ?? ""}` === key).reduce((t, x) => t + x.moveQty, 0) : 0;
+                              // μία παρτίδα σε συνεχόμενες θέσεις: παρτίδα / λήξη / σύνολο μία φορά
+                              const first = idx === 0 || !same(lines[idx - 1], l);
+                              let end = idx;
+                              if (first) while (end + 1 < lines.length && same(lines[end + 1], l)) end++;
+                              const group = first ? lines.slice(idx, end + 1) : [];
+                              const span = group.length;
+                              const lotQty = group.reduce((t, x) => t + x.moveQty, 0);
                               return (
                               <tr key={`${l.pos}|${l.lot}|${l.expiry}`} className={`${first && idx > 0 ? "rl-lotstart" : ""} ${l.moveQty <= 0 ? "rl-stays" : ""}`}>
                                 {first && (
@@ -719,21 +817,6 @@ function MoveGroups({
                             })}
                           </tbody>
                         </table>
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              );
-            })}
-            {!items.length && (
-              <tr>
-                <td colSpan={12} className="st-empty">Τίποτα να μεταφερθεί με αυτές τις ρυθμίσεις.</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </>
   );
 }
 
@@ -787,18 +870,32 @@ function ItemsTable({
   onQty: (i: string, q: number | null) => void;
   returns?: boolean;
 }) {
+  const ts = useColSort<ItemPlan>(
+    [
+      { h: "Κωδικός", v: (i) => i.item },
+      { h: "Περιγραφή", v: (i) => i.description },
+      { h: "Κατηγορία", v: (i) => CATEGORY_TXT[i.category] },
+      { h: "Κεντρική", v: (i) => i.onsite, num: true },
+      { h: "Εξωτ.", v: (i) => i.offsite, num: true },
+      { h: "/ μήνα", v: (i) => i.perMonth, num: true },
+      { h: "Κάλυψη", v: coverNum, num: true },
+      { h: "Μένει", v: (i) => i.keep, num: true },
+      { h: returns ? "Να έρθει πίσω" : "Φεύγει ✎", v: (i) => (returns ? i.returnQty : i.moveQty), num: true },
+      { h: "Παλ.", v: (i) => (returns ? null : i.movePallets), num: true },
+      { h: "Ποσ./παλέτα", v: (i) => i.palQty, num: true },
+      { h: "Χρειάζεται πίσω", v: (i) => i.neededBack },
+      { h: "Κράτα όλο", v: (i) => (excluded.includes(i.item) ? 1 : 0), num: true },
+    ],
+    rows
+  );
   return (
     <div className="st-tablewrap">
       <table className="st-table st-cards">
         <thead>
-          <tr>
-            {["Κωδικός", "Περιγραφή", "Κατηγορία", "Κεντρική", "Εξωτ.", "/ μήνα", "Κάλυψη", "Μένει", returns ? "Να έρθει πίσω" : "Φεύγει ✎", "Παλ.", "Ποσ./παλέτα", "Χρειάζεται πίσω", "Κράτα όλο"].map((h) => (
-              <th key={h}>{h}</th>
-            ))}
-          </tr>
+          <tr>{ts.head}</tr>
         </thead>
         <tbody>
-          {rows.map((i) => (
+          {ts.sorted.map((i) => (
             <tr key={i.item}>
               <td className="mono" data-label="Κωδικός">
                 {i.item}
