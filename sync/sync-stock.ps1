@@ -925,7 +925,7 @@ $script:OutboxFailAt = $null
 function Send-Outbox {
   if ((Opt 'MAIL_OUTBOX') -eq 'off') { return }
   if ($script:OutboxFailAt -and ((Get-Date) - $script:OutboxFailAt).TotalMinutes -lt 5) { return }
-  $list = @(Sb-Request 'GET' '/rest/v1/mail_outbox?status=eq.pending&select=id,to_addrs,cc_addrs,subject,html&order=id.asc&limit=20' $null)
+  $list = @(Sb-Request 'GET' '/rest/v1/mail_outbox?status=eq.pending&select=id,to_addrs,cc_addrs,subject,html,attachments&order=id.asc&limit=20' $null)
   if (-not $list.Count -or -not $list[0]) { return }
   # late binding (IDispatch): δουλεύει και όταν η καταχώριση type library του Office είναι χαλασμένη
   # (TYPE_E_CANTLOADLIBRARY / 0x80029C4A με το New-Object -ComObject)
@@ -940,7 +940,24 @@ function Send-Outbox {
       if (@($m.cc_addrs).Count) { [void](& $call $mail 'CC' $BF::SetProperty @((@($m.cc_addrs) -join '; '))) }
       [void](& $call $mail 'Subject' $BF::SetProperty @([string]$m.subject))
       [void](& $call $mail 'HTMLBody' $BF::SetProperty @([string]$m.html))
+      $tmp = $null
+      if (@($m.attachments).Count -and $m.attachments[0]) {
+        # συνημμένα από το Supabase Storage (bucket «logistics») -> προσωρινός φάκελος -> Outlook
+        $tmp = Join-Path ([IO.Path]::GetTempPath()) ("FagronOutbox\" + $m.id)
+        [void](New-Item -ItemType Directory -Force -Path $tmp)
+        $atts = & $call $mail 'Attachments' $BF::GetProperty @()
+        foreach ($a in @($m.attachments)) {
+          $name = ([string]$a.name) -replace '[\\/:*?"<>|]', '_'
+          if (-not $name) { $name = 'file' }
+          $file = Join-Path $tmp $name
+          $segs = (([string]$a.path) -split '/') | ForEach-Object { [Uri]::EscapeDataString($_) }
+          $h = @{ apikey = $SbKey; Authorization = "Bearer $($script:Token)" }
+          Invoke-WebRequest -Uri ("$SbUrl/storage/v1/object/logistics/" + ($segs -join '/')) -Headers $h -OutFile $file -UseBasicParsing -TimeoutSec 120
+          [void](& $call $atts 'Add' $BF::InvokeMethod @($file))
+        }
+      }
       [void](& $call $mail 'Send' $BF::InvokeMethod @())
+      if ($tmp) { try { Remove-Item -Recurse -Force $tmp } catch {} }
       [void](Sb-Request 'POST' '/rest/v1/rpc/mail_outbox_done' @{ p_id = $m.id; p_ok = $true })
       Log ("Email: {0} -> {1}" -f $m.subject, (@($m.to_addrs) -join ', '))
     } catch {

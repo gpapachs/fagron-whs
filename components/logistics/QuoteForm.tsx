@@ -3,7 +3,7 @@
 // Δημόσια φόρμα προσφοράς για μεταφορικές (χωρίς login): /quote/?t=<token>. Δίγλωσση (ελληνικά / English).
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { loadRows, type Rfq } from "@/lib/logistics";
+import { DOC_KINDS, docLink, fileSize, loadRows, type Rfq } from "@/lib/logistics";
 
 type Got = {
   error?: string;
@@ -12,7 +12,9 @@ type Got = {
   won?: boolean;
   declined?: boolean;
   rfq?: Partial<Rfq>;
-  quote?: { price: number; currency: string; transit_days: number | null; pickup_date: string | null; delivery_date: string | null; valid_until: string | null; includes: string | null; notes: string | null; contact: string | null; at: string } | null;
+  round?: { no: number; target: number; currency: string; deadline: string } | null;
+  docs?: { id: string; kind: string; name: string; size: number | null }[];
+  quote?: { price: number; first_price?: number | null; currency: string; transit_days: number | null; pickup_date: string | null; delivery_date: string | null; valid_until: string | null; includes: string | null; notes: string | null; contact: string | null; at: string } | null;
 };
 
 export default function QuoteForm() {
@@ -58,7 +60,7 @@ export default function QuoteForm() {
     const { error: err } = await createClient().rpc("rfq_public_submit", { p_token: token, p_quote: { ...f, price: norm, transit_days: f.transit_days.replace(",", "."), decline } });
     setBusy(false);
     if (err) return setError(err.message);
-    setDone(decline ? "Ευχαριστούμε για την ενημέρωση. / Thank you for letting us know." : "Η προσφορά σας καταχωρήθηκε — ευχαριστούμε! / Your quote has been submitted — thank you!");
+    setDone(decline ? (got?.round && got?.quote ? "Ευχαριστούμε — ισχύει η προηγούμενη τιμή σας. / Thank you — your previous price remains valid." : "Ευχαριστούμε για την ενημέρωση. / Thank you for letting us know.") : "Η προσφορά σας καταχωρήθηκε — ευχαριστούμε! / Your quote has been submitted — thank you!");
     load(token);
   }
 
@@ -101,6 +103,39 @@ export default function QuoteForm() {
         </tbody>
       </table>
 
+      {got.round && !got.closed && (
+        <div className="qf-round">
+          <b>
+            Τιμή-στόχος / Target price: {Number(got.round.target).toLocaleString("el-GR")} {got.round.currency}
+          </b>
+          <br />
+          Αν μπορείτε να την πιάσετε ή να πάτε χαμηλότερα, υποβάλετε τη νέα σας τιμή έως{" "}
+          <b>{new Date(got.round.deadline).toLocaleString("el-GR", { dateStyle: "short", timeStyle: "short" })}</b>. Αλλιώς ισχύει η προηγούμενη προσφορά σας.
+          <br />
+          <i>If you can match or beat it, please submit your revised price by the deadline above. Otherwise your previous offer remains valid.</i>
+        </div>
+      )}
+      {!!got.docs?.length && (
+        <div>
+          <b>Έγγραφα / Documents</b>
+          <ul className="qf-docs">
+            {got.docs.map((d) => {
+              const k = DOC_KINDS.find((x) => x.key === d.kind);
+              return (
+                <li key={d.id}>
+                  <a href={token ? docLink(token, d.id) : "#"} target="_blank" rel="noreferrer">
+                    ⇩ {d.name}
+                  </a>{" "}
+                  <span className="dim">
+                    {k ? `${k.gr} / ${k.en}` : d.kind}
+                    {d.size ? ` · ${fileSize(d.size)}` : ""}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
       {got.won && <p className="st-notice">✓ Η μεταφορά σας ανατέθηκε. / This transport has been awarded to you.</p>}
       {got.closed && !got.won && <p className="st-error">Το αίτημα έχει κλείσει. / This request is closed.</p>}
       {got.quote && !done && (
@@ -151,7 +186,7 @@ export default function QuoteForm() {
               {busy ? "…" : got.quote ? "Ενημέρωση προσφοράς / Update quote" : "Αποστολή προσφοράς / Submit quote"}
             </button>
             <button type="button" className="btn ghost" onClick={() => submit(true)} disabled={busy}>
-              Δεν δίνουμε προσφορά / Decline
+              {got.round && got.quote ? "Κρατάμε την τιμή μας / Keep our price" : "Δεν δίνουμε προσφορά / Decline"}
             </button>
           </span>
         </form>

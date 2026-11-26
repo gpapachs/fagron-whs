@@ -1677,3 +1677,17 @@ tr.lg-won td { background: color-mix(in srgb, var(--green, #2f8f5b) 9%, transpar
 .lg-seg .btn, .lg-acts .btn, .lg-inline .btn { flex: none; }
 .lg-ico { flex: none; padding: 2px 6px; font-size: 12px; margin-left: 4px; }
 .lg-seg { flex-wrap: nowrap; }
+.lg-drop { outline: 2px dashed var(--focus); outline-offset: 2px; }
+.lg-linkbtn { border: none; background: none; padding: 0; color: var(--link); font: inherit; cursor: pointer; text-align: left; text-decoration: underline; }
+.lg-linkbtn:disabled { opacity: .6; }
+.lg-mini { font: inherit; font-size: 12.5px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
+.lg-mini.vis-all { border-color: var(--free); color: var(--free); }
+.lg-mini.vis-winner { border-color: var(--reserved); color: var(--reserved); }
+.lg-atts { font-size: 12.5px; display: flex; gap: 10px; flex-wrap: wrap; margin-top: 2px; }
+.lg-round { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.lg-round-on { background: var(--reserved-bg); color: var(--ink); border-radius: 8px; padding: 8px 10px; margin: 0; }
+.lg-sub { background: var(--surface-2); }
+.lg-mf input { width: 100%; min-width: 60px; font: inherit; font-size: 13px; padding: 5px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); }
+.lg-mf td:first-child input { min-width: 200px; }
+.qf-docs { list-style: none; padding: 0; margin: 6px 0 0; display: flex; flex-direction: column; gap: 4px; }
+.qf-round { background: #fff7e0; border: 1px solid #e8c24a; border-radius: 10px; padding: 10px 14px; }

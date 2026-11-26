@@ -5,7 +5,10 @@ import { createClient } from "@/lib/supabase/client";
 import { displayUser } from "@/lib/users";
 import { ago } from "@/lib/live";
 import RfqForm from "@/components/logistics/RfqForm";
-import { logEvent, queueMail, type LogData } from "@/components/logistics/data";
+import RoundPanel from "@/components/logistics/RoundPanel";
+import DocsCard from "@/components/logistics/DocsCard";
+import ManifestCard from "@/components/logistics/ManifestCard";
+import { downloadDoc, logEvent, queueMail, type LogData } from "@/components/logistics/data";
 import { awardEmail, htmlToText, mailtoHref, dmy, DIR_TXT, loadRows, MODE_TXT, quoteLink, rankQuotes, rfqEmail, route, STATUS_TONE, STATUS_TXT, suggestCarriers, type Quote, type Rfq } from "@/lib/logistics";
 
 const fm = (n: number | null | undefined, d = 2) => (n == null ? "" : n.toLocaleString("el-GR", { minimumFractionDigits: 0, maximumFractionDigits: d }));
@@ -35,6 +38,12 @@ export default function RfqDetail({ rfq, data, userEmail, onBack, reload }: { rf
   const quotes = data.quotes.filter((q) => q.rfq_id === rfq.id);
   const events = data.events.filter((e) => e.rfq_id === rfq.id).slice().reverse();
   const mails = data.mails.filter((m) => m.rfq_id === rfq.id);
+  const docs = data.docs.filter((d) => d.rfq_id === rfq.id);
+  const done = (msg: string | null, err?: string) => {
+    setError(err ?? null);
+    setNotice(msg);
+    if (!err) reload();
+  };
   const ranked = rankQuotes(rfq, quotes);
   const invited = new Set(invites.map((i) => i.carrier_id));
   const suggestions = suggestCarriers(rfq, carriers).filter((c) => !invited.has(c.id));
@@ -137,10 +146,14 @@ export default function RfqDetail({ rfq, data, userEmail, onBack, reload }: { rf
       async () => {
         const price = toNum(mq.price);
         if (!mq.carrier || !price) throw new Error("Επιλέξτε μεταφορική και τιμή.");
+        const prev = quotes.find((x) => x.carrier_id === mq.carrier);
         const { error } = await sb.from("quotes").upsert(
           {
             rfq_id: rfq.id,
             carrier_id: mq.carrier,
+            first_price: prev && prev.price !== price ? prev.first_price ?? prev.price : prev?.first_price ?? null,
+            revised_at: prev && prev.price !== price ? new Date().toISOString() : prev?.revised_at ?? null,
+            round_no: prev && prev.price !== price && (rfq.round_no ?? 0) > 0 ? rfq.round_no : prev?.round_no ?? 0,
             price,
             currency: mq.currency || "EUR",
             transit_days: toNum(mq.days),
@@ -435,6 +448,12 @@ export default function RfqDetail({ rfq, data, userEmail, onBack, reload }: { rf
                       <b>
                         {fm(q.price)} {q.currency}
                       </b>
+                      {q.first_price != null && q.first_price !== q.price && (
+                        <div className="dim">
+                          <s>{fm(q.first_price)}</s>
+                          {q.round_no ? ` · γύρος ${q.round_no}` : ""}
+                        </div>
+                      )}
                     </td>
                     <td className="num">{vsBest == null ? "" : vsBest === 0 ? "—" : `+${fm(vsBest * 100, 0)}%`}</td>
                     <td className="num">{fm(perPallet)}</td>
@@ -460,6 +479,9 @@ export default function RfqDetail({ rfq, data, userEmail, onBack, reload }: { rf
           </div>
         ) : (
           <p className="dim">Καμία προσφορά ακόμα. Οι μεταφορικές απαντούν από το link του email ή τις καταχωρείς εδώ.</p>
+        )}
+        {open && ranked.length > 0 && (
+          <RoundPanel key={`${rfq.round_no ?? 0}`} rfq={rfq} quotes={quotes} invites={invites} cById={cById} sender={sender} userEmail={userEmail} onDone={done} />
         )}
         {(open || rfq.status === "awarded") && ranked.length > 0 && (
           <div className="lg-row">
@@ -569,6 +591,22 @@ export default function RfqDetail({ rfq, data, userEmail, onBack, reload }: { rf
         </section>
       )}
 
+      {["awarded", "in_transit", "delivered"].includes(rfq.status) && awarded && (
+        <ManifestCard
+          key={`mf-${awarded.id}`}
+          rfq={rfq}
+          carrier={cById.get(awarded.carrier_id) ?? null}
+          quote={awarded}
+          invite={invites.find((i) => i.carrier_id === awarded.carrier_id) ?? null}
+          docs={docs}
+          sender={sender}
+          userEmail={userEmail}
+          onDone={done}
+        />
+      )}
+
+      <DocsCard rfq={rfq} docs={docs} userEmail={userEmail} reload={reload} />
+
       <div className="lg-cols">
         <section className="lg-card">
           <h3>Ιστορικό</h3>
@@ -589,6 +627,16 @@ export default function RfqDetail({ rfq, data, userEmail, onBack, reload }: { rf
                 <li key={m.id}>
                   <span className={`lg-badge ${m.status === "sent" ? "green" : m.status === "error" ? "red" : "yellow"}`}>{m.status === "sent" ? "στάλθηκε" : m.status === "error" ? "σφάλμα" : "σε αναμονή"}</span>{" "}
                   {m.to_addrs.join(", ")} <span className="dim">— {m.subject}</span>
+                  {!!m.attachments?.length && (
+                    <div className="lg-atts">
+                      📎{" "}
+                      {m.attachments.map((a) => (
+                        <button key={a.path} type="button" className="lg-linkbtn" onClick={() => downloadDoc(a.path, a.name).catch((e) => setError((e as Error).message))} title="Λήψη (για χειροκίνητη επισύναψη)">
+                          {a.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   {m.error && <div className="dm-r lg-err">{m.error.slice(0, 160)}</div>}
                   {m.status !== "sent" && m.status !== "cancelled" && m.html && (
                     <div className="st-actions lg-manual">

@@ -62,12 +62,18 @@ export type Rfq = {
   delivered_at: string | null;
   final_cost: number | null;
   docs: string | null;
+  round_no?: number;
+  round_target?: number | null;
+  round_currency?: string | null;
+  round_pct?: number | null;
+  round_deadline?: string | null;
+  manifest?: Manifest | null;
   created_at: string;
   created_by: string | null;
   updated_at: string;
 };
 
-export type Invite = { id: string; rfq_id: string; carrier_id: string; token: string; emails: string[]; sent_at: string | null; opened_at: string | null; responded_at: string | null; declined: boolean; created_at: string };
+export type Invite = { id: string; rfq_id: string; carrier_id: string; token: string; emails: string[]; round_no?: number; sent_at: string | null; opened_at: string | null; responded_at: string | null; declined: boolean; created_at: string };
 export type Quote = {
   id: string;
   rfq_id: string;
@@ -82,11 +88,35 @@ export type Quote = {
   notes: string | null;
   contact: string | null;
   source: "form" | "manual" | "email";
+  first_price?: number | null;
+  revised_at?: string | null;
+  round_no?: number;
   created_at: string;
   created_by: string | null;
 };
+
+export type ManifestLine = { desc: string; pallets: string; packages: string; weight: string; dims: string; adr: string; notes: string };
+export type Manifest = { lines: ManifestLine[]; plate: string; driver: string; loading_time: string; instructions: string; docs: string[]; issued_at?: string };
+
+export type DocKind = "invoice" | "msds" | "cmr" | "packing" | "coa" | "manifest" | "other";
+export type DocVis = "no" | "all" | "winner";
+export type RfqDoc = { id: string; rfq_id: string; kind: DocKind; name: string; path: string; size: number | null; mime: string | null; visible: DocVis; notes: string | null; created_at: string; created_by: string | null };
+export const DOC_KINDS: { key: DocKind; gr: string; en: string; vis: DocVis }[] = [
+  { key: "invoice", gr: "Τιμολόγιο", en: "Invoice", vis: "no" },
+  { key: "msds", gr: "MSDS / SDS", en: "Safety data sheet", vis: "all" },
+  { key: "cmr", gr: "CMR / φορτωτική", en: "CMR / waybill", vis: "winner" },
+  { key: "packing", gr: "Packing list", en: "Packing list", vis: "winner" },
+  { key: "coa", gr: "CoA / πιστοποιητικό", en: "Certificate", vis: "no" },
+  { key: "manifest", gr: "Loading manifest", en: "Loading manifest", vis: "winner" },
+  { key: "other", gr: "Άλλο", en: "Document", vis: "no" },
+];
+export const DOC_TXT = Object.fromEntries(DOC_KINDS.map((k) => [k.key, k.gr])) as Record<DocKind, string>;
+export const VIS_TXT: Record<DocVis, string> = { no: "Μόνο εσωτερικά", all: "Όλες οι μεταφορικές", winner: "Μόνο ο νικητής" };
+export const FN_URL = "https://rvxjwjvwpbljmosdgvzf.supabase.co/functions/v1";
+export const docLink = (token: string, docId: string) => `${FN_URL}/rfq-doc?t=${token}&d=${docId}`;
+export const fileSize = (n: number | null | undefined) => (n == null ? "" : n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toLocaleString("el-GR", { maximumFractionDigits: 1 })} MB`);
 export type RfqEvent = { id: number; rfq_id: string; at: string; by: string | null; text: string };
-export type Mail = { id: number; to_addrs: string[]; cc_addrs?: string[]; html?: string; subject: string; rfq_id: string | null; status: "pending" | "sent" | "error" | "cancelled"; error: string | null; created_at: string; sent_at: string | null };
+export type Mail = { id: number; to_addrs: string[]; cc_addrs?: string[]; html?: string; attachments?: { path: string; name: string }[]; subject: string; rfq_id: string | null; status: "pending" | "sent" | "error" | "cancelled"; error: string | null; created_at: string; sent_at: string | null };
 
 export const STATUS_TXT: Record<RfqStatus, string> = {
   draft: "Πρόχειρο",
@@ -237,4 +267,41 @@ export function mailtoHref(to: string[], subject: string, html: string) {
   let body = htmlToText(html);
   if (body.length > 1800) body = body.slice(0, 1800) + "\n…";
   return `mailto:${to.map(encodeURIComponent).join(";")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+const when = (iso: string) => new Date(iso).toLocaleString("el-GR", { timeZone: "Europe/Athens", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+
+/** Τιμή-στόχος γύρου: η χαμηλότερη τιμή μείον pct %, στρογγυλεμένη στο ευρώ */
+export const roundTarget = (lowest: number, pct: number) => Math.round(lowest * (1 - pct / 100));
+
+/** Νέος γύρος τιμών: τιμή-στόχος και προθεσμία για αναθεωρημένη τιμή */
+export function roundEmail(r: Rfq, carrier: Carrier, q: Quote | null, token: string, target: number, currency: string, deadline: string, sender: string) {
+  const link = quoteLink(token);
+  const t = `${num(target)} ${currency}`;
+  const dl = when(deadline);
+  const subject = `Τιμή-στόχος / Target price ${r.ref} — ${route(r)} — έως / by ${dl}`;
+  const html = `<p>Καλημέρα σας${carrier.contact ? ` κ. ${esc(carrier.contact)}` : ""},</p>
+<p>${q ? `Σας ευχαριστούμε για την προσφορά σας (<b>${esc(num(q.price))} ${esc(q.currency)}</b>) για τη μεταφορά <b>${esc(r.ref)}</b>.` : `Αφορά τη μεταφορά <b>${esc(r.ref)}</b>.`}
+Για να προχωρήσουμε στην ανάθεση, η <b>τιμή-στόχος</b> μας είναι <b>${esc(t)}</b> (all-in).
+Αν μπορείτε να προσφέρετε αυτή ή χαμηλότερη τιμή, παρακαλούμε υποβάλετε τη νέα σας τιμή έως <b>${esc(dl)}</b>.${q ? " Αλλιώς ισχύει η αρχική σας προσφορά." : ""}</p>
+<p><i>${q ? `Thank you for your offer (<b>${esc(num(q.price))} ${esc(q.currency)}</b>) for transport <b>${esc(r.ref)}</b>.` : `Regarding transport <b>${esc(r.ref)}</b>.`}
+To proceed with the award, our <b>target price</b> is <b>${esc(t)}</b> (all-in). If you can match or beat it, please submit your revised price by <b>${esc(dl)}</b>.${q ? " Otherwise your original offer remains valid." : ""}</i></p>
+${table(loadRows(r))}
+<p><b><a href="${esc(link)}">Νέα τιμή / Submit revised price</a></b><br>${esc(link)}</p>
+<p>Ευχαριστούμε / Thank you,<br>${esc(sender)}<br>Fagron Hellas — Logistics</p>`;
+  return { subject, html };
+}
+
+/** Loading manifest προς τον νικητή (το PDF πάει συνημμένο) */
+export function manifestEmail(r: Rfq, carrier: Carrier, token: string | null, docs: { name: string; id: string }[], sender: string) {
+  const subject = `Loading manifest ${r.ref} — ${route(r)}${r.pickup_date ? ` — ${dmy(r.pickup_date)}` : ""}`;
+  const list = token && docs.length ? `<p>Συνοδευτικά έγγραφα / Accompanying documents:</p><ul>${docs.map((d) => `<li><a href="${esc(docLink(token, d.id))}">${esc(d.name)}</a></li>`).join("")}</ul>` : "";
+  const html = `<p>Καλημέρα σας${carrier.contact ? ` κ. ${esc(carrier.contact)}` : ""},</p>
+<p>Σας στέλνουμε συνημμένο το <b>loading manifest</b> για τη μεταφορά <b>${esc(r.ref)}</b> (${esc(route(r))}). Παρακαλούμε επιβεβαιώστε την παραλαβή και την ώρα φόρτωσης.</p>
+<p><i>Please find attached the <b>loading manifest</b> for transport <b>${esc(r.ref)}</b>. Kindly confirm receipt and the loading time.</i></p>
+${table(loadRows(r))}
+${list}
+${token ? `<p>Τα στοιχεία και τα έγγραφα είναι και εδώ / Details and documents also here: <a href="${esc(quoteLink(token))}">${esc(quoteLink(token))}</a></p>` : ""}
+<p>Ευχαριστούμε / Thank you,<br>${esc(sender)}<br>Fagron Hellas — Logistics</p>`;
+  return { subject, html };
 }
