@@ -17,6 +17,7 @@
     .\sync-stock.cmd -Report    η εβδομαδιαία αναφορά μεταφοράς σε relocation-report.html (χωρίς αποστολή)
     .\sync-stock.cmd -SendReport   στέλνει την αναφορά τώρα από το Outlook
     .\sync-stock.cmd -Outbox    στέλνει τώρα τα email της εφαρμογής (Logistics) που περιμένουν
+    .\sync-stock.cmd -Partners  ανεβάζει τώρα πελάτες / προμηθευτές από το WMS (αλλιώς 1 φορά τη μέρα)
 
   Αναφορά μεταφοράς: κάθε Πέμπτη 12:00 (REPORT_DAY / REPORT_TIME) το -Live και το sync στέλνουν από το Outlook
   του υπολογιστή την αναφορά «Τι πρέπει να φύγει» στους REPORT_TO (χωρισμένοι με ;). Αν ο υπολογιστής ήταν
@@ -29,7 +30,7 @@
   Προαιρετικά SHIPMENTS_XLSX=<διαδρομή του FSSE SHIPMENTS .xlsx στο OneDrive> (αλλιώς αναζήτηση
   στους φακέλους OneDrive*). Στο -Live ανεβαίνει μέσα σε ~10" από κάθε αλλαγή του αρχείου.
 #>
-param([switch]$Test, [switch]$DryRun, [switch]$Force, [string]$Describe, [string]$Probe, [string]$Find, [switch]$Moves, [switch]$Live, [switch]$Orders, [switch]$Report, [switch]$SendReport, [switch]$Outbox)
+param([switch]$Test, [switch]$DryRun, [switch]$Force, [string]$Describe, [string]$Probe, [string]$Find, [switch]$Moves, [switch]$Live, [switch]$Orders, [switch]$Report, [switch]$SendReport, [switch]$Outbox, [switch]$Partners)
 
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
@@ -828,6 +829,44 @@ group by i.code, s.Lot
   Log ("Εισαγωγές παρτίδων (όλο το ιστορικό): {0}" -f $rows.Count)
 }
 
+# ------------------------------------------------------------------ πελάτες / προμηθευτές (Logistics)
+# Μία φορά τη μέρα: dbo.ms_Person με IsCustomer ή IsSupplier -> wms_partners (μόνο SELECT στο WMS).
+function Sync-Partners([switch]$force) {
+  $mark = Join-Path $Here 'partners.last'
+  if (-not $force -and (Test-Path $mark) -and ((Get-Item $mark).LastWriteTime -gt (Get-Date).AddHours(-20))) { return }
+  $q = @"
+select cast(p.ID as varchar(30)) as id, p.code, p.Descr as name,
+       cast(isnull(p.IsCustomer, 0) as int) as is_customer, cast(isnull(p.IsSupplier, 0) as int) as is_supplier,
+       cast(isnull(p.Active, 1) as int) as active, p.TaxRegNum as vat, p.TaxRegNumEU as vat_eu,
+       p.Address1 as address, p.City1 as city, p.ZipCode as zip, p.Phone1 as phone, p.Phone2 as phone2,
+       p.eMail as email, p.ContactPerson1 as contact, p.ErpCode as erp_code, p.UpdDate as upd_at
+from dbo.ms_Person p
+where isnull(p.IsCustomer, 0) = 1 or isnull(p.IsSupplier, 0) = 1
+"@
+  $t = Invoke-Sql $q
+  $rows = New-Object Collections.ArrayList
+  foreach ($r in $t.Rows) {
+    $u = $r['upd_at']
+    [void]$rows.Add(@{
+      id = To-Str $r['id']; code = To-Str $r['code']; name = To-Str $r['name']
+      is_customer = ([int]$r['is_customer'] -eq 1); is_supplier = ([int]$r['is_supplier'] -eq 1); active = ([int]$r['active'] -eq 1)
+      vat = To-Str $r['vat']; vat_eu = To-Str $r['vat_eu']; address = To-Str $r['address']; city = To-Str $r['city']; zip = To-Str $r['zip']
+      phone = To-Str $r['phone']; phone2 = To-Str $r['phone2']; email = To-Str $r['email']; contact = To-Str $r['contact']; erp_code = To-Str $r['erp_code']
+      upd_at = $(if ($u -is [DateTime]) { $u.ToString('yyyy-MM-ddTHH:mm:ss', $Inv) + ([DateTimeOffset]::new($u)).ToString('zzz') } else { '' })
+    })
+  }
+  if (-not $rows.Count) { Log 'Πελάτες / προμηθευτές: το WMS δεν έδωσε γραμμές -- δεν αλλάζει τίποτα'; return }
+  $run = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', $Inv)
+  $size = 2000
+  for ($i = 0; $i -lt $rows.Count; $i += $size) {
+    $chunk = $rows.GetRange($i, [math]::Min($size, $rows.Count - $i)).ToArray()
+    [void](Sb-Request 'POST' '/rest/v1/rpc/wms_partners_upload' @{ p_rows = [object[]]$chunk; p_run = $run })
+  }
+  [void](Sb-Request 'POST' '/rest/v1/rpc/wms_partners_prune' @{ p_run = $run })
+  Set-Content -Path $mark -Value (Get-Date -Format s) -Encoding UTF8
+  Log ("Πελάτες / προμηθευτές: {0}" -f $rows.Count)
+}
+
 # ------------------------------------------------------------------ εβδομαδιαία αναφορά μεταφοράς (Outlook)
 $script:ReportFailAt = $null
 function Get-RelocationReport {
@@ -1027,6 +1066,7 @@ function Run-Live {
     try { Sync-Positions } catch { Log ("Live (θέσεις): " + $_) }
     Send-RelocationReport
     try { Send-Outbox } catch { Log ("Live (email): " + $_) }
+    try { Sync-Partners } catch { Log ("Live (πελάτες / προμηθευτές): " + $_) }
     # κάθε ~2 λεπτά: λίστες ανοιχτές στην εφαρμογή που ολοκληρώθηκαν στο WMS
     $cycle++
     if ($cycle % [math]::Max(1, [int](120 / $secs)) -eq 0) { try { Refresh-Completed 'SALEXPORTLS' } catch { Log ("Live (ολοκληρωμένες): " + $_) } }
@@ -1288,6 +1328,7 @@ if ($Moves) { Discover-Moves; exit 0 }
 if ($Live) { Run-Live; exit 0 }
 if ($Orders) { Discover-Orders; exit 0 }
 if ($Outbox) { Sb-Login; Send-Outbox; exit 0 }
+if ($Partners) { Sb-Login; Sync-Partners -force; exit 0 }
 if ($Report -or $SendReport) { Sb-Login; Send-RelocationReport -now:$SendReport -preview:$Report; exit 0 }
 
 $queryFile = Join-Path $Here 'stock-query.sql'
@@ -1363,6 +1404,7 @@ try { Backfill-Moves } catch { Log ("Κινήσεις (αναδρομικά): " 
 try { Sync-ItemPack } catch { Log ("Παλέτες / συσκευασίες: " + $_) }
 try { Sync-Positions } catch { Log ("Θέσεις WMS: " + $_) }
 try { Sync-LotReceipts } catch { Log ("Εισαγωγές παρτίδων: " + $_) }
+try { Sync-Partners } catch { Log ("Πελάτες / προμηθευτές: " + $_) }
 Send-RelocationReport
 try { Send-Outbox } catch { Log ("Email: " + $_) }
 foreach ($oc in 'SALEXPORTCL', 'SALEXPORTLS') { try { Sync-Orders $oc } catch { Log ("Orders $($oc): " + $_) } }

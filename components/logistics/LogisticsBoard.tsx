@@ -5,22 +5,37 @@ import AppBar from "@/components/AppBar";
 import KpiTiles from "@/components/KpiTiles";
 import LivePill from "@/components/LivePill";
 import { useColSort } from "@/components/analysis/colSort";
-import RfqForm, { emptyRfq } from "@/components/logistics/RfqForm";
+import RfqForm, { emptyRfq, type Draft } from "@/components/logistics/RfqForm";
 import RfqDetail from "@/components/logistics/RfqDetail";
 import CarriersTab from "@/components/logistics/CarriersTab";
+import PartnersTab, { type Partner } from "@/components/logistics/PartnersTab";
 import { loadLogistics, type LogData } from "@/components/logistics/data";
 import { useCoalesced, useWmsLive } from "@/lib/live";
 import { dmy, DIR_TXT, MODE_TXT, route, STATUS_TONE, STATUS_TXT, type Direction, type Rfq } from "@/lib/logistics";
 
-type Tab = "open" | "transit" | "done" | "carriers";
+type Tab = "open" | "transit" | "done" | "carriers" | "partners";
 const fm = (n: number | null | undefined) => (n == null ? "" : n.toLocaleString("el-GR", { maximumFractionDigits: 2 }));
+
+/** Νέο αίτημα με τα στοιχεία πελάτη (εξαγωγή: παραλήπτης) ή προμηθευτή (εισαγωγή: αποστολέας) */
+function fromPartner(dir: Direction, p: Partner): Draft {
+  const side = dir === "export" ? "to" : "from";
+  return {
+    ...emptyRfq(dir),
+    customer: p.name ?? "",
+    [`${side}_company`]: p.name ?? "",
+    [`${side}_address`]: p.address ?? "",
+    [`${side}_city`]: p.city ?? "",
+    [`${side}_zip`]: p.zip ?? "",
+    [`${side}_country`]: p.country ?? "",
+  };
+}
 
 export default function LogisticsBoard({ userEmail, role }: { userEmail: string | null; role: "admin" | "staff" }) {
   const [data, setData] = useState<LogData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("open");
   const [sel, setSel] = useState<string | null>(null);
-  const [creating, setCreating] = useState<Direction | null>(null);
+  const [creating, setCreating] = useState<Draft | null>(null);
   const [q, setQ] = useState("");
   const [dir, setDir] = useState<"" | Direction>("");
   const [flash, setFlash] = useState(0);
@@ -71,7 +86,7 @@ export default function LogisticsBoard({ userEmail, role }: { userEmail: string 
   };
 
   const ql = q.trim().toUpperCase();
-  const list = (tab === "carriers" ? [] : groups[tab]).filter(
+  const list = (tab === "carriers" || tab === "partners" ? [] : groups[tab]).filter(
     (r) => (!dir || r.direction === dir) && (!ql || [r.ref, r.customer, r.order_ref, r.from_city, r.to_city, r.from_country, r.to_country, r.goods, r.tracking_no].some((x) => x?.toUpperCase().includes(ql)))
   );
   const cs = useColSort<Rfq>(
@@ -108,10 +123,10 @@ export default function LogisticsBoard({ userEmail, role }: { userEmail: string 
             )}
           </div>
           <div className="st-actions">
-            <button type="button" className="btn primary" onClick={() => (setCreating("export"), setSel(null))}>
+            <button type="button" className="btn primary" onClick={() => (setCreating(emptyRfq("export")), setSel(null))}>
               + Εξαγωγή
             </button>
-            <button type="button" className="btn primary" onClick={() => (setCreating("import"), setSel(null))}>
+            <button type="button" className="btn primary" onClick={() => (setCreating(emptyRfq("import")), setSel(null))}>
               + Εισαγωγή
             </button>
           </div>
@@ -124,9 +139,9 @@ export default function LogisticsBoard({ userEmail, role }: { userEmail: string 
 
         {creating ? (
           <div className="lg-detail">
-            <h2>Νέο αίτημα — {DIR_TXT[creating]}</h2>
+            <h2>Νέο αίτημα — {DIR_TXT[creating.direction as Direction]}</h2>
             <RfqForm
-              initial={emptyRfq(creating)}
+              initial={creating}
               userEmail={userEmail}
               onSaved={(id) => {
                 setCreating(null);
@@ -149,10 +164,13 @@ export default function LogisticsBoard({ userEmail, role }: { userEmail: string 
                 { key: "transit", label: "Σε εξέλιξη", value: groups.transit.length, tone: "orange", hint: "Ανατεθειμένα και σε μεταφορά" },
                 { key: "done", label: "Ολοκληρωμένα", value: groups.done.length, tone: "green", hint: "Παραδόθηκαν ή ακυρώθηκαν" },
                 { key: "carriers", label: "Μεταφορικές", value: data?.carriers.filter((c) => c.active).length ?? 0, tone: "neutral", hint: "Μητρώο μεταφορικών" },
+                { key: "partners", label: "Πελάτες / Προμηθευτές", value: "WMS", tone: "neutral", hint: "Ελλάδα / εξωτερικό, από το WMS" },
               ]}
             />
             {tab === "carriers" ? (
               data && <CarriersTab data={data} userEmail={userEmail} reload={load} />
+            ) : tab === "partners" ? (
+              <PartnersTab userEmail={userEmail} onNew={(d, p) => (setCreating(fromPartner(d, p)), setSel(null))} />
             ) : (
               <>
                 <div className="st-filters an-filters">

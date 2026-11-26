@@ -4,7 +4,7 @@ import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { HOME, INCOTERMS, MODES, type Direction, type Rfq } from "@/lib/logistics";
 
-type Draft = Partial<Rfq>;
+export type Draft = Partial<Rfq>;
 /** «1.234,5» / «12,5» / «12.5» -> αριθμός */
 function toNumber(v: unknown): number | null {
   const t = String(v ?? "").trim().replace(/\s/g, "");

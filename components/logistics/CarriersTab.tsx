@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { MODES, MODE_TXT, parseList, type Carrier } from "@/lib/logistics";
 import type { LogData } from "@/components/logistics/data";
+import { CARRIER_TEMPLATE, mergeCarrier, readCarriers, type ImportLine } from "@/lib/carrierImport";
 
 const fm = (n: number | null | undefined) => (n == null ? "" : n.toLocaleString("el-GR", { maximumFractionDigits: 0 }));
 type Edit = { id?: string; name: string; emails: string; contact: string; phone: string; modes: string[]; countries: string; notes: string; rating: string; active: boolean };
@@ -14,6 +15,69 @@ export default function CarriersTab({ data, userEmail, reload }: { data: LogData
   const [q, setQ] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [imp, setImp] = useState<{ file: string; lines: ImportLine[]; skip: Set<number> } | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function pickFile(f: File | undefined) {
+    if (!f) return;
+    setError(null);
+    setMsg(null);
+    try {
+      const XLSX = await import("xlsx");
+      const wb = XLSX.read(await f.arrayBuffer(), { type: "array" });
+      let best: ImportLine[] | null = null;
+      let lastErr: Error | null = null;
+      // πρώτο φύλλο που έχει στήλη ονόματος μεταφορικής
+      for (const n of wb.SheetNames) {
+        try {
+          const rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[n], { header: 1, defval: "", raw: false });
+          best = readCarriers(rows, data.carriers).lines;
+          break;
+        } catch (e) {
+          lastErr = e as Error;
+        }
+      }
+      if (!best) throw lastErr ?? new Error("Κενό αρχείο.");
+      if (!best.length) throw new Error("Δεν βρέθηκαν γραμμές με μεταφορικές κάτω από τις επικεφαλίδες.");
+      setImp({ file: f.name, lines: best, skip: new Set(best.filter((l) => l.error === "διπλή γραμμή στο αρχείο").map((l) => l.row)) });
+    } catch (e) {
+      setError(`Το Excel δεν διαβάστηκε: ${(e as Error).message}`);
+    } finally {
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  async function runImport() {
+    if (!imp) return;
+    setBusy(true);
+    setError(null);
+    const sb = createClient();
+    let added = 0;
+    let updated = 0;
+    const fails: string[] = [];
+    for (const l of imp.lines) {
+      if (imp.skip.has(l.row)) continue;
+      const res = l.match ? await sb.from("carriers").update(mergeCarrier(l.match, l.data)).eq("id", l.match.id) : await sb.from("carriers").insert({ ...l.data, created_by: userEmail });
+      if (res.error) fails.push(`${l.data.name}: ${res.error.message}`);
+      else if (l.match) updated++;
+      else added++;
+    }
+    setBusy(false);
+    setImp(null);
+    setMsg(`Από το ${imp.file}: ${added} νέες, ${updated} ενημερώθηκαν.`);
+    if (fails.length) setError(`Απέτυχαν ${fails.length}: ${fails.slice(0, 5).join(" · ")}`);
+    reload();
+  }
+
+  async function template() {
+    const XLSX = await import("xlsx");
+    const ws = XLSX.utils.aoa_to_sheet(CARRIER_TEMPLATE);
+    ws["!cols"] = CARRIER_TEMPLATE[0].map((h) => ({ wch: Math.max(14, String(h).length + 4) }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Μεταφορικές");
+    XLSX.writeFile(wb, "metaforikes-protypo.xlsx");
+  }
 
   // στατιστικά ανά μεταφορική: αιτήματα, προσφορές, αναθέσεις, μέση απόκλιση από τη φθηνότερη
   const stats = (c: Carrier) => {
@@ -63,8 +127,82 @@ export default function CarriersTab({ data, userEmail, reload }: { data: LogData
           <button type="button" className="btn primary sm" onClick={() => setEd({ ...blank })}>
             + Νέα μεταφορική
           </button>
+          <button type="button" className="btn ghost sm" onClick={() => fileRef.current?.click()} disabled={busy}>
+            ⇪ Φόρτωση από Excel
+          </button>
+          <button type="button" className="btn ghost sm" onClick={template} title="Excel με τις στήλες που αναγνωρίζονται">
+            Πρότυπο
+          </button>
+          <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" hidden onChange={(e) => pickFile(e.target.files?.[0])} />
         </span>
       </div>
+      {msg && <p className="dim">{msg}</p>}
+      {!ed && error && <p className="st-error">{error}</p>}
+
+      {imp && (
+        <div className="lg-card">
+          <h3>
+            Φόρτωση από {imp.file} — {imp.lines.length - imp.skip.size} από {imp.lines.length} επιλεγμένες
+          </h3>
+          <p className="dim">
+            Νέες μεταφορικές προστίθενται· όσες υπάρχουν ήδη (ίδιο όνομα ή email) ενημερώνονται χωρίς να χάσουν email, τρόπους ή χώρες που έχουν ήδη. Ξετσέκαρε όσες
+            δεν θέλεις.
+          </p>
+          <div className="st-tablewrap">
+            <table className="st-table st-cards">
+              <thead>
+                <tr>
+                  {["", "Γραμμή", "Μεταφορική", "Email", "Τρόποι", "Χώρες", "Υπεύθυνος / τηλ.", "Ενέργεια"].map((h) => (
+                    <th key={h}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {imp.lines.map((l) => {
+                  const on = !imp.skip.has(l.row);
+                  return (
+                    <tr key={l.row} className={on ? "" : "dim"}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          onChange={() => {
+                            const skip = new Set(imp.skip);
+                            if (on) skip.add(l.row);
+                            else skip.delete(l.row);
+                            setImp({ ...imp, skip });
+                          }}
+                        />
+                      </td>
+                      <td className="num" data-label="Γραμμή">{l.row}</td>
+                      <td data-label="Μεταφορική">
+                        <b>{l.data.name}</b>
+                        {l.data.rating ? <span className="dim"> {"★".repeat(l.data.rating)}</span> : null}
+                      </td>
+                      <td data-label="Email">{l.data.emails.join(", ") || <span className="dm-r">—</span>}</td>
+                      <td data-label="Τρόποι">{l.data.modes.map((m) => MODE_TXT[m] ?? m).join(", ")}</td>
+                      <td data-label="Χώρες">{l.data.countries.join(", ")}</td>
+                      <td data-label="Υπεύθυνος">{[l.data.contact, l.data.phone].filter(Boolean).join(" · ")}</td>
+                      <td data-label="Ενέργεια">
+                        {l.match ? <span className="lg-badge blue">ενημέρωση «{l.match.name}»</span> : <span className="lg-badge green">νέα</span>}
+                        {l.error && <div className="dm-r">{l.error}</div>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <span className="st-actions">
+            <button type="button" className="btn primary sm" disabled={busy || imp.skip.size === imp.lines.length} onClick={runImport}>
+              {busy ? "Αποθήκευση…" : `Εισαγωγή ${imp.lines.length - imp.skip.size}`}
+            </button>
+            <button type="button" className="btn ghost sm" onClick={() => setImp(null)} disabled={busy}>
+              Άκυρο
+            </button>
+          </span>
+        </div>
+      )}
 
       {ed && (
         <form className="lg-form lg-card" onSubmit={save}>
