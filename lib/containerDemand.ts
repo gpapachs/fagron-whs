@@ -94,7 +94,7 @@ export function computeDemand(lines: DemandLine[], specs: Spec[], newOf: Map<str
 
 // ------------------------------------------------------------ Excel
 
-export type Cell = string | number | Date | null | undefined;
+export type Cell = string | number | boolean | Date | null | undefined;
 export type ColMap = { product: number; qty: number; due: number; desc: number; ref: number; cust: number; produced: number; done: number };
 const CODE_RE = /^\d{2}-\d{2}-\d{3}/;
 const s = (v: Cell) => (v instanceof Date ? v.toISOString() : String(v ?? "")).trim();
