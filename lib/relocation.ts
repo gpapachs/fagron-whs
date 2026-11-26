@@ -96,7 +96,7 @@ export type ItemPlan = {
   need: number; // ανάλωση μηνών + ανοιχτές παραγγελίες, πριν τη στρογγυλοποίηση σε παλέτες
   firstReceipt: string | null;
   /** γιατί προτείνεται αυτή η κίνηση: σύντομα και αναλυτικά */
-  why: { short: string; long: string[] };
+  why: { short: string; long: string[]; note?: string };
   /** ποσότητα που όρισε ο χρήστης (null = η προτεινόμενη) */
   manual?: number | null;
   /** η προτεινόμενη ποσότητα (πριν από τη χειροκίνητη) */
@@ -309,11 +309,11 @@ export function planRelocation(rows: RelRow[], params: RelParams): RelPlan {
         }),
     });
     const it = items[items.length - 1];
-    it.why = explain(it, params, isNew);
     if (manual != null) {
-      const txt = `${byLot ? "Ποσότητες ανά παρτίδα" : "Χειροκίνητη ποσότητα"}: φεύγουν ${n0(it.moveQty)} (πρόταση ${n0(suggested)}).`;
-      it.why = { short: `${txt} Μένουν ${n0(it.onsite - it.moveQty)} στην κεντρική.`, long: [`${txt} Μένουν ${n0(it.onsite - it.moveQty)} στην κεντρική.`, "Η πρόταση της ανάλυσης ήταν:", ...it.why.long] };
-    }
+      // η ανάλυση μένει όπως ήταν (με την προτεινόμενη ποσότητα)· η αλλαγή του χρήστη φαίνεται χωριστά
+      it.why = explain({ ...it, moveQty: suggested, movePallets: null }, params, isNew);
+      it.why.note = `${byLot ? "Ποσότητες ανά παρτίδα" : "Δική σου ποσότητα"}: φεύγουν ${n0(it.moveQty)} αντί για ${n0(suggested)} — μένουν ${n0(it.onsite - it.moveQty)} στην κεντρική.`;
+    } else it.why = explain(it, params, isNew);
   }
 
   // θέσεις που αδειάζουν: όλες οι γραμμές του προθέματος φεύγουν ολόκληρες και δεν υπάρχει άλλο είδος

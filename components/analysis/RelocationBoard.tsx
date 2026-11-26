@@ -708,6 +708,7 @@ function MoveGroups({
                     <td className="st-desc" data-label="Περιγραφή">
                       {p.description}
                       <div className="rl-why">{p.why.short}</div>
+                      {p.why.note && <div className="rl-why rl-why-note">✎ {p.why.note}</div>}
                     </td>
                     <td data-label="Κατηγορία"><span className={`rl-cat ${p.category}`}>{CATEGORY_TXT[p.category]}</span></td>
                     <td className="num" data-label="Παρτίδες">{lotsOf(p)}</td>
@@ -726,6 +727,7 @@ function MoveGroups({
                   {isOpen && (
                     <tr className="rl-sub">
                       <td colSpan={12}>
+                        {p.why.note && <p className="rl-why rl-why-note">✎ {p.why.note}</p>}
                         <ul className="rl-whylong" aria-label="Γιατί">
                           {p.why.long.map((t, k) => (
                             <li key={k}>{t}</li>
@@ -905,6 +907,7 @@ function ItemsTable({
               <td className="st-desc" data-label="Περιγραφή" title={i.why.long.join("\n")}>
                 {i.description}
                 <div className="rl-why">{i.why.short}</div>
+                {i.why.note && <div className="rl-why rl-why-note">✎ {i.why.note}</div>}
               </td>
               <td data-label="Κατηγορία"><span className={`rl-cat ${i.category}`}>{CATEGORY_TXT[i.category]}</span></td>
               <td className="num" data-label="Κεντρική">{fq(i.onsite, 0)}</td>
