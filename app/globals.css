@@ -1713,3 +1713,5 @@ input:disabled { opacity: .75; }
 .lg-cargo td:first-child select { min-width: 190px; }
 .lg-cargo tfoot td { background: var(--surface-2); }
 .lg-quick { align-items: flex-end; }
+.lg-hz input.lg-pack { min-width: 70px; width: 80px; }
+.lg-total { font-weight: 700; color: var(--ink); padding-bottom: 8px; white-space: nowrap; }

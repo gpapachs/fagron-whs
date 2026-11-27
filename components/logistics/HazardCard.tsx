@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { logEvent } from "@/components/logistics/data";
 import { manifestFromRfq } from "@/lib/manifestPdf";
-import { adrText, englishUrl, parseHazardText, pickLang, readHazards, type Hazard } from "@/lib/hazardImport";
+import { adrText, englishUrl, hazardTotal, parseHazardText, pickLang, readHazards, type Hazard } from "@/lib/hazardImport";
 import type { Rfq, RfqDoc } from "@/lib/logistics";
 
 const LANGS = ["GR", "GB", "USA", "DE", "IT", "FR", "ES", "NL"];
@@ -14,7 +14,7 @@ export default function HazardCard({ rfq, docs, userEmail, onDone }: { rfq: Rfq;
   const [items, setItems] = useState<Hazard[]>([]);
   const [paste, setPaste] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [quick, setQuick] = useState({ name: "", qty: "" });
+  const [quick, setQuick] = useState({ name: "", qty: "", pack: "" });
   const fileRef = useRef<HTMLInputElement>(null);
   const sb = createClient();
   const attachedUrls = new Set(docs.filter((d) => d.kind === "msds").map((d) => d.notes ?? ""));
@@ -192,7 +192,18 @@ export default function HazardCard({ rfq, docs, userEmail, onDone }: { rfq: Rfq;
   async function toManifest() {
     const base = manifestFromRfq(rfq);
     const keep = base.lines.filter((l) => l.desc || l.pallets || l.weight);
-    const lines = items.map((h) => ({ desc: h.name || h.code, pallets: "", packages: h.qty, weight: h.weight, dims: "", adr: adrText(h), notes: h.cas ? `CAS ${h.cas}` : "" }));
+    const lines = items.map((h) => {
+      const t = hazardTotal(h);
+      return {
+        desc: h.name || h.code,
+        pallets: "",
+        packages: h.qty,
+        weight: t?.unit === "kg" ? String(t.v).replace(".", ",") : "",
+        dims: "",
+        adr: adrText(h),
+        notes: [h.pack ? `${h.qty || 1} × ${h.pack}${t ? ` = ${t.text}` : ""}` : "", h.cas ? `CAS ${h.cas}` : ""].filter(Boolean).join(" · "),
+      };
+    });
     const msdsNames = items.filter((h) => h.msds).map((h) => `MSDS ${h.msds!.name}`);
     setBusy("mf");
     try {
@@ -217,15 +228,29 @@ export default function HazardCard({ rfq, docs, userEmail, onDone }: { rfq: Rfq;
   return (
     <section className="lg-card">
       <h3>
-        Επικίνδυνα είδη (ADR) & MSDS {items.length ? <span className="dim">· {items.length} είδη · MSDS {found}</span> : null}
+        Επικίνδυνα είδη (ADR) & MSDS{" "}
+        {items.length ? (
+          <span className="dim">
+            · {items.length} είδη · MSDS {found}
+            {(() => {
+              const sum = { kg: 0, L: 0 };
+              for (const h of items) {
+                const t = hazardTotal(h);
+                if (t) sum[t.unit] += t.v;
+              }
+              const parts = [sum.kg ? `${sum.kg.toLocaleString("el-GR", { maximumFractionDigits: 3 })} kg` : "", sum.L ? `${sum.L.toLocaleString("el-GR", { maximumFractionDigits: 3 })} L` : ""].filter(Boolean);
+              return parts.length ? ` · σύνολο ${parts.join(" + ")}` : "";
+            })()}
+          </span>
+        ) : null}
       </h3>
       <form
         className="lg-row lg-quick"
         onSubmit={(e) => {
           e.preventDefault();
           if (!quick.name.trim()) return;
-          load(parseHazardText(quick.name).map((h) => ({ ...h, qty: quick.qty.trim() })), "χειροκίνητα");
-          setQuick({ name: "", qty: "" });
+          load(parseHazardText(quick.name).map((h) => ({ ...h, qty: quick.qty.trim(), pack: quick.pack.trim() })), "χειροκίνητα");
+          setQuick({ name: "", qty: "", pack: quick.pack });
         }}
       >
         <label className="field lg-wide">
@@ -236,6 +261,14 @@ export default function HazardCard({ rfq, docs, userEmail, onDone }: { rfq: Rfq;
           Τμχ
           <input value={quick.qty} inputMode="decimal" onChange={(e) => setQuick({ ...quick, qty: e.target.value })} />
         </label>
+        <label className="field">
+          Ανά τμχ
+          <input value={quick.pack} onChange={(e) => setQuick({ ...quick, pack: e.target.value })} placeholder="π.χ. 5 g, 1 L, 25 kg" />
+        </label>
+        {(() => {
+          const t = hazardTotal({ qty: quick.qty, pack: quick.pack, weight: "" });
+          return t ? <span className="lg-total">= {t.text}</span> : null;
+        })()}
         <button type="submit" className="btn primary sm" disabled={!!busy || !quick.name.trim()}>
           {busy === "load" || busy === "find" || busy === "adr" ? "Αναζήτηση…" : "+ Προσθήκη & εύρεση UN / MSDS"}
         </button>
@@ -278,7 +311,7 @@ export default function HazardCard({ rfq, docs, userEmail, onDone }: { rfq: Rfq;
           <table className="st-table lg-hz">
             <thead>
               <tr>
-                {["Κωδικός", "Είδος", "CAS", "UN", "Κλάση", "PG", "Ποσ.", "kg", "MSDS (fagron.com)", "Γλώσσα", ""].map((h) => (
+                {["Κωδικός", "Είδος", "CAS", "UN", "Κλάση", "PG", "Τμχ", "Ανά τμχ", "Σύνολο", "MSDS (fagron.com)", "Γλώσσα", ""].map((h) => (
                   <th key={h}>{h}</th>
                 ))}
               </tr>
@@ -312,7 +345,14 @@ export default function HazardCard({ rfq, docs, userEmail, onDone }: { rfq: Rfq;
                       <input className="lg-un" value={h.qty} onBlur={() => save()} onChange={(e) => upd(h.key, { qty: e.target.value })} />
                     </td>
                     <td>
-                      <input className="lg-un" value={h.weight} onBlur={() => save()} onChange={(e) => upd(h.key, { weight: e.target.value })} />
+                      <input className="lg-pack" value={h.pack ?? ""} placeholder="5 g" onBlur={() => save()} onChange={(e) => upd(h.key, { pack: e.target.value })} />
+                    </td>
+                    <td className="num">
+                      {h.pack ? (
+                        <b>{hazardTotal(h)?.text ?? <span className="dm-r" title="Δεν αναγνωρίστηκε η μονάδα (g, kg, mg, ml, L)">?</span>}</b>
+                      ) : (
+                        <input className="lg-un" value={h.weight} placeholder="kg" title="Συνολικό βάρος (kg) — ή συμπλήρωσε «Ανά τμχ»" onBlur={() => save()} onChange={(e) => upd(h.key, { weight: e.target.value })} />
+                      )}
                     </td>
                     <td>
                       {hs.length > 1 ? (
