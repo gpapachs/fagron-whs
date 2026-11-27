@@ -1,14 +1,17 @@
 :root {
   color-scheme: light;
   --font-display: var(--font-body);
-  --bg: #f3f5f8;
+  /* Fagron: κόκκινο #CE302C, γκρι #9C9E9F */
+  --fagron-red: #ce302c;
+  --fagron-grey: #9c9e9f;
+  --bg: #f5f5f6;
   --surface: #ffffff;
-  --surface-2: #eef1f5;
-  --ink: #14213d;
-  --ink-dim: #5b6b82;
-  --accent: #14213d;          /* κύριο: σκούρο navy */
+  --surface-2: #f0f0f2;
+  --ink: #1f2328;
+  --ink-dim: #686c72;
+  --accent: #ce302c;          /* κύριο: κόκκινο Fagron */
   --accent-ink: #ffffff;
-  --link: #2554c7;
+  --link: #b42824;
   --rack: #ffcc00;            /* κίτρινη ετικέτα ραφιού */
   --rack-ink: #1a1a1a;
   --free: #12805c;
@@ -17,10 +20,10 @@
   --occupied-bg: #fdeceb;
   --reserved: #2b62c4;
   --reserved-bg: #e7eefb;
-  --border: #dce2ea;
-  --focus: #2554c7;
-  --shadow: 0 1px 0 rgba(20, 33, 61, 0.04), 0 1px 3px rgba(20, 33, 61, 0.06);
-  --shadow-lg: 0 12px 32px -12px rgba(20, 33, 61, 0.22);
+  --border: #e2e3e6;
+  --focus: #ce302c;
+  --shadow: 0 1px 0 rgba(31, 35, 40, 0.04), 0 1px 3px rgba(31, 35, 40, 0.06);
+  --shadow-lg: 0 12px 32px -12px rgba(31, 35, 40, 0.22);
   --r-sm: 8px;
   --r: 12px;
   --r-lg: 16px;
@@ -33,9 +36,9 @@
     --surface-2: #1c2740;
     --ink: #e8edf6;
     --ink-dim: #93a1b8;
-    --accent: #e8edf6;
-    --accent-ink: #0e1524;
-    --link: #8fb0ff;
+    --accent: #e0524e;
+    --accent-ink: #ffffff;
+    --link: #f08a86;
     --rack: #ffd23f;
     --free: #3fbf8a;
     --free-bg: rgba(63, 191, 138, 0.14);
@@ -44,7 +47,7 @@
     --reserved: #7ea6ff;
     --reserved-bg: rgba(126, 166, 255, 0.14);
     --border: #26324d;
-    --focus: #8fb0ff;
+    --focus: #e0524e;
     --shadow: 0 1px 0 rgba(0, 0, 0, 0.3);
     --shadow-lg: 0 16px 40px -12px rgba(0, 0, 0, 0.6);
   }
@@ -52,9 +55,9 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
   --bg: #0e1524; --surface: #151e31; --surface-2: #1c2740; --ink: #e8edf6; --ink-dim: #93a1b8;
-  --accent: #e8edf6; --accent-ink: #0e1524; --link: #8fb0ff; --rack: #ffd23f;
+  --accent: #e0524e; --accent-ink: #ffffff; --link: #f08a86; --rack: #ffd23f;
   --free: #3fbf8a; --free-bg: rgba(63, 191, 138, 0.14); --occupied: #ff7a6b; --occupied-bg: rgba(255, 122, 107, 0.14);
-  --reserved: #7ea6ff; --reserved-bg: rgba(126, 166, 255, 0.14); --border: #26324d; --focus: #8fb0ff;
+  --reserved: #7ea6ff; --reserved-bg: rgba(126, 166, 255, 0.14); --border: #26324d; --focus: #e0524e;
   --shadow: 0 1px 0 rgba(0, 0, 0, 0.3); --shadow-lg: 0 16px 40px -12px rgba(0, 0, 0, 0.6);
 }
 
@@ -697,7 +700,7 @@ h1, h2, h3 { font-family: var(--font-display), sans-serif; font-weight: 700; let
   border-bottom: 2px solid transparent; margin: 0; white-space: nowrap;
 }
 .navtabs a:hover { color: var(--ink); }
-.navtabs a.on { color: var(--ink); border-bottom-color: var(--rack); }
+.navtabs a.on { color: var(--accent); border-bottom-color: var(--accent); }
 .appbar-user { margin-left: auto; display: flex; align-items: center; gap: 10px; min-width: 0; }
 .avatar {
   width: 32px; height: 32px; border-radius: 50%; background: var(--surface-2); color: var(--ink); flex: none;
@@ -740,7 +743,7 @@ h1, h2, h3 { font-family: var(--font-display), sans-serif; font-weight: 700; let
 }
 .stat .l, .kpi .l { font-size: 13px; color: var(--ink-dim); text-transform: none; letter-spacing: 0; }
 .stat.total .n { color: var(--ink); }
-.kpi.accent { box-shadow: inset 0 -3px 0 var(--rack); }
+.kpi.accent { box-shadow: inset 0 -3px 0 var(--accent); }
 .kpi.bad .n { color: var(--occupied); }
 .header .stats { flex: 1 1 520px; }
 @media (max-width: 760px) {
@@ -801,7 +804,7 @@ h1, h2, h3 { font-family: var(--font-display), sans-serif; font-weight: 700; let
 .rp-card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--border); }
 .rp-card.can::before { background: var(--free); }
 .rp-card.planned { border-color: var(--ink); box-shadow: var(--shadow-lg); }
-.rp-card.planned::before { background: var(--rack); }
+.rp-card.planned::before { background: var(--accent); }
 .rp-card.over::before { background: var(--occupied); }
 .rp-card.over { border-color: var(--occupied); }
 .rp-card-title .code { color: var(--ink-dim); font-size: 12px; }
@@ -902,7 +905,7 @@ th.num { font-family: var(--font-body), sans-serif; }
 .dlg-result > div:first-child { border-left: none; }
 .dlg-result .l { font-size: 12px; color: var(--ink-dim); }
 .dlg-result .n { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.dlg-result .hl { background: var(--surface-2); box-shadow: inset 0 -3px 0 var(--rack); }
+.dlg-result .hl { background: var(--surface-2); box-shadow: inset 0 -3px 0 var(--accent); }
 .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .dlg-actions .btn { flex: none; min-width: 110px; }
 
@@ -979,7 +982,7 @@ th.num { font-family: var(--font-body), sans-serif; }
 @media (max-width: 640px) { .rp-poslist { grid-column: 1 / -1; } }
 .rp-est { font-size: 12px; color: var(--ink-dim); margin-top: 2px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .rp-est.plan { color: var(--ink); font-weight: 600; }
-.rp-estimate { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 10px 12px; border-radius: var(--r-sm); background: var(--surface-2); box-shadow: inset 3px 0 0 var(--rack); }
+.rp-estimate { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 10px 12px; border-radius: var(--r-sm); background: var(--surface-2); box-shadow: inset 3px 0 0 var(--accent); }
 .rp-estimate .l { font-size: 13px; color: var(--ink-dim); }
 .rp-estimate .n { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .rp-estimate .rp-hint { flex-basis: 100%; }
@@ -1083,7 +1086,7 @@ th.num { font-family: var(--font-body), sans-serif; }
 .lb-lotbtn .lot { font-family: var(--font-mono), monospace; font-weight: 700; font-size: 12.5px; }
 .lb-lotbtn .meta { font-size: 11.5px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
 .lb-lotbtn:hover { border-color: var(--ink-dim); }
-.lb-lotbtn.on { background: var(--rack); border-color: var(--rack); color: var(--rack-ink); }
+.lb-lotbtn.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .lb-lotbtn.on .meta { color: var(--rack-ink); }
 
 /* ετικέτες: ανασυσκευασίες / όλα τα προϊόντα */
@@ -1746,3 +1749,13 @@ input:disabled { opacity: .75; }
 @media (max-width: 600px) { .qf-brand > *:not(.qf-head) { margin-left: 14px; margin-right: 14px; } .qf-head { padding: 16px 14px 0; } }
 .qf-brand .lg-kv { width: calc(100% - 52px); }
 @media (max-width: 600px) { .qf-brand .lg-kv { width: calc(100% - 28px); } }
+
+/* ---- λογότυπο Fagron στη μπάρα / στη σύνδεση ---- */
+.brand-logo { height: 22px; width: auto; display: block; }
+.brand-name { color: var(--ink-dim); border-left: 1px solid var(--border); padding-left: 10px; font-size: 15px; }
+.brand-name b { color: var(--ink); }
+.appbar { border-top: 3px solid var(--accent); }
+.login-logo { height: 34px; width: auto; display: block; margin-bottom: 4px; }
+.login-card { border-top: 4px solid var(--accent); }
+.login-card h1 { color: var(--accent); }
+:root[data-theme="dark"] .brand-logo, :root[data-theme="midnight"] .brand-logo, :root[data-theme="graphite"] .brand-logo { filter: brightness(1.15); }

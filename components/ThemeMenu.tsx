@@ -3,9 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 
 export const THEMES = [
-  { id: "auto", label: "Αυτόματο", sw: ["#f3f5f8", "#14213d"] },
-  { id: "light", label: "Φωτεινό", sw: ["#f3f5f8", "#14213d"] },
-  { id: "dark", label: "Σκούρο", sw: ["#0e1524", "#e8edf6"] },
+  { id: "auto", label: "Αυτόματο", sw: ["#f5f5f6", "#ce302c"] },
+  { id: "light", label: "Fagron", sw: ["#f5f5f6", "#ce302c"] },
+  { id: "dark", label: "Σκούρο", sw: ["#0e1524", "#e0524e"] },
   { id: "ocean", label: "Ωκεανός", sw: ["#eef6f8", "#0b6e8a"] },
   { id: "forest", label: "Δάσος", sw: ["#f1f6f1", "#2f6b3a"] },
   { id: "sunset", label: "Ηλιοβασίλεμα", sw: ["#fbf4ee", "#b5452b"] },
