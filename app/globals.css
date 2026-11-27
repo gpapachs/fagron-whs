@@ -1760,3 +1760,12 @@ input:disabled { opacity: .75; }
 .login-card h1 { color: var(--accent); }
 :root[data-theme="dark"] .brand-logo, :root[data-theme="midnight"] .brand-logo, :root[data-theme="graphite"] .brand-logo { filter: brightness(1.15); }
 .lg-kv td { white-space: pre-line; }
+.lb-cust { display: flex; flex-direction: column; gap: 10px; }
+.lb-ctable input { width: 100%; font: inherit; font-size: 12.5px; padding: 3px 5px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--ink); }
+.lb-ctable input[type=checkbox] { width: auto; }
+.lb-ctable .c-name { min-width: 160px; } .lb-ctable .c-address { min-width: 140px; } .lb-ctable .c-zip { width: 56px; } .lb-ctable .c-country { width: 40px; } .lb-ctable .c-n { width: 42px; text-align: right; }
+.lb-ctable tr.lb-sel td { background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.lb-cust .lb-actions { display: flex; gap: 8px; }
+.lb-layout.lb-layout-cust { grid-template-columns: minmax(0, 1fr) 330px; }
+.lb-ctable .c-city { min-width: 90px; } .lb-ctable .c-phone { min-width: 105px; } .lb-ctable .c-note { min-width: 80px; }
+@media (max-width: 980px) { .lb-layout.lb-layout-cust { grid-template-columns: 1fr; } }

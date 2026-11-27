@@ -6,7 +6,8 @@ import { createClient } from "@/lib/supabase/client";
 import { loadPdfFonts } from "@/lib/pdfFonts";
 import { autoEnglish } from "@/lib/translate";
 import { useWmsLive } from "@/lib/live";
-import { DEFAULT_LABEL_OPTIONS, dataMatrixText, isAscii, pageSize, type LabelData, type LabelOptions } from "@/lib/labels";
+import { DEFAULT_LABEL_OPTIONS, dataMatrixText, isAscii, pageSize, type AnyLabel, type CustomerLabel, type LabelData, type LabelOptions } from "@/lib/labels";
+import CustomerLabels from "@/components/labels/CustomerLabels";
 import { loadCanvasFonts, pickPrinter, zebraDpi, zebraPrinters, zebraSend, type ZebraDevice } from "@/lib/zebra";
 import type { ProductSettings } from "@/lib/repack";
 
@@ -14,7 +15,7 @@ export type LabelProduct = { code: string; description: string; components: { co
 export type LotRow = { item: string; lot: string; expiry: string | null; position: string; qty: number };
 export type CatalogItem = { code: string; description: string; description_en: string };
 type WmsRow = { item: string; lot: string; serial: string; expiry: string | null; qty: number; positions: string };
-type Mode = "repack" | "all";
+type Mode = "repack" | "all" | "customers";
 const LS_MODE = "labels.mode.v1";
 const fmtExp = (e: string | null) => (e ? `${e.slice(8, 10)}/${e.slice(5, 7)}/${e.slice(2, 4)}` : "");
 
@@ -85,6 +86,7 @@ export default function LabelsBoard({
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const previewUrl = useRef<string | null>(null);
+  const [custPreview, setCustPreview] = useState<CustomerLabel | null>(null);
   const [printCfg, setPrintCfg] = useState<PrintCfg>(DEFAULT_PRINT);
   const [zebraList, setZebraList] = useState<ZebraDevice[] | null>(null); // null = άγνωστο / δεν τρέχει
   const [zebraErr, setZebraErr] = useState<string | null>(null);
@@ -160,7 +162,7 @@ export default function LabelsBoard({
       /* τίποτα */
     }
     if (c && byCode.has(c) && p.get("mode") !== "all") m = "repack";
-    if (m !== "all" && m !== "repack") m = "repack";
+    if (m !== "all" && m !== "repack" && m !== "customers") m = "repack";
     setModeState(m);
     if (c && (m === "all" ? byCatalog.has(c.toUpperCase()) : byCode.has(c))) {
       choose(c.toUpperCase(), m);
@@ -326,7 +328,7 @@ export default function LabelsBoard({
   const total = ids.length * nCopies;
   const ready = !!data && ids.length > 0 && qtyValue !== null && qtyValue !== 0;
 
-  async function build(count: number, list: LabelData[] = labelList) {
+  async function build(count: number, list: AnyLabel[] = labelList) {
     if (!list.length) throw new Error("Διάλεξε κωδικό");
     const [{ jsPDF }, bwip, fonts, L] = await Promise.all([import("jspdf"), import("bwip-js"), loadPdfFonts(), import("@/lib/labels")]);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -336,14 +338,15 @@ export default function LabelsBoard({
 
   // ζωντανή προεπισκόπηση (1 ετικέτα)
   useEffect(() => {
-    if (!data) {
+    const item: AnyLabel | null = mode === "customers" ? custPreview : data;
+    if (!item) {
       setPreview(null);
       return;
     }
     let cancelled = false;
     const t = setTimeout(async () => {
       try {
-        const { doc } = await build(1, data ? [data] : []);
+        const { doc } = await build(1, [item]);
         if (cancelled) return;
         const url = URL.createObjectURL(doc.output("blob"));
         if (previewUrl.current) URL.revokeObjectURL(previewUrl.current);
@@ -359,7 +362,7 @@ export default function LabelsBoard({
       clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code, descEl, descEn, qty, batch, kind, serials[0], opts.offsetXMm, opts.offsetYMm, opts.rotation]);
+  }, [mode, custPreview, code, descEl, descEn, qty, batch, kind, serials[0], opts.offsetXMm, opts.offsetYMm, opts.rotation]);
 
   /** Απευθείας εκτύπωση: Zebra Browser Print (ZPL, χωρίς παράθυρο). Αν δεν υπάρχει,
    *  εκτύπωση από τον browser χωρίς PDF (ανοίγει μόνο το παράθυρο επιλογής εκτυπωτή). */
@@ -392,6 +395,81 @@ export default function LabelsBoard({
       rememberEnglish();
     } catch (e) {
       setError(`Η εκτύπωση απέτυχε: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** εκτύπωση οποιασδήποτε λίστας ετικετών (π.χ. πελάτες) με αντίτυπα ανά ετικέτα */
+  async function printAny(items: { data: AnyLabel; copies: number }[]) {
+    if (!items.length) return;
+    setBusy(true);
+    setError(null);
+    setSaved(null);
+    try {
+      const [bwip, family, L] = await Promise.all([import("bwip-js"), loadCanvasFonts(), import("@/lib/labels")]);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const engine = (bwip as any).default ?? bwip;
+      const o = { ...opts, preprinted: true };
+      const n = items.reduce((t, x) => t + x.copies, 0);
+      const list = zebraList ?? (await refreshPrinters());
+      const dev = list ? pickPrinter(list, printCfg.printer) : null;
+      const canvas = document.createElement("canvas");
+      if (dev) {
+        let dpi = printCfg.dpi === "auto" ? printCfg.detected[dev.name] : printCfg.dpi;
+        if (!dpi) {
+          dpi = (await zebraDpi(dev)) ?? 203;
+          const got = dpi;
+          setPrintCfg((c) => ({ ...c, detected: { ...c.detected, [dev.name]: got } }));
+        }
+        const zpl = items.map((x) => L.bitmapToZpl(L.labelBitmap(canvas, engine, x.data, o, dpi as number, family), x.copies)).join("\n");
+        await zebraSend(dev, zpl);
+        setSaved(`✓ Στάλθηκ${n > 1 ? `αν ${n} ετικέτες` : "ε 1 ετικέτα"} στον ${dev.name} (${dpi} dpi).`);
+      } else {
+        const { PW, PH } = pageSize(o);
+        const imgs = items
+          .map((x) => {
+            L.labelBitmap(canvas, engine, x.data, o, 300, family);
+            const url = canvas.toDataURL("image/png");
+            return Array.from({ length: x.copies }, () => `<img src="${url}">`).join("");
+          })
+          .join("");
+        const frame = document.createElement("iframe");
+        frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
+        frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><style>@page{size:${PW}mm ${PH}mm;margin:0}html,body{margin:0;padding:0}img{display:block;width:${PW}mm;height:${PH}mm;break-after:page;page-break-after:always}img:last-child{break-after:auto;page-break-after:auto}</style></head><body>${imgs}</body></html>`;
+        frame.onload = () => {
+          const w = frame.contentWindow;
+          const ready = Array.from(w?.document.images ?? []).map((im) => (im.complete ? Promise.resolve() : new Promise((r) => (im.onload = r))));
+          Promise.all(ready).then(() => {
+            w?.focus();
+            w?.print();
+            setTimeout(() => frame.remove(), 60000);
+          });
+        };
+        document.body.appendChild(frame);
+        setSaved(`Άνοιξε το παράθυρο εκτύπωσης — διάλεξε ${PRINTER_HINT}.`);
+      }
+    } catch (e) {
+      setError(`Η εκτύπωση απέτυχε: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function pdfAny(items: { data: AnyLabel; copies: number }[]) {
+    if (!items.length) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const [{ jsPDF }, bwip, fonts, L] = await Promise.all([import("jspdf"), import("bwip-js"), loadPdfFonts(), import("@/lib/labels")]);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const engine = (bwip as any).default ?? bwip;
+      const { doc } = L.labelsPdf(jsPDF, engine, fonts, items, { ...opts, preprinted: true });
+      const url = URL.createObjectURL(doc.output("blob"));
+      const w = window.open(url, "_blank");
+      if (!w) doc.save("etiketes-pelaton.pdf");
+    } catch (e) {
+      setError(`Η δημιουργία απέτυχε: ${(e as Error).message}`);
     } finally {
       setBusy(false);
     }
@@ -497,9 +575,15 @@ export default function LabelsBoard({
           <button type="button" role="tab" aria-selected={mode === "all"} className={mode === "all" ? "on" : ""} onClick={() => setMode("all")}>
             Όλα τα προϊόντα <span className="n">{catalog.length.toLocaleString("el-GR")}</span>
           </button>
+          <button type="button" role="tab" aria-selected={mode === "customers"} className={mode === "customers" ? "on" : ""} onClick={() => setMode("customers")}>
+            Πελάτες (διεύθυνση)
+          </button>
         </div>
 
-        <div className="lb-layout">
+        <div className={`lb-layout ${mode === "customers" ? "lb-layout-cust" : ""}`}>
+          {mode === "customers" ? (
+            <CustomerLabels busy={busy} error={error} notice={saved} onPreview={setCustPreview} onPrint={(it) => printAny(it)} onPdf={(it) => pdfAny(it)} />
+          ) : (
           <section className="lb-form">
             <label className="field lb-search">
               {mode === "all" ? "Κωδικός προϊόντος" : "Τελικός κωδικός"}
@@ -733,15 +817,18 @@ export default function LabelsBoard({
               </>
             )}
           </section>
+          )}
 
           <aside className="lb-preview">
             <h2>Προεπισκόπηση</h2>
-            {preview ? (
+            {mode === "customers" && !custPreview ? (
+              <div className="lb-empty">Φόρτωσε λίστα ή διάλεξε πελάτη.</div>
+            ) : preview ? (
               <iframe title="Προεπισκόπηση ετικέτας" src={`${preview}#toolbar=0&navpanes=0&view=Fit`} className="lb-frame" />
             ) : (
               <div className="lb-empty">Διάλεξε τελικό κωδικό.</div>
             )}
-            {data && (
+            {data && mode !== "customers" && (
               <details className="lb-dm">
                 <summary>Περιεχόμενο DataMatrix</summary>
                 <code>{dmText}</code>

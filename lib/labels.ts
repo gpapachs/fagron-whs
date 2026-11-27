@@ -175,6 +175,51 @@ export function layoutLabel(data: LabelData, mat: Raw, opts: LabelOptions, measu
   return ops;
 }
 
+// ------------------------------------------------------------------ ετικέτα πελάτη
+/** Ετικέτα διεύθυνσης πελάτη στο ίδιο προεκτυπωμένο χαρτί 70×35 */
+export type CustomerLabel = { kind: "customer"; name: string; address: string; city: string; zip: string; country: string; phone: string; note?: string };
+export type AnyLabel = LabelData | CustomerLabel;
+export const isCustomer = (d: AnyLabel): d is CustomerLabel => (d as CustomerLabel).kind === "customer";
+
+/**
+ * Επωνυμία (έντονα, έως 2 γραμμές), διεύθυνση, ΤΚ πόλη (χώρα), τηλέφωνο, προαιρετική σημείωση.
+ * Γράφεται στο πάνω μέρος (ελεύθερο) — ως ~25 mm, ώστε να μην πατά στο προεκτυπωμένο λογότυπο /
+ * υποσέλιδο. Αν δεν χωράει, όλα μικραίνουν αναλογικά.
+ */
+export function layoutCustomer(c: CustomerLabel, opts: LabelOptions, measure: Measure): LabelOp[] {
+  const W = opts.widthMm;
+  const k = opts.heightMm / 35;
+  const m = 2.4 * k;
+  const ox = opts.offsetXMm || 0;
+  const oy = opts.offsetYMm || 0;
+  const maxW = W - 2 * m;
+  const bottom = (opts.preprinted ? 24.6 : 31) * k; // κάτω όριο κειμένου (baseline)
+  const top = m + 0.4 * k;
+  const place = [[c.zip, c.city].filter(Boolean).join(" "), c.country && !/^(GR|EL|ΕΛΛΑΔΑ|GREECE)$/i.test(c.country.trim()) ? c.country : ""].filter(Boolean).join(", ");
+  const phone = c.phone ? `Τηλ.: ${c.phone}` : "";
+
+  for (let scale = 1; scale >= 0.6; scale -= 0.05) {
+    const nameSize = 9.6 * k * scale;
+    const bodySize = 7.6 * k * scale;
+    const ops: LabelOp[] = [];
+    let y = top;
+    const line = (t: string, size: number, bold: boolean, gap = 1.18) => {
+      y += size * PT_MM * gap;
+      ops.push({ t: "text", x: m + ox, y: y + oy, text: t, size, bold });
+    };
+    // επωνυμία: μία γραμμή (μικραίνει λίγο) ή δύο
+    const ns = fit(measure, c.name, maxW, nameSize, nameSize * 0.82, true);
+    const nameLines = measure(c.name, ns, true) > maxW ? wrap(measure, c.name, maxW, nameSize * 0.85, true).slice(0, 2) : [c.name];
+    const nSize = nameLines.length > 1 ? nameSize * 0.85 : ns;
+    nameLines.forEach((l, i) => line(l, nSize, true, i ? 1.12 : 1.05));
+    y += 0.9 * k * scale;
+    const body = [...(c.address ? wrap(measure, c.address, maxW, bodySize, false).slice(0, 2) : []), place, phone, c.note ?? ""].filter(Boolean);
+    body.forEach((l) => line(l, fit(measure, l, maxW, bodySize, bodySize * 0.8, false), false, 1.28));
+    if (y <= bottom || scale <= 0.6) return ops;
+  }
+  return [];
+}
+
 /** μέγεθος σελίδας/bitmap μετά την περιστροφή */
 export function pageSize(opts: LabelOptions) {
   const rot = opts.rotation ?? 0;
@@ -205,7 +250,7 @@ export function labelsPdf(
   jsPDF: JsPDFCtor,
   bwip: Bwip,
   fonts: LabelFonts,
-  labels: { data: LabelData; copies: number }[],
+  labels: { data: AnyLabel; copies: number }[],
   opts: LabelOptions = DEFAULT_LABEL_OPTIONS
 ) {
   const W = opts.widthMm;
@@ -227,7 +272,7 @@ export function labelsPdf(
   let first = true;
   let pages = 0;
   for (const { data, copies } of labels) {
-    const ops = layoutLabel(data, matrix(bwip, dataMatrixText(data)), opts, measure);
+    const ops = isCustomer(data) ? layoutCustomer(data, opts, measure) : layoutLabel(data, matrix(bwip, dataMatrixText(data)), opts, measure);
     for (let c = 0; c < copies; c++) {
       if (!first) doc.addPage([PW, PH], PW >= PH ? "landscape" : "portrait");
       first = false;
@@ -275,7 +320,7 @@ export function labelBitmap(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   canvas: any,
   bwip: Bwip,
-  data: LabelData,
+  data: AnyLabel,
   opts: LabelOptions,
   dpi: number,
   fontFamily: string
@@ -299,7 +344,7 @@ export function labelBitmap(
     ctx.font = font(size, bold);
     return ctx.measureText(t).width / d;
   };
-  const ops = layoutLabel(data, matrix(bwip, dataMatrixText(data)), opts, measure);
+  const ops = isCustomer(data) ? layoutCustomer(data, opts, measure) : layoutLabel(data, matrix(bwip, dataMatrixText(data)), opts, measure);
   ctx.textBaseline = "alphabetic";
   for (const op of ops) {
     if (op.t === "text") {
