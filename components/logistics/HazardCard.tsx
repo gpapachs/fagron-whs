@@ -7,7 +7,7 @@ import { manifestFromRfq } from "@/lib/manifestPdf";
 import { adrText, englishUrl, hazardTotal, parseHazardText, pickLang, readHazards, type Hazard } from "@/lib/hazardImport";
 import type { Rfq, RfqDoc } from "@/lib/logistics";
 
-const LANGS = ["GR", "GB", "USA", "DE", "IT", "FR", "ES", "NL"];
+const LANGS = ["GB", "USA", "GR", "DE", "IT", "FR", "ES", "NL"];
 
 /** Επικίνδυνα είδη (ADR) του αιτήματος: λίστα από Excel / επικόλληση, αυτόματη εύρεση MSDS στο fagron.com, προσθήκη στα έγγραφα και στο manifest. */
 export default function HazardCard({ rfq, docs, userEmail, onDone }: { rfq: Rfq; docs: RfqDoc[]; userEmail: string | null; onDone: (msg: string | null, err?: string) => void }) {
@@ -408,7 +408,7 @@ export default function HazardCard({ rfq, docs, userEmail, onDone }: { rfq: Rfq;
       ) : (
         <p className="dim">
           Φόρτωσε τη λίστα με τα επικίνδυνα του φορτίου (Excel με στήλες π.χ. Κωδικός, Περιγραφή, CAS, UN, Κλάση, PG, Ποσότητα, Βάρος — ή επικόλληση). Τα MSDS βρίσκονται
-          αυτόματα στο fagron.com (ελληνική έκδοση όπου υπάρχει) και μπαίνουν στα έγγραφα, ορατά στις μεταφορικές.
+          αυτόματα στο fagron.com (αγγλική έκδοση, αλλιώς ελληνική) και μπαίνουν στα έγγραφα, ορατά στις μεταφορικές.
         </p>
       )}
       {items.length > 0 && <p className="dim lg-small">Οι αλλαγές αποθηκεύονται αυτόματα. Με λίστα που έχει UN, το αίτημα σημειώνεται ADR = Ναι με τα UN / κλάσεις.</p>}

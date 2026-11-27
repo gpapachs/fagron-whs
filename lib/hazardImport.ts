@@ -103,9 +103,9 @@ export function englishUrl(links: Record<string, string> | undefined) {
   return "";
 }
 
-/** Προτίμηση γλώσσας MSDS: ελληνικά, μετά αγγλικά */
-export const LANG_PREF = ["GR", "GB", "UL", "USA", "AUS"];
-export function pickLang(links: Record<string, string>, want = "GR") {
+/** Προτίμηση γλώσσας MSDS: αγγλικά (GB, μετά UL / USA / AUS), μετά ελληνικά */
+export const LANG_PREF = ["GB", "UL", "USA", "AUS", "GR"];
+export function pickLang(links: Record<string, string>, want = "GB") {
   for (const l of [want, ...LANG_PREF]) if (links[l]) return l;
   return Object.keys(links)[0] ?? "";
 }
