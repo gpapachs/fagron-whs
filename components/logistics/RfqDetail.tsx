@@ -30,6 +30,7 @@ export default function RfqDetail({ rfq, data, userEmail, onBack, reload }: { rf
   const [mq, setMq] = useState({ carrier: "", price: "", currency: "EUR", days: "", valid: "", notes: "" });
   const [notifyWin, setNotifyWin] = useState(true);
   const [notifyLose, setNotifyLose] = useState(true);
+  const [attachDocs, setAttachDocs] = useState(true);
   const sb = createClient();
   const sender = displayUser(userEmail ?? "") || userEmail || "Fagron Hellas";
 
@@ -40,6 +41,9 @@ export default function RfqDetail({ rfq, data, userEmail, onBack, reload }: { rf
   const events = data.events.filter((e) => e.rfq_id === rfq.id).slice().reverse();
   const mails = data.mails.filter((m) => m.rfq_id === rfq.id);
   const docs = data.docs.filter((d) => d.rfq_id === rfq.id);
+  // έγγραφα που βλέπουν όλες οι μεταφορικές (π.χ. MSDS): συνημμένα στο αίτημα προσφοράς
+  const shared = docs.filter((d) => d.visible === "all");
+  const sharedAtts = shared.map((d) => ({ path: d.path, name: d.name }));
   const done = (msg: string | null, err?: string) => {
     setError(err ?? null);
     setNotice(msg);
@@ -77,8 +81,8 @@ export default function RfqDetail({ rfq, data, userEmail, onBack, reload }: { rf
         for (const c of list) {
           const { data: inv, error } = await sb.from("rfq_invites").upsert({ rfq_id: rfq.id, carrier_id: c.id, emails: c.emails }, { onConflict: "rfq_id,carrier_id" }).select("token").single();
           if (error) throw new Error(error.message);
-          const m = rfqEmail(rfq, c, (inv as { token: string }).token, sender);
-          await queueMail({ to_addrs: c.emails, subject: m.subject, html: m.html, rfq_id: rfq.id, created_by: userEmail });
+          const m = rfqEmail(rfq, c, (inv as { token: string }).token, sender, attachDocs ? shared : []);
+          await queueMail({ to_addrs: c.emails, subject: m.subject, html: m.html, rfq_id: rfq.id, created_by: userEmail, attachments: attachDocs ? sharedAtts : [] });
         }
         if (rfq.status === "draft") await sb.from("rfqs").update({ status: "sent" }).eq("id", rfq.id);
         await logEvent(rfq.id, `Αίτημα προς ${list.map((c) => c.name).join(", ")} (σε αναμονή αποστολής από Outlook)`, userEmail);
@@ -93,8 +97,8 @@ export default function RfqDetail({ rfq, data, userEmail, onBack, reload }: { rf
       async () => {
         const c = cById.get(carrierId)!;
         const inv = invites.find((i) => i.carrier_id === carrierId)!;
-        const m = rfqEmail(rfq, c, inv.token, sender);
-        await queueMail({ to_addrs: c.emails.length ? c.emails : inv.emails, subject: m.subject, html: m.html, rfq_id: rfq.id, created_by: userEmail });
+        const m = rfqEmail(rfq, c, inv.token, sender, attachDocs ? shared : []);
+        await queueMail({ to_addrs: c.emails.length ? c.emails : inv.emails, subject: m.subject, html: m.html, rfq_id: rfq.id, created_by: userEmail, attachments: attachDocs ? sharedAtts : [] });
         await logEvent(rfq.id, `Υπενθύμιση προς ${c.name}`, userEmail);
       },
       "Η υπενθύμιση μπήκε στην ουρά."
@@ -129,7 +133,7 @@ export default function RfqDetail({ rfq, data, userEmail, onBack, reload }: { rf
   const inviteMail = (carrierId: string) => {
     const c = cById.get(carrierId)!;
     const inv = invites.find((i) => i.carrier_id === carrierId)!;
-    return { to: c.emails.length ? c.emails : inv.emails, ...rfqEmail(rfq, c, inv.token, sender) };
+    return { to: c.emails.length ? c.emails : inv.emails, ...rfqEmail(rfq, c, inv.token, sender, shared) };
   };
 
   const copy = async (t: string, msg: string) => {
@@ -430,6 +434,12 @@ export default function RfqDetail({ rfq, data, userEmail, onBack, reload }: { rf
                 </div>
               ) : (
                 <p className="dim">Όλες οι ενεργές μεταφορικές έχουν ήδη λάβει το αίτημα — πρόσθεσε νέες στο Μητρώο.</p>
+              )}
+              {shared.length > 0 && (
+                <label className="st-check">
+                  <input type="checkbox" checked={attachDocs} onChange={(e) => setAttachDocs(e.target.checked)} />
+                  Συνημμένα τα έγγραφα για τις μεταφορικές ({shared.map((d) => d.name).join(", ")})
+                </label>
               )}
               <button type="button" className="btn primary sm" onClick={sendInvites} disabled={busy === "send" || !pick.size}>
                 {busy === "send" ? "Αποστολή…" : `Αποστολή αιτήματος (${pick.size})`}

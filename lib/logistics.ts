@@ -208,7 +208,7 @@ const table = (rows: [string, string][]) =>
     .join("")}</table>`;
 
 /** Αίτημα προσφοράς προς μία μεταφορική (με το προσωπικό της link) */
-export function rfqEmail(r: Rfq, carrier: Carrier, token: string, sender: string) {
+export function rfqEmail(r: Rfq, carrier: Carrier, token: string, sender: string, docs: { id: string; name: string }[] = []) {
   const link = quoteLink(token);
   const deadline = r.quote_deadline ? new Date(r.quote_deadline).toLocaleString("el-GR", { timeZone: "Europe/Athens", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }) : "";
   const subject = `Αίτημα προσφοράς / Quote request ${r.ref} — ${route(r)}${r.pickup_date ? ` — ${dmy(r.pickup_date)}` : ""}`;
@@ -216,6 +216,11 @@ export function rfqEmail(r: Rfq, carrier: Carrier, token: string, sender: string
 <p>Παρακαλούμε για την προσφορά σας για την παρακάτω μεταφορά${deadline ? ` έως <b>${esc(deadline)}</b>` : ""}.</p>
 <p><i>Dear partner, please send us your best offer for the transport below${deadline ? ` by <b>${esc(deadline)}</b>` : ""}.</i></p>
 ${table(loadRows(r))}
+${
+    docs.length
+      ? `<p>Συνημμένα έγγραφα / Attached documents (MSDS κ.λπ.):</p><ul>${docs.map((d) => `<li><a href="${esc(docLink(token, d.id))}">${esc(d.name)}</a></li>`).join("")}</ul>`
+      : ""
+  }
 <p><b><a href="${esc(link)}">Συμπλήρωση προσφοράς / Submit your quote</a></b><br>${esc(link)}</p>
 <p>Μπορείτε επίσης να απαντήσετε σε αυτό το email. / You may also reply to this email.</p>
 <p>Ευχαριστούμε / Thank you,<br>${esc(sender)}<br>Fagron Hellas — Logistics</p>`;
