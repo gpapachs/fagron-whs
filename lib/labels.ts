@@ -215,7 +215,12 @@ export function layoutCustomer(c: CustomerLabel, opts: LabelOptions, measure: Me
     // φορέας / νοσοκομείο / εταιρεία κάτω από το όνομα
     if (c.org) line(c.org, fit(measure, c.org, maxW, bodySize, bodySize * 0.8, true), true, 1.3);
     y += 0.9 * k * scale;
-    const body = [...(c.address ? wrap(measure, c.address, maxW, bodySize, false).slice(0, 2) : []), place, phone, c.note ?? ""].filter(Boolean);
+    const body = [
+      ...(c.address ? wrap(measure, c.address, maxW, bodySize, false).slice(0, 2) : []),
+      place,
+      phone,
+      ...(c.note ? wrap(measure, c.note, maxW, bodySize * 0.92, false).slice(0, 2) : []),
+    ].filter(Boolean);
     body.forEach((l) => line(l, fit(measure, l, maxW, bodySize, bodySize * 0.8, false), false, 1.28));
     if (y <= bottom || scale <= 0.6) return ops;
   }

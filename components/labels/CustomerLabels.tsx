@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CUSTOMER_TEMPLATE, readCustomers, type CustomerRow } from "@/lib/customerLabels";
+import { CUSTOMER_TEMPLATE, fillFromWms, readCustomers, type CustomerRow } from "@/lib/customerLabels";
 import { loadPartners, searchPartners } from "@/components/logistics/partnerData";
 import type { Partner } from "@/components/logistics/PartnersTab";
 import type { AnyLabel, CustomerLabel } from "@/lib/labels";
@@ -69,12 +69,31 @@ export default function CustomerLabels({
     try {
       const XLSX = await import("xlsx");
       const wb = XLSX.read(await f.arrayBuffer(), { type: "array" });
-      const list = readCustomers(XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "", raw: false }));
-      if (!list.length) throw new Error("Δεν βρέθηκαν πελάτες κάτω από τις επικεφαλίδες.");
+      // όλα τα φύλλα με στήλη πελάτη (π.χ. «ΦΑΡΜΑΚΕΙΑ» + «ΦΑΡΜΑΚΑΠΟΘΗΚΕΣ»)
+      const list: CustomerRow[] = [];
+      let firstErr: unknown = null;
+      for (const sn of wb.SheetNames) {
+        try {
+          list.push(...readCustomers(XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sn], { header: 1, defval: "", raw: false })));
+        } catch (e) {
+          firstErr ??= e;
+        }
+      }
+      if (!list.length) throw firstErr ?? new Error("Δεν βρέθηκαν πελάτες κάτω από τις επικεφαλίδες.");
       const stamp = Date.now();
-      setRows(list.map((r, i) => ({ ...r, key: `f${stamp}-${i}` })));
+      let next = list.map((r, i) => ({ ...r, key: `f${stamp}-${i}` }));
+      let extra = "";
+      // μόνο ονόματα; στοιχεία από τους πελάτες του WMS
+      if (next.some((r) => !r.address)) {
+        const all = partners ?? (await loadPartners());
+        setPartners(all);
+        const res = fillFromWms(next, all);
+        next = res.rows;
+        extra = ` · από το WMS: ${res.found}${res.missing ? ` · δεν βρέθηκαν: ${res.missing} (σημειωμένοι με κόκκινο)` : ""}`;
+      }
+      setRows(next);
       setSel(null);
-      setMsg(`Από το ${f.name}: ${list.length} πελάτες.`);
+      setMsg(`Από το ${f.name}: ${list.length} πελάτες${extra}.`);
     } catch (e) {
       setErr(`Το Excel δεν διαβάστηκε: ${(e as Error).message}`);
     } finally {
@@ -176,6 +195,8 @@ export default function CustomerLabels({
                   {(["name", "org", "address", "zip", "city", "country", "phone", "note"] as const).map((k) => (
                     <td key={k}>
                       <input className={`c-${k}`} value={r[k] ?? ""} onChange={(e) => upd(r.key, { [k]: e.target.value })} onFocus={() => setSel(r.key)} />
+                      {k === "name" && r.match === "wms" && <div className="lb-src">WMS {r.code}</div>}
+                      {k === "name" && r.match === "none" && !r.address && <div className="lb-src bad">δεν βρέθηκε στο WMS</div>}
                     </td>
                   ))}
                   <td>

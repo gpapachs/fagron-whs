@@ -1,7 +1,7 @@
 // Λίστα πελατών για ετικέτες διεύθυνσης: ανάγνωση Excel (ελληνικές / αγγλικές επικεφαλίδες).
 import type { CustomerLabel } from "@/lib/labels";
 
-export type CustomerRow = CustomerLabel & { key: string; copies: number; on: boolean };
+export type CustomerRow = CustomerLabel & { key: string; copies: number; on: boolean; code?: string; match?: "wms" | "none" };
 type Field = "name" | "org" | "address" | "city" | "zip" | "phone" | "country" | "copies" | "note" | "code" | "skip";
 
 const norm = (s: unknown) =>
@@ -21,7 +21,7 @@ const RULES: [Field, RegExp][] = [
   ["city", /πολη|περιοχη|δημος|city|town/],
   ["country", /χωρα|country/],
   ["copies", /αντιτυπ|ετικετες|copies|labels|τεμ/],
-  ["note", /σημειωσ|υποψη|attn|note|σχολ/],
+  ["note", /σημειωσ|υποψη|attn|note|σχολ|προσωπ|persons|contact person|παραληπτ/],
   ["code", /κωδικ|code|^id$/],
   ["address", /διευθυνσ|οδος|address|street|addr/],
   ["name", /επωνυμ|ονομα|πελατ|name|customer|φαρμακειο|company|εταιρ/],
@@ -93,3 +93,48 @@ export const CUSTOMER_TEMPLATE = [
   ["Επωνυμία", "Φορέας / Νοσοκομείο", "Διεύθυνση", "ΤΚ", "Πόλη", "Χώρα", "Τηλέφωνο", "Σημείωση", "Ετικέτες"],
   ["ΦΑΡΜΑΚΕΙΟ ΠΑΡΑΔΕΙΓΜΑ", "", "Ασκληπιού 10", "42100", "Τρίκαλα", "GR", "24310 12345", "", 1],
 ];
+
+/** κανονικοποίηση ονόματος για σύγκριση με το WMS (κεφαλαία, χωρίς τόνους / σημεία στίξης) */
+export const normName = (s: string | null | undefined) =>
+  String(s ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9Α-Ω]+/g, " ")
+    .trim();
+
+type WmsCustomer = { code: string | null; name: string | null; address: string | null; zip: string | null; city: string | null; country: string | null; phone: string | null; phone2: string | null; is_customer: boolean; active: boolean };
+
+/** Γραμμές χωρίς διεύθυνση: στοιχεία από τον πελάτη του WMS με ΙΔΙΟ όνομα (ακριβές ταίριασμα). */
+export function fillFromWms(rows: CustomerRow[], partners: WmsCustomer[]) {
+  const by = new Map<string, WmsCustomer>();
+  for (const p of partners) {
+    if (!p.is_customer || !p.name) continue;
+    const k = normName(p.name);
+    const cur = by.get(k);
+    // προτίμηση σε ενεργό και με διεύθυνση
+    if (!cur || (!cur.active && p.active) || (!cur.address && p.address)) by.set(k, p);
+  }
+  let found = 0;
+  let missing = 0;
+  const out = rows.map((r) => {
+    if (r.address) return r;
+    const p = by.get(normName(r.name));
+    if (!p) {
+      missing++;
+      return { ...r, match: "none" as const };
+    }
+    found++;
+    return {
+      ...r,
+      code: p.code ?? "",
+      address: p.address ?? "",
+      zip: p.zip ?? "",
+      city: (p.city ?? "").replace(/\s*-\s*ΠΡΟΑΣΤΙΑ\s*$/i, ""),
+      country: p.country && p.country !== "GR" ? p.country : "",
+      phone: r.phone || [p.phone, p.phone2].find((x) => x && x.trim()) || "",
+      match: "wms" as const,
+    };
+  });
+  return { rows: out, found, missing };
+}
