@@ -195,8 +195,9 @@ export function layoutCustomer(c: CustomerLabel, opts: LabelOptions, measure: Me
   const maxW = W - 2 * m;
   const bottom = (opts.preprinted ? 24.6 : 31) * k; // κάτω όριο κειμένου (baseline)
   const top = m + 0.4 * k;
-  const place = [[c.zip, c.city].filter(Boolean).join(" "), c.country && !/^(GR|EL|ΕΛΛΑΔΑ|GREECE)$/i.test(c.country.trim()) ? c.country : ""].filter(Boolean).join(", ");
-  const phone = c.phone ? `Τηλ.: ${c.phone}` : "";
+  const abroad = !!c.country && !/^(GR|EL|ΕΛΛΑΔΑ|GREECE)$/i.test(c.country.trim());
+  const place = [[c.zip, c.city].filter(Boolean).join(" "), abroad ? c.country : ""].filter(Boolean).join(", ");
+  const phone = c.phone ? `${abroad ? "Tel." : "Τηλ."}: ${c.phone}` : "";
 
   for (let scale = 1; scale >= 0.6; scale -= 0.05) {
     const nameSize = 9.6 * k * scale;
