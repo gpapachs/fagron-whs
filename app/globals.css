@@ -1759,3 +1759,4 @@ input:disabled { opacity: .75; }
 .login-card { border-top: 4px solid var(--accent); }
 .login-card h1 { color: var(--accent); }
 :root[data-theme="dark"] .brand-logo, :root[data-theme="midnight"] .brand-logo, :root[data-theme="graphite"] .brand-logo { filter: brightness(1.15); }
+.lg-kv td { white-space: pre-line; }

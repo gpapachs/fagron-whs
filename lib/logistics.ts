@@ -193,7 +193,8 @@ export function loadRows(r: Rfq): [string, string][] {
     ["Βάρος / Weight (kg)", num(r.weight_kg)],
     ["Όγκος / Volume (m³)", num(r.volume_m3, 3)],
     ["LDM", num(r.ldm)],
-    [r.cargo?.length ? "Ανάλυση / Breakdown" : "Διαστάσεις / Dimensions", r.dims ?? ""],
+    // ανάλυση φορτίου: μία γραμμή ανά τύπο παλέτας / δέμα
+    [r.cargo?.length ? "Ανάλυση / Breakdown" : "Διαστάσεις / Dimensions", r.cargo?.length ? (r.dims ?? "").split(" · ").join("\n") : r.dims ?? ""],
     ["Στοιβαζόμενο / Stackable", r.stackable == null ? "" : r.stackable ? "Ναι / Yes" : "Όχι / No"],
     ["ADR", r.adr ? `Ναι / Yes${r.adr_info ? ` — ${r.adr_info}` : ""}` : "Όχι / No"],
     ["Θερμοκρασία / Temperature", r.temp ?? ""],
@@ -211,7 +212,7 @@ const table = (rows: [string, string][]) =>
   `<table role="presentation" cellpadding="7" cellspacing="0" style="border-collapse:collapse;font-family:${FONT};font-size:13px;width:100%;border:1px solid #E5E7EB">${rows
     .map(
       ([k, v], i) =>
-        `<tr><td style="background:${BRAND.redBg};color:#7A1D1A;white-space:nowrap;border-bottom:1px solid #F3D4D2;vertical-align:top;width:34%"><b>${esc(k)}</b></td><td style="color:${BRAND.ink};border-bottom:1px solid #EEF0F3;vertical-align:top;background:${i % 2 ? "#FAFAFA" : "#FFFFFF"}">${esc(v)}</td></tr>`
+        `<tr><td style="background:${BRAND.redBg};color:#7A1D1A;white-space:nowrap;border-bottom:1px solid #F3D4D2;vertical-align:top;width:34%"><b>${esc(k)}</b></td><td style="color:${BRAND.ink};border-bottom:1px solid #EEF0F3;vertical-align:top;background:${i % 2 ? "#FAFAFA" : "#FFFFFF"}">${esc(v).replace(/\n/g, "<br>")}</td></tr>`
     )
     .join("")}</table>`;
 
