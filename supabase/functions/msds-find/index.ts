@@ -55,10 +55,11 @@ const toks = (s: string) =>
 function rank(hits: Hit[], cas: string, name: string) {
   const q = toks(name);
   const score = (h: Hit) => {
-    if (cas && h.number.replace(/\s/g, "") === cas) return 100;
+    // ίδιος CAS: προτίμηση στην εγγραφή με αγγλική (GB) έκδοση
+    if (cas && h.number.replace(/\s/g, "") === cas) return 100 + (h.links.GB ? 5 : 0) + Object.keys(h.links).length / 100;
     const t = new Set(toks(h.name));
     const common = q.filter((x) => t.has(x)).length;
-    return q.length ? (common / q.length) * 50 - t.size * 0.5 : 0;
+    return (q.length ? (common / q.length) * 50 - t.size * 0.5 : 0) + (h.links.GB ? 1 : 0);
   };
   return hits.map((h) => ({ h, s: score(h) })).sort((a, b) => b.s - a.s).map((x) => x.h);
 }
@@ -68,7 +69,8 @@ type Transport = { regulated: boolean; un: string; cls: string; pg: string; psn:
 
 /** Ενότητα 14 (Transport information) από το κείμενο του MSDS */
 export function parse14(text: string): Transport {
-  const t = text.replace(/\s+/g, " ");
+  // (τα US SDS έχουν σπασμένες λέξεις: «T ransport», «Packaging Group»)
+  const t = text.replace(/\s+/g, " ").replace(/\bT ransport/g, "Transport").replace(/\bT OXIC/g, "TOXIC");
   const i = t.search(/SECTION 14|14\.1 UN number/i);
   if (i < 0) return null;
   const s14 = t.slice(i, i + 4000);
@@ -77,10 +79,19 @@ export function parse14(text: string): Transport {
   // «UN 1170 ETHANOL (ETHYL ALCOHOL), 3, II»
   const m = model.match(/UN\s?(\d{4})\s+(.+?),\s*(\d(?:\.\d)?[A-Z]?(?:\s*\([^)]*\))?)(?:,\s*(I{1,3})\b)?/);
   if (m) return { regulated: true, un: m[1], psn: m[2].trim(), cls: m[3].trim(), pg: m[4] ?? "" };
-  const un = s14.match(/14\.1[^·]*·[^·]*?UN\s?(\d{4})/)?.[1] ?? s14.match(/\bUN\s?(\d{4})\b/)?.[1] ?? "";
-  const cls = s14.match(/·\s*Class\s+(\d(?:\.\d)?[A-Z]?)/)?.[1] ?? "";
-  const pg = s14.match(/14\.4 Packing group[^·]*·[^·]*?\b(I{1,3})\b/)?.[1] ?? "";
-  const psn = s14.match(/14\.2 UN proper shipping name\s*·\s*[A-Z, ]*?(?:ADR|IMDG|IATA)[A-Z, ]*\s+([^·(]+)/)?.[1]?.trim().replace(/^\d{4}\s+/, "") ?? "";
+  // μορφή US: «UN Number 2811 UN Proper Shipping Name … Transport Hazard Class(es) 6.1 Packaging Group III»
+  if (/UN\s*Number\s*:?\s*(Not regulated|Not applicable|N\/A)/i.test(s14) && !/UN\s?\d{4}/.test(s14)) return { regulated: false, un: "", cls: "", pg: "", psn: "" };
+  const un =
+    s14.match(/14\.1[^·]*·[^·]*?UN\s?(\d{4})/)?.[1] ?? s14.match(/UN\s*Number\s*:?\s*(?:UN\s?)?(\d{4})/i)?.[1] ?? s14.match(/\bUN\s?(\d{4})\b/)?.[1] ?? "";
+  const cls = s14.match(/·\s*Class\s+(\d(?:\.\d)?[A-Z]?)/)?.[1] ?? s14.match(/Hazard\s*Class(?:\(es\))?\s*:?\s*(\d(?:\.\d)?)/i)?.[1] ?? "";
+  const pg = s14.match(/14\.4 Packing group[^·]*·[^·]*?\b(I{1,3})\b/)?.[1] ?? s14.match(/Pack(?:ag)?ing\s*Group\s*:?\s*(I{1,3})\b/i)?.[1] ?? "";
+  const psn = (
+    s14.match(/14\.2 UN proper shipping name\s*·\s*[A-Z, ]*?(?:ADR|IMDG|IATA)[A-Z, ]*\s+([^·(]+)/)?.[1] ??
+    s14.match(/UN\s*Proper\s*Shipping\s*Name\s*:?\s*(.+?)\s*Transport\s*Hazard/i)?.[1] ??
+    ""
+  )
+    .trim()
+    .replace(/^\d{4}\s+/, "");
   if (!un && !cls) return null;
   return { regulated: true, un, cls, pg, psn };
 }

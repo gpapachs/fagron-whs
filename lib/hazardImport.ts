@@ -99,12 +99,12 @@ export function parseHazardText(t: string): Hazard[] {
 /** αγγλικό MSDS για ανάγνωση της ενότητας 14 */
 export function englishUrl(links: Record<string, string> | undefined) {
   if (!links) return "";
-  for (const l of ["GB", "UL", "USA", "AUS"]) if (links[l]) return links[l];
+  for (const l of ["GB", "UL", "USA", "US", "AUS"]) if (links[l]) return links[l];
   return "";
 }
 
 /** Προτίμηση γλώσσας MSDS: αγγλικά (GB, μετά UL / USA / AUS), μετά ελληνικά */
-export const LANG_PREF = ["GB", "UL", "USA", "AUS", "GR"];
+export const LANG_PREF = ["GB", "UL", "USA", "US", "AUS", "GR"];
 export function pickLang(links: Record<string, string>, want = "GB") {
   for (const l of [want, ...LANG_PREF]) if (links[l]) return l;
   return Object.keys(links)[0] ?? "";
