@@ -1769,3 +1769,4 @@ input:disabled { opacity: .75; }
 .lb-layout.lb-layout-cust { grid-template-columns: minmax(0, 1fr) 330px; }
 .lb-ctable .c-city { min-width: 90px; } .lb-ctable .c-phone { min-width: 105px; } .lb-ctable .c-note { min-width: 80px; }
 @media (max-width: 980px) { .lb-layout.lb-layout-cust { grid-template-columns: 1fr; } }
+.lb-ctable .c-org { min-width: 110px; }

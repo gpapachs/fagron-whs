@@ -177,7 +177,7 @@ export function layoutLabel(data: LabelData, mat: Raw, opts: LabelOptions, measu
 
 // ------------------------------------------------------------------ ετικέτα πελάτη
 /** Ετικέτα διεύθυνσης πελάτη στο ίδιο προεκτυπωμένο χαρτί 70×35 */
-export type CustomerLabel = { kind: "customer"; name: string; address: string; city: string; zip: string; country: string; phone: string; note?: string };
+export type CustomerLabel = { kind: "customer"; name: string; org?: string; address: string; city: string; zip: string; country: string; phone: string; note?: string };
 export type AnyLabel = LabelData | CustomerLabel;
 export const isCustomer = (d: AnyLabel): d is CustomerLabel => (d as CustomerLabel).kind === "customer";
 
@@ -212,6 +212,8 @@ export function layoutCustomer(c: CustomerLabel, opts: LabelOptions, measure: Me
     const nameLines = measure(c.name, ns, true) > maxW ? wrap(measure, c.name, maxW, nameSize * 0.85, true).slice(0, 2) : [c.name];
     const nSize = nameLines.length > 1 ? nameSize * 0.85 : ns;
     nameLines.forEach((l, i) => line(l, nSize, true, i ? 1.12 : 1.05));
+    // φορέας / νοσοκομείο / εταιρεία κάτω από το όνομα
+    if (c.org) line(c.org, fit(measure, c.org, maxW, bodySize, bodySize * 0.8, true), true, 1.3);
     y += 0.9 * k * scale;
     const body = [...(c.address ? wrap(measure, c.address, maxW, bodySize, false).slice(0, 2) : []), place, phone, c.note ?? ""].filter(Boolean);
     body.forEach((l) => line(l, fit(measure, l, maxW, bodySize, bodySize * 0.8, false), false, 1.28));

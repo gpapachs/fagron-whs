@@ -54,7 +54,7 @@ export default function CustomerLabels({
   useEffect(() => {
     onPreview(current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current?.key, current?.name, current?.address, current?.zip, current?.city, current?.country, current?.phone, current?.note]);
+  }, [current?.key, current?.name, current?.org, current?.address, current?.zip, current?.city, current?.country, current?.phone, current?.note]);
 
   const upd = (key: string, p: Partial<CustomerRow>) => setRows((xs) => xs.map((x) => (x.key === key ? { ...x, ...p } : x)));
   const add = (r: Omit<CustomerRow, "key" | "kind" | "on" | "copies"> & { copies?: number }) => {
@@ -105,7 +105,7 @@ export default function CustomerLabels({
         <button type="button" className="btn ghost sm" onClick={template} title="Excel με τις στήλες που αναγνωρίζονται">
           Πρότυπο
         </button>
-        <button type="button" className="btn ghost sm" onClick={() => add({ name: "", address: "", zip: "", city: "", country: "", phone: "", note: "" })}>
+        <button type="button" className="btn ghost sm" onClick={() => add({ name: "", org: "", address: "", zip: "", city: "", country: "", phone: "", note: "" })}>
           + Χειροκίνητα
         </button>
         {rows.length > 0 && (
@@ -140,7 +140,7 @@ export default function CustomerLabels({
                 <button
                   type="button"
                   onClick={() => {
-                    add({ name: p.name ?? "", address: p.address ?? "", zip: p.zip ?? "", city: p.city ?? "", country: p.country ?? "", phone: [p.phone, p.phone2].filter(Boolean)[0] ?? "", note: "" });
+                    add({ name: p.name ?? "", org: "", address: p.address ?? "", zip: p.zip ?? "", city: p.city ?? "", country: p.country ?? "", phone: [p.phone, p.phone2].filter(Boolean)[0] ?? "", note: "" });
                     setQ("");
                   }}
                 >
@@ -162,7 +162,7 @@ export default function CustomerLabels({
                 <th>
                   <input type="checkbox" checked={chosen.length === rows.length} onChange={(e) => setRows((xs) => xs.map((x) => ({ ...x, on: e.target.checked })))} title="Όλοι" />
                 </th>
-                {["Επωνυμία", "Διεύθυνση", "ΤΚ", "Πόλη", "Χώρα", "Τηλέφωνο", "Σημείωση", "Ετικ.", ""].map((h) => (
+                {["Επωνυμία", "Φορέας", "Διεύθυνση", "ΤΚ", "Πόλη", "Χώρα", "Τηλέφωνο", "Σημείωση", "Ετικ.", ""].map((h) => (
                   <th key={h}>{h}</th>
                 ))}
               </tr>
@@ -173,7 +173,7 @@ export default function CustomerLabels({
                   <td>
                     <input type="checkbox" checked={r.on} onChange={(e) => upd(r.key, { on: e.target.checked })} />
                   </td>
-                  {(["name", "address", "zip", "city", "country", "phone", "note"] as const).map((k) => (
+                  {(["name", "org", "address", "zip", "city", "country", "phone", "note"] as const).map((k) => (
                     <td key={k}>
                       <input className={`c-${k}`} value={r[k] ?? ""} onChange={(e) => upd(r.key, { [k]: e.target.value })} onFocus={() => setSel(r.key)} />
                     </td>

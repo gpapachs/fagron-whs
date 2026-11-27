@@ -2,7 +2,7 @@
 import type { CustomerLabel } from "@/lib/labels";
 
 export type CustomerRow = CustomerLabel & { key: string; copies: number; on: boolean };
-type Field = "name" | "address" | "city" | "zip" | "phone" | "country" | "copies" | "note" | "code";
+type Field = "name" | "org" | "address" | "city" | "zip" | "phone" | "country" | "copies" | "note" | "code" | "skip";
 
 const norm = (s: unknown) =>
   String(s ?? "")
@@ -14,6 +14,8 @@ const norm = (s: unknown) =>
 
 // σειρά = προτεραιότητα· η πρώτη στήλη που ταιριάζει κερδίζει
 const RULES: [Field, RegExp][] = [
+  ["skip", /ειδικοτ|specialt|ιδιοτητ/],
+  ["org", /institution|ιδρυμα|νοσοκομ|φορεας|hospital|clinic|κλινικ|οργανισμ/],
   ["phone", /τηλ|κινητ|phone|tel|mobile/],
   ["zip", /^τκ$|ταχ\w* κωδ|^tk$|zip|postal|postcode|^plz$/],
   ["city", /πολη|περιοχη|δημος|city|town/],
@@ -56,13 +58,27 @@ export function readCustomers(rows: unknown[][]): CustomerRow[] {
     const name = get(r, "name");
     if (!name) continue;
     const n = Number(get(r, "copies").replace(",", "."));
+    let address = get(r, "address");
+    let zip = get(r, "zip").replace(/\.0$/, "");
+    // ΤΚ μέσα στη διεύθυνση (π.χ. «ΧΡΥΣΟΧΟΟΥ 1, 41221», «… 185,35», «… 2,55133,ΚΑΛΑΜΑΡΙΑ»)
+    if (!zip) {
+      const ms = [...address.matchAll(/(^|[\s,])(?:(?:Τ\.?\s?Κ|T\.?\s?K)\.?\s*:?\s*)?(\d{3})[\s,]?(\d{2})(?=\s*(?:,|$))/gi)];
+      const m = ms[ms.length - 1];
+      if (m) {
+        zip = m[2] + m[3];
+        address = (address.slice(0, m.index! + m[1].length) + address.slice(m.index! + m[0].length)).replace(/\s*,\s*,\s*/g, ", ").replace(/[\s,]+$/, "").replace(/^[\s,]+/, "").replace(/\s*,\s*/g, ", ").replace(/\s{2,}/g, " ");
+      }
+    }
+    const org = get(r, "org");
     out.push({
       kind: "customer",
       key: `x${i}`,
       name,
-      address: get(r, "address"),
-      city: get(r, "city"),
-      zip: get(r, "zip").replace(/\.0$/, ""),
+      org: /^(ιδιωτης|ιδιώτης|-|—)$/i.test(org) ? "" : org,
+      address,
+      // ομαδοποιήσεις τύπου «ΑΘΗΝΑ - ΠΡΟΑΣΤΙΑ» -> «ΑΘΗΝΑ»
+      city: get(r, "city").replace(/\s*-\s*(ΠΡΟΑΣΤΙΑ|προάστια|προαστια)\s*$/i, ""),
+      zip,
       country: get(r, "country"),
       phone: get(r, "phone").replace(/\.0$/, ""),
       note: get(r, "note"),
@@ -74,6 +90,6 @@ export function readCustomers(rows: unknown[][]): CustomerRow[] {
 }
 
 export const CUSTOMER_TEMPLATE = [
-  ["Επωνυμία", "Διεύθυνση", "ΤΚ", "Πόλη", "Χώρα", "Τηλέφωνο", "Σημείωση", "Ετικέτες"],
-  ["ΦΑΡΜΑΚΕΙΟ ΠΑΡΑΔΕΙΓΜΑ", "Ασκληπιού 10", "42100", "Τρίκαλα", "GR", "24310 12345", "", 1],
+  ["Επωνυμία", "Φορέας / Νοσοκομείο", "Διεύθυνση", "ΤΚ", "Πόλη", "Χώρα", "Τηλέφωνο", "Σημείωση", "Ετικέτες"],
+  ["ΦΑΡΜΑΚΕΙΟ ΠΑΡΑΔΕΙΓΜΑ", "", "Ασκληπιού 10", "42100", "Τρίκαλα", "GR", "24310 12345", "", 1],
 ];
