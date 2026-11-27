@@ -1,8 +1,10 @@
 // MSDS από το fagron.com/documents?type=msds (δημόσια σελίδα, αναζήτηση με ?s=).
 //   POST { action: "search", items: [{ key, cas?, name? }] }  -> { results: [{ key, query, hits: [{ name, number, links: {GR: url,…} }] }] }
+//   POST { action: "transport", items: [{ key, url }] }        -> UN / κλάση / PG από την ενότητα 14 του MSDS (αγγλική έκδοση)
 //   POST { action: "attach", rfq_id, url, name }               -> κατεβάζει το PDF στο Storage και το καταχωρεί στα έγγραφα (MSDS, ορατό σε όλους)
 // Μόνο για συνδεδεμένους χρήστες της εφαρμογής (verify_jwt).
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { extractText, getDocumentProxy } from "npm:unpdf@0.12.1";
 
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { ...CORS, "content-type": "application/json" } });
@@ -44,7 +46,7 @@ const toks = (s: string) =>
   s
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/,/g, ".")
     .split(/[^a-z0-9.%]+/)
     .filter((t) => t.length > 1 || /\d/.test(t));
@@ -59,6 +61,36 @@ function rank(hits: Hit[], cas: string, name: string) {
     return q.length ? (common / q.length) * 50 - t.size * 0.5 : 0;
   };
   return hits.map((h) => ({ h, s: score(h) })).sort((a, b) => b.s - a.s).map((x) => x.h);
+}
+
+const MSDS_URL = /^https:\/\/d84823jj91l2\.cloudfront\.net\/documents\/MSDS\/[^?#]+\.pdf$/;
+type Transport = { regulated: boolean; un: string; cls: string; pg: string; psn: string } | null;
+
+/** Ενότητα 14 (Transport information) από το κείμενο του MSDS */
+export function parse14(text: string): Transport {
+  const t = text.replace(/\s+/g, " ");
+  const i = t.search(/SECTION 14|14\.1 UN number/i);
+  if (i < 0) return null;
+  const s14 = t.slice(i, i + 4000);
+  const model = s14.match(/UN "Model Regulation":\s*([^·*]+)/i)?.[1]?.trim() ?? "";
+  if (/^not regulated/i.test(model) || (/14\.1[^·]*·[^·]*not regulated/i.test(s14) && !/UN\s?\d{4}/.test(s14))) return { regulated: false, un: "", cls: "", pg: "", psn: "" };
+  // «UN 1170 ETHANOL (ETHYL ALCOHOL), 3, II»
+  const m = model.match(/UN\s?(\d{4})\s+(.+?),\s*(\d(?:\.\d)?[A-Z]?(?:\s*\([^)]*\))?)(?:,\s*(I{1,3})\b)?/);
+  if (m) return { regulated: true, un: m[1], psn: m[2].trim(), cls: m[3].trim(), pg: m[4] ?? "" };
+  const un = s14.match(/14\.1[^·]*·[^·]*?UN\s?(\d{4})/)?.[1] ?? s14.match(/\bUN\s?(\d{4})\b/)?.[1] ?? "";
+  const cls = s14.match(/·\s*Class\s+(\d(?:\.\d)?[A-Z]?)/)?.[1] ?? "";
+  const pg = s14.match(/14\.4 Packing group[^·]*·[^·]*?\b(I{1,3})\b/)?.[1] ?? "";
+  const psn = s14.match(/14\.2 UN proper shipping name\s*·\s*[A-Z, ]*?(?:ADR|IMDG|IATA)[A-Z, ]*\s+([^·(]+)/)?.[1]?.trim().replace(/^\d{4}\s+/, "") ?? "";
+  if (!un && !cls) return null;
+  return { regulated: true, un, cls, pg, psn };
+}
+
+async function transport(url: string): Promise<Transport> {
+  const res = await fetch(url, { headers: UA });
+  if (!res.ok) throw new Error(`MSDS ${res.status}`);
+  const pdf = await getDocumentProxy(new Uint8Array(await res.arrayBuffer()));
+  const { text } = await extractText(pdf, { mergePages: true });
+  return parse14(String(text));
 }
 
 Deno.serve(async (req) => {
@@ -97,6 +129,25 @@ Deno.serve(async (req) => {
         })
       );
       results.push(...part);
+    }
+    return json({ results });
+  }
+
+  if (body.action === "transport") {
+    const items: { key: string; url: string }[] = (body.items ?? []).filter((x: { url?: string }) => MSDS_URL.test(String(x.url ?? ""))).slice(0, 20);
+    const results: { key: string; t: Transport; error?: string }[] = [];
+    for (let i = 0; i < items.length; i += 3) {
+      results.push(
+        ...(await Promise.all(
+          items.slice(i, i + 3).map(async (it) => {
+            try {
+              return { key: it.key, t: await transport(it.url) };
+            } catch (e) {
+              return { key: it.key, t: null, error: (e as Error).message };
+            }
+          })
+        ))
+      );
     }
     return json({ results });
   }

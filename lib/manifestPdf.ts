@@ -1,4 +1,5 @@
 // Loading manifest (Δελτίο φόρτωσης) σε PDF — δίγλωσσο, για τον οδηγό / τη μεταφορική.
+import { num as cnum, unitOf } from "@/lib/cargo";
 import { MODES, type Carrier, type Manifest, type ManifestLine, type Quote, type Rfq } from "@/lib/logistics";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -24,6 +25,24 @@ const fmt = (n: number | null, d = 2) => (n == null ? "" : n.toLocaleString("el-
 /** Αρχικές γραμμές από το αίτημα */
 export function manifestFromRfq(r: Rfq): Manifest {
   if (r.manifest?.lines?.length) return { ...r.manifest, docs: r.manifest.docs ?? [] };
+  if (r.cargo?.length) {
+    // μία γραμμή manifest ανά γραμμή ανάλυσης φορτίου
+    const lines: ManifestLine[] = r.cargo.map((c) => {
+      const u = unitOf(c.type);
+      const q = cnum(c.qty);
+      return {
+        desc: [r.goods, u.en].filter(Boolean).join(" — "),
+        pallets: u.pallet ? String(q) : "",
+        packages: u.pallet ? "" : String(q),
+        weight: cnum(c.kg) ? String(Math.round(cnum(c.kg) * q * 100) / 100).replace(".", ",") : "",
+        dims: [c.l, c.w, c.h].filter((x) => cnum(x)).join("×"),
+        adr: "",
+        notes: [c.stack ? "stackable" : "", c.note].filter(Boolean).join(", "),
+      };
+    });
+    if (r.adr && r.adr_info) lines[0].adr = r.adr_info;
+    return { lines, plate: "", driver: "", loading_time: "", instructions: r.notes ?? "", docs: [] };
+  }
   const line: ManifestLine = {
     desc: r.goods ?? "",
     pallets: r.pallets != null ? String(r.pallets) : "",

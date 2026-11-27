@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { logEvent } from "@/components/logistics/data";
 import { manifestFromRfq } from "@/lib/manifestPdf";
-import { adrText, parseHazardText, pickLang, readHazards, type Hazard } from "@/lib/hazardImport";
+import { adrText, englishUrl, parseHazardText, pickLang, readHazards, type Hazard } from "@/lib/hazardImport";
 import type { Rfq, RfqDoc } from "@/lib/logistics";
 
 const LANGS = ["GR", "GB", "USA", "DE", "IT", "FR", "ES", "NL"];
@@ -14,6 +14,7 @@ export default function HazardCard({ rfq, docs, userEmail, onDone }: { rfq: Rfq;
   const [items, setItems] = useState<Hazard[]>([]);
   const [paste, setPaste] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [quick, setQuick] = useState({ name: "", qty: "" });
   const fileRef = useRef<HTMLInputElement>(null);
   const sb = createClient();
   const attachedUrls = new Set(docs.filter((d) => d.kind === "msds").map((d) => d.notes ?? ""));
@@ -105,12 +106,43 @@ export default function HazardCard({ rfq, docs, userEmail, onDone }: { rfq: Rfq;
       setItems(next);
       await persist(next);
       const found = next.filter((h) => todo.some((t) => t.key === h.key) && h.msds).length;
-      onDone(`MSDS: βρέθηκαν ${found} από ${todo.length}. Έλεγξε τις αντιστοιχίσεις και πάτα «Προσθήκη στα έγγραφα».`);
+      // UN / κλάση / PG από την ενότητα 14 (μόνο όπου δεν τα έδωσε ο χρήστης)
+      const withAdr = await readTransport(next.filter((h) => todo.some((t) => t.key === h.key) && h.msds && !h.un), next);
+      const adrN = withAdr.filter((h) => todo.some((t) => t.key === h.key) && h.auto && h.un).length;
+      onDone(`MSDS: βρέθηκαν ${found} από ${todo.length}${adrN ? ` · UN / κλάση / PG από το MSDS για ${adrN}` : ""}. Έλεγξε τις αντιστοιχίσεις και πάτα «Προσθήκη στα έγγραφα».`);
     } catch (e) {
       onDone(null, `Αναζήτηση MSDS: ${(e as Error).message}`);
     } finally {
       setBusy(null);
     }
+  }
+
+  /** ενότητα 14 των MSDS (αγγλική έκδοση) -> UN / κλάση / PG */
+  async function readTransport(which: Hazard[], all: Hazard[]) {
+    const todo = which.map((h) => ({ key: h.key, url: englishUrl((h.alts ?? []).find((a) => a.name === h.msds?.name && a.number === h.msds?.number)?.links) })).filter((x) => x.url);
+    if (!todo.length) return all;
+    setBusy("adr");
+    let next = all;
+    try {
+      for (let i = 0; i < todo.length; i += 10) {
+        const { data, error } = await sb.functions.invoke("msds-find", { body: { action: "transport", items: todo.slice(i, i + 10) } });
+        if (error) throw new Error(error.message);
+        const res = (data as { results: { key: string; t: { regulated: boolean; un: string; cls: string; pg: string; psn: string } | null }[] }).results;
+        next = next.map((h) => {
+          const r = res.find((x) => x.key === h.key)?.t;
+          if (!r) return h;
+          if (!r.regulated) return { ...h, regulated: false, auto: true };
+          return { ...h, regulated: true, auto: true, un: h.un || r.un, cls: h.cls || r.cls, pg: h.pg || r.pg, psn: r.psn };
+        });
+        setItems(next);
+      }
+      await persist(next, true);
+    } catch (e) {
+      onDone(null, `UN / κλάση από MSDS: ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+    return next;
   }
 
   const setOne = (key: string, patch: Partial<Hazard>) => {
@@ -122,7 +154,13 @@ export default function HazardCard({ rfq, docs, userEmail, onDone }: { rfq: Rfq;
     const hit = (h.alts ?? [])[idx];
     if (!hit) return;
     const l = lang && hit.links[lang] ? lang : pickLang(hit.links, lang);
-    setOne(h.key, { msds: { name: hit.name, number: hit.number, lang: l, url: hit.links[l] }, status: "found" });
+    const patch: Partial<Hazard> = { msds: { name: hit.name, number: hit.number, lang: l, url: hit.links[l] }, status: "found" };
+    // αν τα UN ήρθαν από το προηγούμενο MSDS, ξαναδιαβάζονται από το νέο
+    if (h.auto) Object.assign(patch, { un: "", cls: "", pg: "", psn: "", regulated: null, auto: false });
+    const next = items.map((x) => (x.key === h.key ? { ...x, ...patch } : x));
+    setItems(next);
+    save(next);
+    if (!next.find((x) => x.key === h.key)!.un) readTransport([next.find((x) => x.key === h.key)!], next);
   };
   const setLang = (h: Hazard, lang: string) => {
     const hit = (h.alts ?? []).find((x) => x.name === h.msds?.name && x.number === h.msds?.number);
@@ -181,6 +219,27 @@ export default function HazardCard({ rfq, docs, userEmail, onDone }: { rfq: Rfq;
       <h3>
         Επικίνδυνα είδη (ADR) & MSDS {items.length ? <span className="dim">· {items.length} είδη · MSDS {found}</span> : null}
       </h3>
+      <form
+        className="lg-row lg-quick"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!quick.name.trim()) return;
+          load(parseHazardText(quick.name).map((h) => ({ ...h, qty: quick.qty.trim() })), "χειροκίνητα");
+          setQuick({ name: "", qty: "" });
+        }}
+      >
+        <label className="field lg-wide">
+          Προϊόν (όνομα στα αγγλικά ή CAS)
+          <input value={quick.name} onChange={(e) => setQuick({ ...quick, name: e.target.value })} placeholder="π.χ. Ethanol 96% ή 64-17-5" />
+        </label>
+        <label className="field">
+          Τμχ
+          <input value={quick.qty} inputMode="decimal" onChange={(e) => setQuick({ ...quick, qty: e.target.value })} />
+        </label>
+        <button type="submit" className="btn primary sm" disabled={!!busy || !quick.name.trim()}>
+          {busy === "load" || busy === "find" || busy === "adr" ? "Αναζήτηση…" : "+ Προσθήκη & εύρεση UN / MSDS"}
+        </button>
+      </form>
       <div className="lg-row">
         <button type="button" className="btn ghost sm" onClick={() => fileRef.current?.click()} disabled={!!busy}>
           ⇪ Λίστα από Excel
@@ -239,7 +298,9 @@ export default function HazardCard({ rfq, docs, userEmail, onDone }: { rfq: Rfq;
                       <input className="lg-cas" value={h.cas} onBlur={() => save()} onChange={(e) => upd(h.key, { cas: e.target.value })} />
                     </td>
                     <td>
-                      <input className="lg-un" value={h.un} onBlur={() => save()} onChange={(e) => upd(h.key, { un: e.target.value.replace(/[^0-9]/g, "").slice(0, 4) })} />
+                      <input className="lg-un" value={h.un} onBlur={() => save()} onChange={(e) => upd(h.key, { un: e.target.value.replace(/[^0-9]/g, "").slice(0, 4), auto: false })} />
+                      {h.regulated === false && <div className="lg-badge green" title="Ενότητα 14 του MSDS: not regulated">όχι ADR</div>}
+                      {h.auto && h.regulated && h.psn && <div className="dim lg-small" title="Από την ενότητα 14 του MSDS">{h.psn}</div>}
                     </td>
                     <td>
                       <input className="lg-un" value={h.cls} onBlur={() => save()} onChange={(e) => upd(h.key, { cls: e.target.value })} />

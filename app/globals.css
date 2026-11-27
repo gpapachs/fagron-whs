@@ -1708,3 +1708,8 @@ input:disabled { opacity: .75; }
 .lg-hz input.lg-cas { min-width: 90px; }
 .lg-hz input.lg-un { min-width: 44px; width: 56px; }
 .lg-small { font-size: 12px; }
+.lg-cargo input:not([type=checkbox]), .lg-cargo select { width: 100%; font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); }
+.lg-cargo input.n { width: 64px; text-align: right; }
+.lg-cargo td:first-child select { min-width: 190px; }
+.lg-cargo tfoot td { background: var(--surface-2); }
+.lg-quick { align-items: flex-end; }

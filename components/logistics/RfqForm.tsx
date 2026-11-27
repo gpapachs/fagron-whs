@@ -4,6 +4,10 @@ import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { HOME, INCOTERMS, MODES, partnerSide, type Direction, type PartnerSite, type Rfq } from "@/lib/logistics";
 import { loadPartners, searchPartners } from "@/components/logistics/partnerData";
+import { blankCargo, cargoSummary, cargoTotals, lineTotals, num as cnum, UNIT_TYPES, unitOf, type CargoLine } from "@/lib/cargo";
+
+const DEFAULT_TEMPS = ["15-25°C", "2-8°C", "Έως 25°C", "Χωρίς απαίτηση θερμοκρασίας", "-20°C (κατεψυγμένο)"];
+const fmn = (n: number, d = 2) => (n ? n.toLocaleString("el-GR", { maximumFractionDigits: d }) : "");
 import type { Partner } from "@/components/logistics/PartnersTab";
 
 const ADDR = ["company", "address", "city", "zip", "country"] as const;
@@ -52,6 +56,41 @@ export default function RfqForm({ initial, userEmail, onSaved, onCancel }: { ini
   const [showHits, setShowHits] = useState(false);
   const [sites, setSites] = useState<PartnerSite[]>([]);
   const [siteMsg, setSiteMsg] = useState<string | null>(null);
+  const [cargo, setCargo] = useState<CargoLine[]>(() => ((initial as { cargo?: CargoLine[] | null }).cargo ?? []) as CargoLine[]);
+  const [temps, setTemps] = useState<string[]>(DEFAULT_TEMPS);
+  const [newTemp, setNewTemp] = useState<string | null>(null);
+  const tot = cargoTotals(cargo);
+  const setLine = (i: number, p: Partial<CargoLine>) => setCargo((xs) => xs.map((x, j) => (j === i ? { ...x, ...p } : x)));
+  const addLine = (type: string) =>
+    setCargo((xs) => {
+      if (xs.length) return [...xs, blankCargo(type)];
+      // 1η γραμμή: από τα υπάρχοντα σύνολα, αν υπάρχουν
+      const first = blankCargo(type);
+      const q = unitOf(type).pallet ? d.pallets : d.packages;
+      if (q) first.qty = String(q);
+      if (d.weight_kg && q) first.kg = String(Math.round((Number(d.weight_kg) / Number(q)) * 100) / 100).replace(".", ",");
+      first.stack = d.id ? !!d.stackable : false;
+      return [first];
+    });
+  useEffect(() => {
+    createClient()
+      .from("logistics_options")
+      .select("value")
+      .eq("kind", "temp")
+      .order("created_at")
+      .then(({ data }) => {
+        const saved = ((data as { value: string }[] | null) ?? []).map((x) => x.value);
+        setTemps([...new Set([...DEFAULT_TEMPS, ...saved])]);
+      });
+  }, []);
+  async function addTemp() {
+    const v = (newTemp ?? "").trim();
+    if (!v) return;
+    await createClient().from("logistics_options").upsert({ kind: "temp", value: v, created_by: userEmail });
+    setTemps((t) => [...new Set([...t, v])]);
+    set("temp", v);
+    setNewTemp(null);
+  }
   const side = partnerSide(d.direction);
   const other = !!d.other_site;
   const kind = d.direction === "import" ? "supplier" : "customer";
@@ -173,6 +212,19 @@ export default function RfqForm({ initial, userEmail, onSaved, onCancel }: { ini
     for (const k of NUMS) {
       const v = row[k];
       row[k] = toNumber(v);
+    }
+    // (μετά τη μετατροπή αριθμών: π.χ. 1.235 m³ δεν είναι «χιλιάδες»)
+    // ανάλυση φορτίου: τα σύνολα υπολογίζονται από τις γραμμές
+    const lines = cargo.filter((l) => cnum(l.qty) > 0);
+    row.cargo = lines.length ? lines : null;
+    if (lines.length) {
+      row.pallets = tot.pallets || null;
+      row.packages = tot.packages || null;
+      row.weight_kg = tot.kg || null;
+      row.volume_m3 = tot.vol || null;
+      row.ldm = tot.ldm || null;
+      row.stackable = tot.stackable;
+      row.dims = cargoSummary(lines);
     }
     for (const k of ["pickup_date", "delivery_by", "quote_deadline"]) if (row[k] === "") row[k] = null;
     if (row.quote_deadline) row.quote_deadline = new Date(String(row.quote_deadline)).toISOString();
@@ -353,21 +405,33 @@ export default function RfqForm({ initial, userEmail, onSaved, onCancel }: { ini
         <legend>Φορτίο</legend>
         <div className="lg-row">
           {txt("goods", "Εμπόρευμα", { wide: true, ph: "π.χ. φαρμακευτικές πρώτες ύλες, μη επικίνδυνα" })}
-          {txt("pallets", "Παλέτες")}
-          {txt("packages", "Δέματα")}
-          {txt("weight_kg", "Βάρος (kg)")}
-          {txt("volume_m3", "Όγκος (m³)")}
-          {txt("ldm", "LDM")}
-          {txt("dims", "Διαστάσεις", { ph: "120x80x150 cm" })}
           <label className="field">
-            Στοιβαζόμενο
-            <select value={d.stackable == null ? "" : d.stackable ? "1" : "0"} onChange={(e) => set("stackable", e.target.value === "" ? null : e.target.value === "1")}>
-              <option value="">—</option>
-              <option value="1">Ναι</option>
-              <option value="0">Όχι</option>
-            </select>
+            Θερμοκρασία
+            {newTemp == null ? (
+              <select
+                value={d.temp ?? ""}
+                onChange={(e) => (e.target.value === "__new" ? setNewTemp("") : set("temp", e.target.value))}
+              >
+                <option value="">—</option>
+                {[...new Set([...temps, ...(d.temp ? [d.temp] : [])])].map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+                <option value="__new">+ Νέα επιλογή…</option>
+              </select>
+            ) : (
+              <span className="lg-inline">
+                <input autoFocus value={newTemp} onChange={(e) => setNewTemp(e.target.value)} placeholder="π.χ. 8-15°C" />
+                <button type="button" className="btn primary sm" onClick={addTemp} disabled={!newTemp.trim()}>
+                  ✓
+                </button>
+                <button type="button" className="btn ghost sm" onClick={() => setNewTemp(null)}>
+                  ✕
+                </button>
+              </span>
+            )}
           </label>
-          {txt("temp", "Θερμοκρασία")}
           <label className="st-check">
             <input type="checkbox" checked={!!d.adr} onChange={(e) => set("adr", e.target.checked)} />
             ADR
@@ -375,6 +439,120 @@ export default function RfqForm({ initial, userEmail, onSaved, onCancel }: { ini
           {d.adr && txt("adr_info", "UN / κλάση", { ph: "UN1170, 3, II" })}
           {txt("value_eur", "Αξία (€)")}
         </div>
+
+        {cargo.length ? (
+          <div className="st-tablewrap">
+            <table className="st-table lg-cargo">
+              <thead>
+                <tr>
+                  {["Τύπος", "Τεμ.", "Μήκος", "Πλάτος", "Ύψος (cm)", "kg / τεμ.", "Στοιβ.", "Σημείωση", "kg", "m³", "LDM", ""].map((h) => (
+                    <th key={h}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {cargo.map((l, i) => {
+                  const t = lineTotals(l);
+                  const inp = (k: "qty" | "l" | "w" | "h" | "kg" | "note", cls = "") => (
+                    <input className={cls} value={l[k]} inputMode={k === "note" ? undefined : "decimal"} onChange={(e) => setLine(i, { [k]: e.target.value })} />
+                  );
+                  return (
+                    <tr key={i}>
+                      <td>
+                        <select
+                          value={l.type}
+                          onChange={(e) => {
+                            const u = unitOf(e.target.value);
+                            setLine(i, { type: u.key, ...(u.l ? { l: String(u.l), w: String(u.w) } : {}) });
+                          }}
+                        >
+                          {UNIT_TYPES.map((u) => (
+                            <option key={u.key} value={u.key}>
+                              {u.gr}
+                              {u.l ? ` ${u.l}×${u.w}` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td>{inp("qty", "n")}</td>
+                      <td>{inp("l", "n")}</td>
+                      <td>{inp("w", "n")}</td>
+                      <td>{inp("h", "n")}</td>
+                      <td>{inp("kg", "n")}</td>
+                      <td>
+                        <input type="checkbox" checked={l.stack} onChange={(e) => setLine(i, { stack: e.target.checked })} title="Στοιβαζόμενο" />
+                      </td>
+                      <td>{inp("note")}</td>
+                      <td className="num">{fmn(t.kg)}</td>
+                      <td className="num">{fmn(t.vol, 3)}</td>
+                      <td className="num">{fmn(t.ldm)}</td>
+                      <td>
+                        <span className="lg-acts">
+                          <button type="button" className="btn ghost sm" title="Αντιγραφή γραμμής" onClick={() => setCargo([...cargo.slice(0, i + 1), { ...l }, ...cargo.slice(i + 1)])}>
+                            ⧉
+                          </button>
+                          <button type="button" className="btn ghost sm" title="Αφαίρεση" onClick={() => setCargo(cargo.filter((_, j) => j !== i))}>
+                            ✕
+                          </button>
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan={8}>
+                    <b>Σύνολο:</b> {tot.pallets ? `${fmn(tot.pallets)} παλέτες` : ""}
+                    {tot.pallets && tot.packages ? " · " : ""}
+                    {tot.packages ? `${fmn(tot.packages)} δέματα` : ""}
+                    {tot.stackable === false && cargo.some((l) => l.stack) ? " · μερικώς στοιβαζόμενο" : tot.stackable ? " · στοιβαζόμενο" : " · μη στοιβαζόμενο"}
+                  </td>
+                  <td className="num">
+                    <b>{fmn(tot.kg)}</b>
+                  </td>
+                  <td className="num">
+                    <b>{fmn(tot.vol, 3)}</b>
+                  </td>
+                  <td className="num">
+                    <b>{fmn(tot.ldm)}</b>
+                  </td>
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        ) : (
+          <div className="lg-row">
+            {txt("pallets", "Παλέτες")}
+            {txt("packages", "Δέματα")}
+            {txt("weight_kg", "Βάρος (kg)")}
+            {txt("volume_m3", "Όγκος (m³)")}
+            {txt("ldm", "LDM")}
+            {txt("dims", "Διαστάσεις", { ph: "120x80x150 cm" })}
+            <label className="field">
+              Στοιβαζόμενο
+              <select value={d.stackable == null ? "" : d.stackable ? "1" : "0"} onChange={(e) => set("stackable", e.target.value === "" ? null : e.target.value === "1")}>
+                <option value="">—</option>
+                <option value="1">Ναι</option>
+                <option value="0">Όχι</option>
+              </select>
+            </label>
+          </div>
+        )}
+        <span className="st-actions">
+          <button type="button" className="btn ghost sm" onClick={() => addLine("eur")}>
+            + Παλέτα
+          </button>
+          <button type="button" className="btn ghost sm" onClick={() => addLine("box")}>
+            + Δέμα
+          </button>
+          <span className="dim lg-small">
+            {cargo.length
+              ? "Κάθε γραμμή με δικές της διαστάσεις· τα σύνολα (παλέτες, δέματα, kg, m³, LDM) υπολογίζονται αυτόματα. LDM: επιφάνεια / 2,4 m, τα στοιβαζόμενα ανά 2."
+              : "Πρόσθεσε γραμμές για ανάλυση ανά τύπο παλέτας / δέμα με διαφορετικές διαστάσεις."}
+          </span>
+        </span>
       </fieldset>
 
       <fieldset>

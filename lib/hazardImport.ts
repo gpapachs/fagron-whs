@@ -11,6 +11,10 @@ export type Hazard = {
   weight: string;
   msds?: { name: string; number: string; lang: string; url: string; docId?: string } | null;
   alts?: { name: string; number: string; links: Record<string, string> }[];
+  /** από την ενότητα 14 του MSDS: false = «not regulated» (όχι ADR) */
+  regulated?: boolean | null;
+  psn?: string;
+  auto?: boolean; // UN / κλάση / PG συμπληρώθηκαν από το MSDS
   status?: "found" | "none" | "error" | "attached";
 };
 type Field = "code" | "name" | "cas" | "un" | "cls" | "pg" | "qty" | "weight";
@@ -87,6 +91,13 @@ export function readHazards(rows: unknown[][]): Hazard[] {
 /** Επικόλληση: μία γραμμή ανά είδος («όνομα; CAS; UN» ή ελεύθερο κείμενο) */
 export function parseHazardText(t: string): Hazard[] {
   return readHazards(t.split(/\r?\n/).filter((l) => l.trim()).map((l) => [l]));
+}
+
+/** αγγλικό MSDS για ανάγνωση της ενότητας 14 */
+export function englishUrl(links: Record<string, string> | undefined) {
+  if (!links) return "";
+  for (const l of ["GB", "UL", "USA", "AUS"]) if (links[l]) return links[l];
+  return "";
 }
 
 /** Προτίμηση γλώσσας MSDS: ελληνικά, μετά αγγλικά */

@@ -80,6 +80,7 @@ export type Rfq = {
   round_saving?: number | null;
   round_saving_at?: string | null;
   manifest?: Manifest | null;
+  cargo?: { type: string; qty: string; l: string; w: string; h: string; kg: string; stack: boolean; note: string }[] | null;
   created_at: string;
   created_by: string | null;
   updated_at: string;
@@ -192,7 +193,7 @@ export function loadRows(r: Rfq): [string, string][] {
     ["Βάρος / Weight (kg)", num(r.weight_kg)],
     ["Όγκος / Volume (m³)", num(r.volume_m3, 3)],
     ["LDM", num(r.ldm)],
-    ["Διαστάσεις / Dimensions", r.dims ?? ""],
+    [r.cargo?.length ? "Ανάλυση / Breakdown" : "Διαστάσεις / Dimensions", r.dims ?? ""],
     ["Στοιβαζόμενο / Stackable", r.stackable == null ? "" : r.stackable ? "Ναι / Yes" : "Όχι / No"],
     ["ADR", r.adr ? `Ναι / Yes${r.adr_info ? ` — ${r.adr_info}` : ""}` : "Όχι / No"],
     ["Θερμοκρασία / Temperature", r.temp ?? ""],
