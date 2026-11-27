@@ -249,11 +249,23 @@ Fagron Hellas · 12 km N.R. Trikala - Larissa, 42100 Trikala, Greece</td></tr>
 </table></div>`;
 }
 
+/**
+ * Θέμα email: «Fagron Hellas Transport Request_Export_25.11.2026_53868_FAGRON GMBH»
+ * (είδος _ ημ/νία αιτήματος _ αρ. παραγγελίας ή RFQ _ πελάτης / προμηθευτής) + προαιρετικά « – Award» κ.λπ.
+ */
+export function mailSubject(r: Rfq, suffix?: string) {
+  const date = new Date(r.created_at || Date.now()).toLocaleDateString("el-GR", { timeZone: "Europe/Athens", day: "2-digit", month: "2-digit", year: "numeric" }).replace(/\//g, ".");
+  const no = (r.order_ref || r.ref || "").trim();
+  const who = (r.customer || (r.direction === "import" ? r.from_company : r.to_company) || "").trim();
+  const base = ["Fagron Hellas Transport Request", r.direction === "import" ? "Import" : "Export", date, no, who].filter(Boolean).join("_");
+  return suffix ? `${base} – ${suffix}` : base;
+}
+
 /** Αίτημα προσφοράς προς μία μεταφορική (με το προσωπικό της link) */
 export function rfqEmail(r: Rfq, carrier: Carrier, token: string, sender: string, docs: { id: string; name: string }[] = []) {
   const link = quoteLink(token);
   const deadline = r.quote_deadline ? new Date(r.quote_deadline).toLocaleString("el-GR", { timeZone: "Europe/Athens", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }) : "";
-  const subject = `Αίτημα προσφοράς / Quote request ${r.ref} — ${route(r)}${r.pickup_date ? ` — ${dmy(r.pickup_date)}` : ""}`;
+  const subject = mailSubject(r);
   const html = brand(
     "Αίτημα προσφοράς / Quote request",
     r.ref,
@@ -271,7 +283,7 @@ ${sign(sender)}`
 
 /** Ειδοποίηση ανάθεσης (στον νικητή) ή μη ανάθεσης (στους υπόλοιπους) */
 export function awardEmail(r: Rfq, carrier: Carrier, q: Quote | null, won: boolean, sender: string) {
-  const subject = `${won ? "Ανάθεση / Award" : "Αποτέλεσμα / Result"} ${r.ref} — ${route(r)}`;
+  const subject = mailSubject(r, won ? "Award" : "Result");
   const html = won
     ? brand(
         "Ανάθεση μεταφοράς / Transport award",
@@ -355,7 +367,7 @@ export function roundEmail(r: Rfq, carrier: Carrier, q: Quote | null, token: str
   const link = quoteLink(token);
   const t = `${num(target)} ${currency}`;
   const dl = when(deadline);
-  const subject = `Τιμή-στόχος / Target price ${r.ref} — ${route(r)} — έως / by ${dl}`;
+  const subject = mailSubject(r, `Target price by ${dl.replace(/\//g, ".")}`);
   const html = brand(
     "Τιμή-στόχος / Target price",
     r.ref,
@@ -374,7 +386,7 @@ ${sign(sender)}`
 
 /** Loading manifest προς τον νικητή (το PDF πάει συνημμένο) */
 export function manifestEmail(r: Rfq, carrier: Carrier, token: string | null, docs: { name: string; id: string }[], sender: string) {
-  const subject = `Loading manifest ${r.ref} — ${route(r)}${r.pickup_date ? ` — ${dmy(r.pickup_date)}` : ""}`;
+  const subject = mailSubject(r, "Loading manifest");
   const html = brand(
     "Loading manifest",
     r.ref,
