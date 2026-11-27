@@ -202,28 +202,69 @@ export function loadRows(r: Rfq): [string, string][] {
   return rows.filter(([, v]) => v);
 }
 
+// ------------------------------------------------------------------ email στα χρώματα της Fagron
+export const BRAND = { red: "#CE302C", grey: "#9C9E9F", redBg: "#FBEAE9", ink: "#1F2937" };
+export const LOGO_URL = `${APP_URL}/fagron-logo.jpg`;
+const FONT = "Arial, Helvetica, sans-serif";
+
 const table = (rows: [string, string][]) =>
-  `<table border="1" cellpadding="5" cellspacing="0" style="border-collapse:collapse;font-size:13px">${rows
-    .map(([k, v]) => `<tr><td style="background:#f2f5f9;white-space:nowrap"><b>${esc(k)}</b></td><td>${esc(v)}</td></tr>`)
+  `<table role="presentation" cellpadding="7" cellspacing="0" style="border-collapse:collapse;font-family:${FONT};font-size:13px;width:100%;border:1px solid #E5E7EB">${rows
+    .map(
+      ([k, v], i) =>
+        `<tr><td style="background:${BRAND.redBg};color:#7A1D1A;white-space:nowrap;border-bottom:1px solid #F3D4D2;vertical-align:top;width:34%"><b>${esc(k)}</b></td><td style="color:${BRAND.ink};border-bottom:1px solid #EEF0F3;vertical-align:top;background:${i % 2 ? "#FAFAFA" : "#FFFFFF"}">${esc(v)}</td></tr>`
+    )
     .join("")}</table>`;
+
+/** κουμπί (πίνακας — δουλεύει και στο Outlook) + το link από κάτω */
+const button = (href: string, label: string) =>
+  `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:18px 0 6px"><tr><td style="background:${BRAND.red};border-radius:6px"><a href="${esc(href)}" style="display:inline-block;padding:11px 22px;font-family:${FONT};font-size:14px;font-weight:bold;color:#FFFFFF;text-decoration:none">${esc(label)}</a></td></tr></table>
+<p style="margin:0 0 14px;font-size:11px;color:${BRAND.grey}">${esc(href)}</p>`;
+
+const docList = (title: string, token: string, docs: { id: string; name: string }[]) =>
+  docs.length
+    ? `<p style="margin:16px 0 4px;color:${BRAND.red};font-weight:bold">${esc(title)}</p><ul style="margin:0;padding-left:18px">${docs
+        .map((d) => `<li style="margin:2px 0"><a href="${esc(docLink(token, d.id))}" style="color:${BRAND.red}">${esc(d.name)}</a></li>`)
+        .join("")}</ul>`
+    : "";
+
+const sign = (sender: string) =>
+  `<p style="margin-top:22px">Ευχαριστούμε / Thank you,<br><b>${esc(sender)}</b><br><span style="color:${BRAND.red}">Fagron Hellas — Logistics</span></p>`;
+
+/** πλαίσιο email: logo, κόκκινη γραμμή, τίτλος, περιεχόμενο, υποσέλιδο */
+function brand(title: string, ref: string, body: string) {
+  return `<div style="background:#F4F4F5;padding:20px 0;font-family:${FONT}">
+<table role="presentation" align="center" width="640" cellpadding="0" cellspacing="0" style="width:640px;max-width:100%;background:#FFFFFF;border:1px solid #E5E7EB;border-collapse:collapse">
+<tr><td style="padding:20px 28px 14px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+<td><img src="${LOGO_URL}" width="150" alt="Fagron" style="display:block;border:0;width:150px;height:auto"></td>
+<td align="right" style="font-family:${FONT};font-size:12px;color:${BRAND.grey}">Logistics<br><b style="color:${BRAND.red};font-size:14px">${esc(ref)}</b></td>
+</tr></table></td></tr>
+<tr><td style="height:4px;background:${BRAND.red};font-size:0;line-height:0">&nbsp;</td></tr>
+<tr><td style="padding:22px 28px 8px;font-family:${FONT};font-size:14px;line-height:1.5;color:${BRAND.ink}">
+<h2 style="margin:0 0 14px;font-size:19px;color:${BRAND.red};font-family:${FONT}">${esc(title)}</h2>
+${body}
+</td></tr>
+<tr><td style="padding:14px 28px 18px;border-top:1px solid #EEF0F3;font-family:${FONT};font-size:11px;color:${BRAND.grey}">
+Fagron Hellas · 12 km N.R. Trikala - Larissa, 42100 Trikala, Greece</td></tr>
+</table></div>`;
+}
 
 /** Αίτημα προσφοράς προς μία μεταφορική (με το προσωπικό της link) */
 export function rfqEmail(r: Rfq, carrier: Carrier, token: string, sender: string, docs: { id: string; name: string }[] = []) {
   const link = quoteLink(token);
   const deadline = r.quote_deadline ? new Date(r.quote_deadline).toLocaleString("el-GR", { timeZone: "Europe/Athens", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }) : "";
   const subject = `Αίτημα προσφοράς / Quote request ${r.ref} — ${route(r)}${r.pickup_date ? ` — ${dmy(r.pickup_date)}` : ""}`;
-  const html = `<p>Καλημέρα σας${carrier.contact ? ` κ. ${esc(carrier.contact)}` : ""},</p>
-<p>Παρακαλούμε για την προσφορά σας για την παρακάτω μεταφορά${deadline ? ` έως <b>${esc(deadline)}</b>` : ""}.</p>
-<p><i>Dear partner, please send us your best offer for the transport below${deadline ? ` by <b>${esc(deadline)}</b>` : ""}.</i></p>
+  const html = brand(
+    "Αίτημα προσφοράς / Quote request",
+    r.ref,
+    `<p>Καλημέρα σας${carrier.contact ? ` κ. ${esc(carrier.contact)}` : ""},</p>
+<p>Παρακαλούμε για την προσφορά σας για την παρακάτω μεταφορά${deadline ? ` έως <b style="color:${BRAND.red}">${esc(deadline)}</b>` : ""}.</p>
+<p style="color:#4B5563"><i>Dear partner, please send us your best offer for the transport below${deadline ? ` by <b>${esc(deadline)}</b>` : ""}.</i></p>
 ${table(loadRows(r))}
-${
-    docs.length
-      ? `<p>Συνημμένα έγγραφα / Attached documents (MSDS κ.λπ.):</p><ul>${docs.map((d) => `<li><a href="${esc(docLink(token, d.id))}">${esc(d.name)}</a></li>`).join("")}</ul>`
-      : ""
-  }
-<p><b><a href="${esc(link)}">Συμπλήρωση προσφοράς / Submit your quote</a></b><br>${esc(link)}</p>
-<p>Μπορείτε επίσης να απαντήσετε σε αυτό το email. / You may also reply to this email.</p>
-<p>Ευχαριστούμε / Thank you,<br>${esc(sender)}<br>Fagron Hellas — Logistics</p>`;
+${docList("Συνημμένα έγγραφα / Attached documents", token, docs)}
+${button(link, "Συμπλήρωση προσφοράς / Submit your quote")}
+<p style="color:#4B5563;font-size:13px">Μπορείτε επίσης να απαντήσετε σε αυτό το email. / You may also reply to this email.</p>
+${sign(sender)}`
+  );
   return { subject, html };
 }
 
@@ -231,13 +272,21 @@ ${
 export function awardEmail(r: Rfq, carrier: Carrier, q: Quote | null, won: boolean, sender: string) {
   const subject = `${won ? "Ανάθεση / Award" : "Αποτέλεσμα / Result"} ${r.ref} — ${route(r)}`;
   const html = won
-    ? `<p>Καλημέρα σας,</p><p>Σας αναθέτουμε τη μεταφορά <b>${esc(r.ref)}</b> σύμφωνα με την προσφορά σας${q ? ` (<b>${esc(num(q.price))} ${esc(q.currency)}</b>${q.transit_days ? `, ${esc(q.transit_days)} ημέρες` : ""})` : ""}.</p>
-<p><i>We are pleased to award you transport <b>${esc(r.ref)}</b> as per your offer. Please confirm the pick-up date and send us your reference / tracking number.</i></p>
+    ? brand(
+        "Ανάθεση μεταφοράς / Transport award",
+        r.ref,
+        `<p>Καλημέρα σας,</p><p>Σας αναθέτουμε τη μεταφορά <b>${esc(r.ref)}</b> σύμφωνα με την προσφορά σας${q ? ` (<b style="color:${BRAND.red}">${esc(num(q.price))} ${esc(q.currency)}</b>${q.transit_days ? `, ${esc(q.transit_days)} ημέρες` : ""})` : ""}.</p>
+<p style="color:#4B5563"><i>We are pleased to award you transport <b>${esc(r.ref)}</b> as per your offer. Please confirm the pick-up date and send us your reference / tracking number.</i></p>
 ${table(loadRows(r))}
-<p>Ευχαριστούμε / Thank you,<br>${esc(sender)}<br>Fagron Hellas — Logistics</p>`
-    : `<p>Καλημέρα σας,</p><p>Σας ευχαριστούμε για την προσφορά σας για τη μεταφορά <b>${esc(r.ref)}</b> (${esc(route(r))}). Αυτή τη φορά η μεταφορά ανατέθηκε αλλού.</p>
-<p><i>Thank you for your offer for <b>${esc(r.ref)}</b>. This time the transport has been awarded to another partner.</i></p>
-<p>${esc(sender)}<br>Fagron Hellas — Logistics</p>`;
+${sign(sender)}`
+      )
+    : brand(
+        "Αποτέλεσμα / Result",
+        r.ref,
+        `<p>Καλημέρα σας,</p><p>Σας ευχαριστούμε για την προσφορά σας για τη μεταφορά <b>${esc(r.ref)}</b> (${esc(route(r))}). Αυτή τη φορά η μεταφορά ανατέθηκε αλλού.</p>
+<p style="color:#4B5563"><i>Thank you for your offer for <b>${esc(r.ref)}</b>. This time the transport has been awarded to another partner.</i></p>
+${sign(sender)}`
+      );
   return { subject, html };
 }
 
@@ -306,29 +355,36 @@ export function roundEmail(r: Rfq, carrier: Carrier, q: Quote | null, token: str
   const t = `${num(target)} ${currency}`;
   const dl = when(deadline);
   const subject = `Τιμή-στόχος / Target price ${r.ref} — ${route(r)} — έως / by ${dl}`;
-  const html = `<p>Καλημέρα σας${carrier.contact ? ` κ. ${esc(carrier.contact)}` : ""},</p>
+  const html = brand(
+    "Τιμή-στόχος / Target price",
+    r.ref,
+    `<p>Καλημέρα σας${carrier.contact ? ` κ. ${esc(carrier.contact)}` : ""},</p>
 <p>${q ? `Σας ευχαριστούμε για την προσφορά σας (<b>${esc(num(q.price))} ${esc(q.currency)}</b>) για τη μεταφορά <b>${esc(r.ref)}</b>.` : `Αφορά τη μεταφορά <b>${esc(r.ref)}</b>.`}
-Για να προχωρήσουμε στην ανάθεση, η <b>τιμή-στόχος</b> μας είναι <b>${esc(t)}</b> (all-in).
-Αν μπορείτε να προσφέρετε αυτή ή χαμηλότερη τιμή, παρακαλούμε υποβάλετε τη νέα σας τιμή έως <b>${esc(dl)}</b>.${q ? " Αλλιώς ισχύει η αρχική σας προσφορά." : ""}</p>
-<p><i>${q ? `Thank you for your offer (<b>${esc(num(q.price))} ${esc(q.currency)}</b>) for transport <b>${esc(r.ref)}</b>.` : `Regarding transport <b>${esc(r.ref)}</b>.`}
+Για να προχωρήσουμε στην ανάθεση, η <b>τιμή-στόχος</b> μας είναι <b style="color:${BRAND.red}">${esc(t)}</b> (all-in).
+Αν μπορείτε να προσφέρετε αυτή ή χαμηλότερη τιμή, παρακαλούμε υποβάλετε τη νέα σας τιμή έως <b style="color:${BRAND.red}">${esc(dl)}</b>.${q ? " Αλλιώς ισχύει η αρχική σας προσφορά." : ""}</p>
+<p style="color:#4B5563"><i>${q ? `Thank you for your offer (<b>${esc(num(q.price))} ${esc(q.currency)}</b>) for transport <b>${esc(r.ref)}</b>.` : `Regarding transport <b>${esc(r.ref)}</b>.`}
 To proceed with the award, our <b>target price</b> is <b>${esc(t)}</b> (all-in). If you can match or beat it, please submit your revised price by <b>${esc(dl)}</b>.${q ? " Otherwise your original offer remains valid." : ""}</i></p>
 ${table(loadRows(r))}
-<p><b><a href="${esc(link)}">Νέα τιμή / Submit revised price</a></b><br>${esc(link)}</p>
-<p>Ευχαριστούμε / Thank you,<br>${esc(sender)}<br>Fagron Hellas — Logistics</p>`;
+${button(link, "Νέα τιμή / Submit revised price")}
+${sign(sender)}`
+  );
   return { subject, html };
 }
 
 /** Loading manifest προς τον νικητή (το PDF πάει συνημμένο) */
 export function manifestEmail(r: Rfq, carrier: Carrier, token: string | null, docs: { name: string; id: string }[], sender: string) {
   const subject = `Loading manifest ${r.ref} — ${route(r)}${r.pickup_date ? ` — ${dmy(r.pickup_date)}` : ""}`;
-  const list = token && docs.length ? `<p>Συνοδευτικά έγγραφα / Accompanying documents:</p><ul>${docs.map((d) => `<li><a href="${esc(docLink(token, d.id))}">${esc(d.name)}</a></li>`).join("")}</ul>` : "";
-  const html = `<p>Καλημέρα σας${carrier.contact ? ` κ. ${esc(carrier.contact)}` : ""},</p>
+  const html = brand(
+    "Loading manifest",
+    r.ref,
+    `<p>Καλημέρα σας${carrier.contact ? ` κ. ${esc(carrier.contact)}` : ""},</p>
 <p>Σας στέλνουμε συνημμένο το <b>loading manifest</b> για τη μεταφορά <b>${esc(r.ref)}</b> (${esc(route(r))}). Παρακαλούμε επιβεβαιώστε την παραλαβή και την ώρα φόρτωσης.</p>
-<p><i>Please find attached the <b>loading manifest</b> for transport <b>${esc(r.ref)}</b>. Kindly confirm receipt and the loading time.</i></p>
+<p style="color:#4B5563"><i>Please find attached the <b>loading manifest</b> for transport <b>${esc(r.ref)}</b>. Kindly confirm receipt and the loading time.</i></p>
 ${table(loadRows(r))}
-${list}
-${token ? `<p>Τα στοιχεία και τα έγγραφα είναι και εδώ / Details and documents also here: <a href="${esc(quoteLink(token))}">${esc(quoteLink(token))}</a></p>` : ""}
-<p>Ευχαριστούμε / Thank you,<br>${esc(sender)}<br>Fagron Hellas — Logistics</p>`;
+${token ? docList("Συνοδευτικά έγγραφα / Accompanying documents", token, docs) : ""}
+${token ? button(quoteLink(token), "Στοιχεία & έγγραφα / Details & documents") : ""}
+${sign(sender)}`
+  );
   return { subject, html };
 }
 

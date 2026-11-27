@@ -1715,3 +1715,34 @@ input:disabled { opacity: .75; }
 .lg-quick { align-items: flex-end; }
 .lg-hz input.lg-pack { min-width: 70px; width: 80px; }
 .lg-total { font-weight: 700; color: var(--ink); padding-bottom: 8px; white-space: nowrap; }
+
+/* ---- δημόσια φόρμα προσφοράς στα χρώματα της Fagron ---- */
+.qf-brand {
+  --fg-red: #ce302c; --fg-red-dark: #a92622; --fg-red-bg: #fbeae9; --fg-grey: #9c9e9f;
+  --accent: var(--fg-red); --accent-ink: #fff; --focus: var(--fg-red); --link: var(--fg-red);
+  color-scheme: light; color: #1f2937;
+  background: #fff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 0 0 22px; overflow: hidden;
+  box-shadow: 0 10px 30px -18px rgba(0, 0, 0, 0.35);
+}
+.qf-brand > *:not(.qf-head) { margin-left: 26px; margin-right: 26px; }
+.qf-head { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 6px 16px; padding: 22px 26px 0; border-bottom: 4px solid var(--fg-red); }
+.qf-head img { display: block; height: 40px; width: auto; }
+.qf-head-r { text-align: right; font-size: 12px; color: var(--fg-grey); display: flex; flex-direction: column; }
+.qf-head-r b { color: var(--fg-red); font-size: 15px; }
+.qf-brand .qf-head h1 { grid-column: 1 / -1; color: var(--fg-red); font-size: 21px; margin: 12px 0 14px; }
+.qf-brand .lg-kv { background: #fff; border: 1px solid #ececec; border-radius: 10px; border-collapse: separate; overflow: hidden; padding: 0; }
+.qf-brand .lg-kv th { background: var(--fg-red-bg); color: #7a1d1a; text-align: left; font-weight: 700; }
+.qf-brand .lg-kv th, .qf-brand .lg-kv td { padding: 7px 10px; border-bottom: 1px solid #f3f3f3; }
+.qf-brand .btn.primary { background: var(--fg-red); border-color: var(--fg-red); color: #fff; }
+.qf-brand .btn.primary:hover { background: var(--fg-red-dark); }
+.qf-brand .btn.ghost { background: #fff; border-color: var(--fg-grey); color: #374151; }
+.qf-brand a { color: var(--fg-red); }
+.qf-brand .qf-round { background: var(--fg-red-bg); border: 1px solid #f0b9b6; border-left: 4px solid var(--fg-red); }
+.qf-brand label.field { color: #4b5563; }
+.qf-brand label.field input, .qf-brand label.field textarea, .qf-brand label.field select { background: #fafafa; border-color: #e1e3e6; color: #1f2937; }
+.qf-brand label.field input:focus, .qf-brand label.field textarea:focus { border-color: var(--fg-red); box-shadow: 0 0 0 2px rgba(206, 48, 44, 0.15); }
+.qf-brand .st-notice { background: #e8f6ee; border-color: #12805c; }
+.qf-brand .qf-foot { color: var(--fg-grey); border-top: 1px solid #eee; padding-top: 12px; }
+@media (max-width: 600px) { .qf-brand > *:not(.qf-head) { margin-left: 14px; margin-right: 14px; } .qf-head { padding: 16px 14px 0; } }
+.qf-brand .lg-kv { width: calc(100% - 52px); }
+@media (max-width: 600px) { .qf-brand .lg-kv { width: calc(100% - 28px); } }

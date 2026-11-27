@@ -17,6 +17,21 @@ type Got = {
   quote?: { price: number; first_price?: number | null; currency: string; transit_days: number | null; pickup_date: string | null; delivery_date: string | null; valid_until: string | null; includes: string | null; notes: string | null; contact: string | null; at: string } | null;
 };
 
+function Brand({ title, refNo }: { title: string; refNo?: string }) {
+  const base = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+  return (
+    <header className="qf-head">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={`${base}/fagron-logo.svg`} alt="Fagron" width={170} height={40} />
+      <div className="qf-head-r">
+        <span>Logistics</span>
+        {refNo && <b>{refNo}</b>}
+      </div>
+      <h1>{title}</h1>
+    </header>
+  );
+}
+
 export default function QuoteForm() {
   const [token, setToken] = useState<string | null>(null);
   const [got, setGot] = useState<Got | null>(null);
@@ -64,11 +79,17 @@ export default function QuoteForm() {
     load(token);
   }
 
-  if (!got) return <div className="qf"><p className="dim">Φόρτωση… / Loading…</p></div>;
+  if (!got)
+    return (
+      <div className="qf qf-brand">
+        <Brand title="Αίτημα προσφοράς / Quote request" />
+        <p className="dim">Φόρτωση… / Loading…</p>
+      </div>
+    );
   if (got.error || !got.rfq)
     return (
-      <div className="qf">
-        <h1>Fagron Hellas — Logistics</h1>
+      <div className="qf qf-brand">
+        <Brand title="Αίτημα προσφοράς / Quote request" />
         <p>Το αίτημα δεν βρέθηκε. Ελέγξτε τον σύνδεσμο του email. / Request not found — please check the link in the email.</p>
       </div>
     );
@@ -81,10 +102,10 @@ export default function QuoteForm() {
     </label>
   );
   return (
-    <div className="qf">
-      <h1>Fagron Hellas — Αίτημα προσφοράς / Quote request</h1>
+    <div className="qf qf-brand">
+      <Brand title={got.round && !got.closed ? "Τιμή-στόχος / Target price" : "Αίτημα προσφοράς / Quote request"} refNo={r.ref} />
       <p>
-        <b>{r.ref}</b> · {got.carrier}
+        Για / For: <b>{got.carrier}</b>
       </p>
       <table className="lg-kv">
         <tbody>
